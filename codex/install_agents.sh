@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_SOURCE_FILE="${SCRIPT_DIR}/AGENTS.md"
+# 兼容通过 stdin 执行（如: curl ... | bash）时 BASH_SOURCE 可能未定义的场景。
+SCRIPT_PATH="${0:-}"
+if [[ -n "${BASH_SOURCE:-}" ]]; then
+  SCRIPT_PATH="${BASH_SOURCE[0]}"
+fi
+SCRIPT_DIR=""
+if [[ -n "${SCRIPT_PATH}" ]] && [[ "${SCRIPT_PATH}" == */* ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+fi
+DEFAULT_SOURCE_FILE=""
+if [[ -n "${SCRIPT_DIR}" ]]; then
+  DEFAULT_SOURCE_FILE="${SCRIPT_DIR}/AGENTS.md"
+fi
 DEFAULT_REMOTE_SOURCE="https://raw.githubusercontent.com/404nffff/agents/master/codex/AGENTS.md"
 TARGET_USER_FILE="${HOME}/.codex/AGENTS.md"
 
@@ -39,18 +50,20 @@ confirm() {
     return 0
   fi
 
-  if [[ -t 1 && -r /dev/tty ]] && exec 9</dev/tty 2>/dev/null; then
+  if exec 9<>/dev/tty 2>/dev/null; then
     tty_opened="true"
   fi
 
   if [[ "${default}" == "Y" ]]; then
     if [[ "${tty_opened}" == "true" ]]; then
-      read -r -p "${prompt} [Y/n]: " answer <&9 || true
+      printf "%s [Y/n]: " "${prompt}" >&9
+      IFS= read -r answer <&9 || true
     fi
     answer="${answer:-Y}"
   else
     if [[ "${tty_opened}" == "true" ]]; then
-      read -r -p "${prompt} [y/N]: " answer <&9 || true
+      printf "%s [y/N]: " "${prompt}" >&9
+      IFS= read -r answer <&9 || true
     fi
     answer="${answer:-N}"
   fi
@@ -115,14 +128,14 @@ fetch_source_to_tmp() {
     return
   fi
 
-  if [[ -f "${DEFAULT_SOURCE_FILE}" ]]; then
+  if [[ -n "${DEFAULT_SOURCE_FILE}" && -f "${DEFAULT_SOURCE_FILE}" ]]; then
     cp "${DEFAULT_SOURCE_FILE}" "${out_file}"
     return
   fi
 
   echo "错误: 默认远程源与本地源都不可用。" >&2
   echo "远程: ${DEFAULT_REMOTE_SOURCE}" >&2
-  echo "本地: ${DEFAULT_SOURCE_FILE}" >&2
+  echo "本地: ${DEFAULT_SOURCE_FILE:-<不可用>}" >&2
   exit 1
 }
 
