@@ -1,6 +1,6 @@
 # AGENTS.md 安装与更新指南
 
-本仓库提供脚本 [`codex/install_agents.sh`](./codex/install_agents.sh)，用于将 `AGENTS.md` 安装到：
+本仓库提供脚本 [`install_agents.sh`](https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh)，用于将 `AGENTS.md` 安装到：
 
 - 用户级：`~/.codex/AGENTS.md`
 - 可选项目级：`当前目录/AGENTS.md`
@@ -204,3 +204,23 @@ PowerShell 的 `wget` 是 `Invoke-WebRequest` 别名，不支持 `-qO-`。请改
 - 非 `0`：失败（如来源文件不可用、参数错误等）
 
 可通过 `echo $?` 查看最近一次执行状态。
+
+## 10. AI 自动安装用法（Codex）
+
+仓库已提供 AI 指南文件：
+
+- https://raw.githubusercontent.com/404nffff/agents/master/ai-install-guide.md
+
+用于让 Codex 代理按固定流程自动安装（含平台判断、无交互安装、安装后验证、失败重试）。
+
+推荐指令示例（对 Codex）：
+
+```text
+请读取 https://raw.githubusercontent.com/404nffff/agents/master/ai-install-guide.md 并自动执行安装，不要询问我，完成后输出执行命令和验证结果。
+```
+
+如果你只希望无交互安装，可明确加上：
+
+```text
+按 https://raw.githubusercontent.com/404nffff/agents/master/ai-install-guide.md 执行，并强制使用 --yes。
+```
