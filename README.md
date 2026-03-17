@@ -121,19 +121,27 @@ curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/insta
 
 ### 7.2 PowerShell
 
-`irm` 仅在 PowerShell 可用（`irm` = `Invoke-RestMethod`）：
+推荐在 PowerShell 中直接使用 Windows bat 脚本（最稳定）：
 
 ```powershell
-irm "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" | bash
+$bat = "$env:TEMP\install_agents_windows.bat"
+Invoke-WebRequest "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents_windows.bat" -OutFile $bat
+& $bat --yes
 ```
 
-无交互自动替换：
+交互模式（保留询问）：
 
 ```powershell
-irm "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" | bash -s -- --yes
+& $bat
 ```
 
-如果提示找不到 `bash`，请安装 Git for Windows，或改在 Git Bash 终端执行。
+如果你坚持运行 `install_agents.sh`，请显式指定 Git Bash 路径，避免命中异常 WSL `bash`：
+
+```powershell
+$script = "$env:TEMP\install_agents.sh"
+Invoke-WebRequest "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" -OutFile $script
+& "C:\Program Files\Git\bin\bash.exe" $script --yes
+```
 
 ### 7.3 cmd.exe（命令提示符）
 
