@@ -47,10 +47,14 @@ confirm() {
   local answer=""
 
   if [[ "${default}" == "Y" ]]; then
-    read -r -p "${prompt} [Y/n]: " answer
+    if [[ -r /dev/tty ]]; then
+      read -r -p "${prompt} [Y/n]: " answer < /dev/tty
+    fi
     answer="${answer:-Y}"
   else
-    read -r -p "${prompt} [y/N]: " answer
+    if [[ -r /dev/tty ]]; then
+      read -r -p "${prompt} [y/N]: " answer < /dev/tty
+    fi
     answer="${answer:-N}"
   fi
 
