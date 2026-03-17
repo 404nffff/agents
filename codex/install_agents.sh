@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SOURCE_FILE="${SCRIPT_DIR}/AGENTS.md"
+DEFAULT_REMOTE_SOURCE="https://raw.githubusercontent.com/404nffff/agents/master/codex/AGENTS.md"
 TARGET_USER_FILE="${HOME}/.codex/AGENTS.md"
 
 SOURCE_MODE=""
@@ -10,6 +11,7 @@ SOURCE_INPUT=""
 GITHUB_REPO=""
 GITHUB_REF="main"
 GITHUB_FILE="AGENTS.md"
+AUTO_YES="false"
 
 COLOR_RED=""
 COLOR_GREEN=""
@@ -32,12 +34,14 @@ usage() {
 用法:
   ./install_agents.sh [--source <path_or_url>]
   ./install_agents.sh [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--file <path_in_repo>]
+  ./install_agents.sh [--yes]
 
 说明:
   --source   AGENTS.md 源地址，可为本地路径或 http(s) URL
   --github   GitHub 仓库地址（owner/repo 或完整 URL）
   --ref      GitHub 分支或标签，默认 main
   --file     仓库内文件路径，默认 AGENTS.md
+  --yes      无交互模式，遇到可替换文件时自动替换
 EOF
 }
 
@@ -45,6 +49,10 @@ confirm() {
   local prompt="$1"
   local default="${2:-N}"
   local answer=""
+
+  if [[ "${AUTO_YES}" == "true" ]]; then
+    return 0
+  fi
 
   if [[ "${default}" == "Y" ]]; then
     if [[ -r /dev/tty ]]; then
@@ -169,12 +177,19 @@ fetch_source_to_tmp() {
     return
   fi
 
+  # 无参数时优先使用仓库远程源；失败后回退到本地同目录 AGENTS.md。
+  if curl -fsSL "${DEFAULT_REMOTE_SOURCE}" -o "${out_file}"; then
+    return
+  fi
+
   if [[ -f "${DEFAULT_SOURCE_FILE}" ]]; then
     cp "${DEFAULT_SOURCE_FILE}" "${out_file}"
     return
   fi
 
-  echo "错误: 未找到默认源文件 ${DEFAULT_SOURCE_FILE}" >&2
+  echo "错误: 默认远程源与本地源都不可用。" >&2
+  echo "远程: ${DEFAULT_REMOTE_SOURCE}" >&2
+  echo "本地: ${DEFAULT_SOURCE_FILE}" >&2
   exit 1
 }
 
@@ -220,6 +235,10 @@ while [[ $# -gt 0 ]]; do
       GITHUB_FILE="${2:-}"
       shift 2
       ;;
+    --yes)
+      AUTO_YES="true"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -246,7 +265,7 @@ init_colors
 
 # 未传参数时直接使用默认源文件，不再额外询问来源。
 if [[ -z "${SOURCE_MODE}" ]]; then
-  echo "未指定来源，使用默认源: ${DEFAULT_SOURCE_FILE}"
+  echo "未指定来源，默认使用仓库源: ${DEFAULT_REMOTE_SOURCE}"
 fi
 
 TMP_SOURCE="$(mktemp)"

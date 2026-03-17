@@ -1,26 +1,155 @@
-# AGENTS.md 安装说明
+# AGENTS.md 安装与更新指南
 
-## 1. 远程一键运行（curl）
+本仓库提供脚本 [`codex/install_agents.sh`](./codex/install_agents.sh)，用于将 `AGENTS.md` 安装到：
 
-使用仓库 `404nffff/agents` 的 `master` 分支：
+- 用户级：`~/.codex/AGENTS.md`
+- 可选项目级：`当前目录/AGENTS.md`
+
+脚本支持本地文件、URL、GitHub 仓库三种来源，并带有差异预览与替换确认。
+
+## 1. 环境要求
+
+- Linux / macOS / WSL / Git Bash（需要 `bash`）
+- 可用命令：`bash`、`curl`、`diff`、`awk`
+- PowerShell 用户请确认系统可调用 `bash`（例如 WSL 或 Git Bash）
+
+## 2. 快速开始
+
+### 2.1 远程一键执行（交互模式）
 
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" | bash
 ```
 
-## 2. 远程运行并传参
+默认行为：
+
+1. 未传参数时，优先使用仓库远程源：
+   `https://raw.githubusercontent.com/404nffff/agents/master/codex/AGENTS.md`
+2. 若远程源不可达，回退到脚本同目录本地 `AGENTS.md`
+3. 若目标文件已存在，展示差异后询问是否替换
+
+### 2.2 远程一键执行（无交互自动覆盖）
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" | bash -s -- --github 404nffff/agents --ref master --file codex/AGENTS.md
+curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" | bash -s -- --yes
 ```
 
-```bash
-curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" | bash -s -- --source "https://raw.githubusercontent.com/404nffff/agents/master/codex/AGENTS.md"
-```
+适合自动化场景（CI/CD、初始化脚本、批量装机）。
 
-## 3. 本地运行
+## 3. 本地执行
 
 ```bash
 chmod +x codex/install_agents.sh
 ./codex/install_agents.sh
 ```
+
+无交互：
+
+```bash
+./codex/install_agents.sh --yes
+```
+
+## 4. 参数说明
+
+```bash
+./install_agents.sh [--source <path_or_url>]
+./install_agents.sh [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--file <path_in_repo>]
+./install_agents.sh [--yes]
+```
+
+- `--source`
+  - 指定来源为本地文件路径或 HTTP(S) URL
+  - 示例：
+    - `--source ./AGENTS.md`
+    - `--source https://example.com/AGENTS.md`
+- `--github`
+  - 指定 GitHub 仓库来源（`owner/repo` 或完整 URL）
+- `--ref`
+  - 指定分支或标签，默认 `main`
+- `--file`
+  - 指定仓库内文件路径，默认 `AGENTS.md`
+- `--yes`
+  - 无交互模式，遇到可替换文件直接替换
+
+## 5. 常见用法
+
+### 5.1 从指定 GitHub 仓库拉取
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" | bash -s -- --github 404nffff/agents --ref master --file codex/AGENTS.md
+```
+
+### 5.2 从自定义 URL 拉取
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" | bash -s -- --source "https://raw.githubusercontent.com/404nffff/agents/master/codex/AGENTS.md"
+```
+
+### 5.3 本地文件作为来源
+
+```bash
+./codex/install_agents.sh --source ./my-agents/AGENTS.md
+```
+
+## 6. 交互行为说明
+
+当目标文件已存在时：
+
+1. 脚本先显示差异预览（`@@` 区块 + `[- 删除]` / `[+ 新增]` / `[= 上下文]`）
+2. 颜色标注（终端支持时）：
+   - 删除：红色
+   - 新增：绿色
+   - 上下文：灰色
+   - hunk：青色
+3. 再询问是否替换
+
+说明：
+
+- 若无差异，会显示“原文件与新文件无差异”
+- 若你使用 `--yes`，则跳过确认直接替换
+- 管道执行（`curl | bash`）时，脚本通过 `/dev/tty` 读取确认输入
+
+## 7. PowerShell 用法
+
+PowerShell 中建议使用 `irm`：
+
+```powershell
+irm "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" | bash
+```
+
+无交互自动替换：
+
+```powershell
+irm "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" | bash -s -- --yes
+```
+
+如果提示找不到 `bash`，请在以下环境执行：
+
+- WSL
+- Git Bash
+- MSYS2
+
+## 8. 常见问题
+
+### Q1: 为什么 `wget -qO-` 在 PowerShell 报错？
+
+PowerShell 的 `wget` 是 `Invoke-WebRequest` 别名，不支持 `-qO-`。请改用：
+
+- `irm "...script..." | bash`
+- 或 `curl.exe -fsSL "...script..." | bash`
+
+### Q2: 远程执行时为什么没有停下来等确认？
+
+旧版本脚本可能从管道 `stdin` 读输入。当前版本已改为 `/dev/tty` 读取；无交互环境建议使用 `--yes`。
+
+### Q3: 安装后覆盖了哪些文件？
+
+- 必定处理：`~/.codex/AGENTS.md`
+- 可选处理：`当前目录/AGENTS.md`（交互询问或 `--yes` 自动执行）
+
+## 9. 返回码
+
+- `0`：成功
+- 非 `0`：失败（如来源文件不可用、参数错误等）
+
+可通过 `echo $?` 查看最近一次执行状态。
