@@ -11,7 +11,7 @@
 
 - Linux / macOS / WSL / Git Bash（需要 `bash`）
 - 可用命令：`bash`、`curl`、`diff`、`awk`
-- PowerShell 用户请确认系统可调用 `bash`（例如 WSL 或 Git Bash）
+- Windows 用户请先确认 `bash` 可用（推荐 Git for Windows）
 
 ## 2. 快速开始
 
@@ -105,9 +105,23 @@ curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/insta
 - 若你使用 `--yes`，则跳过确认直接替换
 - 管道执行（`curl | bash`）时，脚本通过 `/dev/tty` 读取确认输入
 
-## 7. PowerShell 用法
+## 7. Windows 用法
 
-PowerShell 中建议使用 `irm`：
+### 7.1 Git Bash（推荐）
+
+在 Git Bash 终端直接运行：
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" | bash
+```
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" | bash -s -- --yes
+```
+
+### 7.2 PowerShell
+
+`irm` 仅在 PowerShell 可用（`irm` = `Invoke-RestMethod`）：
 
 ```powershell
 irm "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" | bash
@@ -119,11 +133,37 @@ irm "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agen
 irm "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" | bash -s -- --yes
 ```
 
-如果提示找不到 `bash`，请在以下环境执行：
+如果提示找不到 `bash`，请安装 Git for Windows，或改在 Git Bash 终端执行。
+
+### 7.3 cmd.exe（命令提示符）
+
+`cmd.exe` 里不能用 `irm`。建议使用专用 bat 脚本：
+
+```bat
+curl -fsSL -o install_agents_windows.bat "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents_windows.bat"
+install_agents_windows.bat --yes
+```
+
+交互模式（会询问是否替换）：
+
+```bat
+install_agents_windows.bat
+```
+
+bat 脚本支持参数：
+
+```bat
+install_agents_windows.bat --source .\AGENTS.md
+install_agents_windows.bat --source https://example.com/AGENTS.md
+install_agents_windows.bat --github 404nffff/agents --ref master --file codex/AGENTS.md
+```
+
+可用环境：
 
 - WSL
 - Git Bash
 - MSYS2
+- cmd.exe（推荐使用 bat 脚本）
 
 ## 8. 常见问题
 
@@ -134,11 +174,18 @@ PowerShell 的 `wget` 是 `Invoke-WebRequest` 别名，不支持 `-qO-`。请改
 - `irm "...script..." | bash`
 - 或 `curl.exe -fsSL "...script..." | bash`
 
-### Q2: 远程执行时为什么没有停下来等确认？
+### Q2: 为什么 `cmd.exe` 下 `irm` 不存在？
+
+因为 `irm` 是 PowerShell 命令，不是 `cmd.exe` 命令。`cmd.exe` 请使用 bat 脚本：
+
+- `curl -o install_agents_windows.bat ...`
+- 然后执行：`install_agents_windows.bat --yes`
+
+### Q3: 远程执行时为什么没有停下来等确认？
 
 旧版本脚本可能从管道 `stdin` 读输入。当前版本已改为 `/dev/tty` 读取；无交互环境建议使用 `--yes`。
 
-### Q3: 安装后覆盖了哪些文件？
+### Q4: 安装后覆盖了哪些文件？
 
 - 必定处理：`~/.codex/AGENTS.md`
 - 可选处理：`当前目录/AGENTS.md`（交互询问或 `--yes` 自动执行）
