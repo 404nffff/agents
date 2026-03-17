@@ -13,22 +13,6 @@ GITHUB_REF="main"
 GITHUB_FILE="AGENTS.md"
 AUTO_YES="false"
 
-COLOR_RED=""
-COLOR_GREEN=""
-COLOR_CYAN=""
-COLOR_GRAY=""
-COLOR_RESET=""
-
-init_colors() {
-  if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
-    COLOR_RED=$'\033[31m'
-    COLOR_GREEN=$'\033[32m'
-    COLOR_CYAN=$'\033[36m'
-    COLOR_GRAY=$'\033[90m'
-    COLOR_RESET=$'\033[0m'
-  fi
-}
-
 usage() {
   cat <<'EOF'
 用法:
@@ -49,21 +33,30 @@ confirm() {
   local prompt="$1"
   local default="${2:-N}"
   local answer=""
+  local tty_opened="false"
 
   if [[ "${AUTO_YES}" == "true" ]]; then
     return 0
   fi
 
+  if [[ -t 1 && -r /dev/tty ]] && exec 9</dev/tty 2>/dev/null; then
+    tty_opened="true"
+  fi
+
   if [[ "${default}" == "Y" ]]; then
-    if [[ -r /dev/tty ]]; then
-      read -r -p "${prompt} [Y/n]: " answer < /dev/tty
+    if [[ "${tty_opened}" == "true" ]]; then
+      read -r -p "${prompt} [Y/n]: " answer <&9 || true
     fi
     answer="${answer:-Y}"
   else
-    if [[ -r /dev/tty ]]; then
-      read -r -p "${prompt} [y/N]: " answer < /dev/tty
+    if [[ "${tty_opened}" == "true" ]]; then
+      read -r -p "${prompt} [y/N]: " answer <&9 || true
     fi
     answer="${answer:-N}"
+  fi
+
+  if [[ "${tty_opened}" == "true" ]]; then
+    exec 9<&-
   fi
 
   [[ "${answer}" =~ ^[Yy]$ ]]
@@ -72,10 +65,11 @@ confirm() {
 preview_file() {
   local file="$1"
   local lines="${2:-20}"
+  local title="${3:-文件内容预览}"
   local total_lines
   total_lines="$(wc -l < "${file}" | tr -d ' ')"
 
-  echo "----- 原文件前 ${lines} 行预览: ${file} -----"
+  echo "----- ${title}（前 ${lines} 行）: ${file} -----"
   sed -n "1,${lines}p" "${file}"
   if (( total_lines > lines )); then
     echo "......(共 ${total_lines} 行，仅预览前 ${lines} 行)"
@@ -83,67 +77,6 @@ preview_file() {
   echo "-------------------------------------------"
 }
 
-show_diff_preview() {
-  local old_file="$1"
-  local new_file="$2"
-  local max_lines="${3:-120}"
-  local tmp_diff
-  tmp_diff="$(mktemp)"
-
-  if diff -u "${old_file}" "${new_file}" > "${tmp_diff}"; then
-    echo "原文件与新文件无差异。"
-    rm -f "${tmp_diff}"
-    return 0
-  fi
-
-  local tmp_fmt
-  tmp_fmt="$(mktemp)"
-  awk '
-    BEGIN {
-      print "----- 变更预览（[- 删除] [+ 新增] [= 上下文]）-----"
-    }
-    /^--- / { next }
-    /^\+\+\+ / { next }
-    /^@@/ {
-      print $0
-      next
-    }
-    /^-/ {
-      print "[- 删除] " substr($0, 2)
-      next
-    }
-    /^\+/ {
-      print "[+ 新增] " substr($0, 2)
-      next
-    }
-    /^ / {
-      print "[= 上下文] " substr($0, 2)
-      next
-    }
-  ' "${tmp_diff}" > "${tmp_fmt}"
-
-  local total_lines
-  total_lines="$(wc -l < "${tmp_fmt}" | tr -d ' ')"
-  awk -v max="${max_lines}" \
-      -v red="${COLOR_RED}" \
-      -v green="${COLOR_GREEN}" \
-      -v cyan="${COLOR_CYAN}" \
-      -v gray="${COLOR_GRAY}" \
-      -v reset="${COLOR_RESET}" '
-    NR > max { exit }
-    /^\[- 删除\]/ { print red $0 reset; next }
-    /^\[\+ 新增\]/ { print green $0 reset; next }
-    /^\[= 上下文\]/ { print gray $0 reset; next }
-    /^@@/ { print cyan $0 reset; next }
-    { print }
-  ' "${tmp_fmt}"
-  if (( total_lines > max_lines )); then
-    echo "......(变更预览共 ${total_lines} 行，仅显示前 ${max_lines} 行)"
-  fi
-  echo "-----------------------------------------------"
-  rm -f "${tmp_diff}"
-  rm -f "${tmp_fmt}"
-}
 
 normalize_github_repo() {
   local repo="$1"
@@ -202,7 +135,12 @@ install_with_prompt() {
 
   if [[ -f "${target_file}" ]]; then
     echo "${label} 已存在: ${target_file}"
-    show_diff_preview "${target_file}" "${tmp_source_file}" 120
+    if cmp -s "${target_file}" "${tmp_source_file}"; then
+      echo "原文件与新文件无差异，已跳过替换 ${label}"
+      return 0
+    fi
+    preview_file "${target_file}" 20 "旧文件内容预览"
+    preview_file "${tmp_source_file}" 20 "新文件内容预览"
     if confirm "是否替换 ${label}?" "N"; then
       cp "${tmp_source_file}" "${target_file}"
       echo "已替换 ${label}: ${target_file}"
@@ -260,8 +198,6 @@ if [[ "${SOURCE_MODE}" == "github" && -z "${GITHUB_REPO}" ]]; then
   echo "错误: --github 不能为空" >&2
   exit 1
 fi
-
-init_colors
 
 # 未传参数时直接使用默认源文件，不再额外询问来源。
 if [[ -z "${SOURCE_MODE}" ]]; then

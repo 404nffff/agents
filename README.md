@@ -5,7 +5,7 @@
 - 用户级：`~/.codex/AGENTS.md`
 - 可选项目级：`当前目录/AGENTS.md`
 
-脚本支持本地文件、URL、GitHub 仓库三种来源，并带有差异预览与替换确认。
+脚本支持本地文件、URL、GitHub 仓库三种来源，并带有旧/新文件片段预览与替换确认。
 
 ## 1. 环境要求
 
@@ -26,7 +26,7 @@ curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/insta
 1. 未传参数时，优先使用仓库远程源：
    `https://raw.githubusercontent.com/404nffff/agents/master/codex/AGENTS.md`
 2. 若远程源不可达，回退到脚本同目录本地 `AGENTS.md`
-3. 若目标文件已存在，展示差异后询问是否替换
+3. 若目标文件已存在，展示旧文件与新文件的部分内容后询问是否替换
 
 ### 2.2 远程一键执行（无交互自动覆盖）
 
@@ -95,17 +95,13 @@ curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/insta
 
 当目标文件已存在时：
 
-1. 脚本先显示差异预览（`@@` 区块 + `[- 删除]` / `[+ 新增]` / `[= 上下文]`）
-2. 颜色标注（终端支持时）：
-   - 删除：红色
-   - 新增：绿色
-   - 上下文：灰色
-   - hunk：青色
-3. 再询问是否替换
+1. 脚本先显示旧文件前 20 行
+2. 再显示新文件前 20 行
+3. 最后询问是否替换
 
 说明：
 
-- 若无差异，会显示“原文件与新文件无差异”
+- 若旧文件与新文件无差异，会直接跳过替换且不再询问
 - 若你使用 `--yes`，则跳过确认直接替换
 - 管道执行（`curl | bash`）时，脚本通过 `/dev/tty` 读取确认输入
 
