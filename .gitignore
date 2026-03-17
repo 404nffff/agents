@@ -1,0 +1,46 @@
+# 编译输出
+rsync-web
+rsync-web.exe
+
+# 数据库文件
+*.db
+*.db-shm
+*.db-wal
+
+# Go相关
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+*.log
+
+bin/
+
+.nfs*
+test/
+.env
+
+.claude/sessions/
+*.txt
+@eaDir/
+plan
+
+
+web/static/uploads/
+logs
