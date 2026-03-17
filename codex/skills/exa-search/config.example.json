@@ -1,0 +1,8 @@
+{
+  "profiles": [
+    { "id": "main", "api_key": "YOUR_EXA_API_KEY" },
+    { "id": "backup-1", "api_key": "YOUR_SECOND_EXA_API_KEY" }
+  ],
+  "base_url": "https://api.exa.ai",
+  "timeout_seconds": 30
+}

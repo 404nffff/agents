@@ -1,0 +1,78 @@
+[mcp_servers]
+
+[mcp_servers.sequential-thinking]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp", "--api-key", ""]
+startup_timeout_sec = 120.0
+
+[mcp_servers.memory]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-memory"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.shrimp-task-manager]
+command = "npx"
+args = ["-y", "mcp-shrimp-task-manager"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.shrimp-task-manager.env]
+DATA_DIR = ".shrimp"
+ENABLE_GUI = "false"
+TEMPLATES_USE = "zh"
+
+[mcp_servers.deepwiki]
+type = "stdio"
+command = "mcp-proxy"
+args = ["--transport", "streamablehttp", "https://mcp.deepwiki.com/mcp"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.microsoft-docs-mcp]
+type = "stdio"
+command = "mcp-proxy"
+args = ["--transport", "streamablehttp", "https://learn.microsoft.com/api/mcp"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.duckduckgo-search]
+type = "stdio"
+command = "uvx"
+args = ["duckduckgo-mcp-server"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.fetch]
+type = "stdio"
+command = "uvx"
+args = ["mcp-server-fetch"]
+startup_timeout_sec = 120.0
+
+
+[mcp_servers.exa]
+command = "npx"
+args = ["-y", "exa-mcp-server"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.exa.env]
+EXA_API_KEY = ""
+
+[mcp_servers.lanhu]
+command = "mcp-proxy"
+args = ["--transport", "streamablehttp", "http://localhost:8000/mcp?role=开发&name=w"]
+startup_timeout_sec = 120.0
+
+
+[mcp_servers.fast-context]
+command = "npx"
+args = ["-y", "--prefer-online", "@sammysnake/fast-context-mcp"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.fast-context.env]
+WINDSURF_API_KEY = ""
+
+[mcp_servers.code-index]
+type = "stdio"
+command = "uvx"
+args = ["code-index-mcp"]

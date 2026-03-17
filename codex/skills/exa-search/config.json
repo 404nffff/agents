@@ -1,0 +1,7 @@
+{
+  "base_url": "https://xxx",
+  "timeout_seconds": 30,
+  "profiles": [
+    { "id": "main", "api_key": "xxx" }
+  ]
+}
