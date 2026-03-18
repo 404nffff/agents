@@ -4,6 +4,9 @@ set -euo pipefail
 MAX_LIMIT=1000
 DEFAULT_LIMIT=100
 DEFAULT_MAX_ROWS=2000
+DEFAULT_SQL_ALLOWED_START="select,show,desc,describe,explain,with"
+DEFAULT_SQL_FORBIDDEN_KEYWORDS="delete,insert,update,replace,truncate,drop,alter,create,grant,revoke,rename,merge,call"
+DEFAULT_SQL_FORBIDDEN_PHRASES="into_outfile,into_dumpfile,load_data,lock_tables,unlock_tables"
 
 usage() {
   cat <<'EOF'
@@ -26,6 +29,7 @@ Options:
   --order-by <expr>     order by expression
   --limit <n>           structured mode limit (1-1000)
   --max-rows <n>        maximum allowed result rows (default: 2000)
+  --format <json|table> output format (default: json)
   -h, --help            show this help
 EOF
 }
@@ -40,6 +44,39 @@ trim() {
   s="${s#"${s%%[![:space:]]*}"}"
   s="${s%"${s##*[![:space:]]}"}"
   printf '%s' "$s"
+}
+
+normalize_spaces_lower() {
+  local s="$1"
+  s="$(tr '[:upper:]' '[:lower:]' <<<"$s")"
+  s="$(tr -s '[:space:]' ' ' <<<"$s")"
+  s="$(trim "$s")"
+  printf '%s' "$s"
+}
+
+parse_keyword_csv() {
+  local csv="$1"
+  local item normalized
+  IFS=',' read -r -a items <<<"$csv"
+  for item in "${items[@]}"; do
+    normalized="$(normalize_spaces_lower "$item")"
+    [[ -n "$normalized" ]] || continue
+    [[ "$normalized" =~ ^[a-z_][a-z0-9_]*$ ]] || continue
+    printf '%s\n' "$normalized"
+  done | awk '!seen[$0]++'
+}
+
+parse_phrase_csv() {
+  local csv="$1"
+  local item normalized
+  IFS=',' read -r -a items <<<"$csv"
+  for item in "${items[@]}"; do
+    normalized="$(normalize_spaces_lower "$item")"
+    normalized="${normalized//_/ }"
+    normalized="$(normalize_spaces_lower "$normalized")"
+    [[ -n "$normalized" ]] || continue
+    printf '%s\n' "$normalized"
+  done | awk '!seen[$0]++'
 }
 
 is_identifier() {
@@ -67,7 +104,7 @@ strip_sql_comments() {
 
 validate_sql() {
   local raw="$1"
-  local norm lower first
+  local norm lower first allow_show_create compact_sql
 
   norm="$(strip_sql_comments "$raw")"
   norm="$(trim "$norm")"
@@ -78,27 +115,33 @@ validate_sql() {
   [[ "$norm" != *";"* ]] || error "multiple SQL statements are not allowed"
 
   lower="$(tr '[:upper:]' '[:lower:]' <<<"$norm")"
+  compact_sql="$(normalize_spaces_lower "$lower")"
+  allow_show_create="false"
+  if grep -Eiq '^[[:space:]]*show[[:space:]]+create\b' <<<"$lower"; then
+    allow_show_create="true"
+  fi
   first="$(awk '{print tolower($1)}' <<<"$lower")"
-  case "$first" in
-    select|show|desc|describe|explain|with) ;;
-    *) error "only read-only SQL is allowed (SELECT/SHOW/DESC/DESCRIBE/EXPLAIN/WITH)" ;;
-  esac
+  local allowed_match="false"
+  local kw phrase
+  while IFS= read -r kw; do
+    [[ "$first" == "$kw" ]] && allowed_match="true" && break
+  done < <(parse_keyword_csv "$SQL_ALLOWED_START")
+  [[ "$allowed_match" == "true" ]] || error "only read-only SQL is allowed (allowed starts: ${SQL_ALLOWED_START})"
 
-  local forbidden_keywords=(
-    delete insert update replace truncate drop alter create grant revoke rename merge call
-  )
-  local kw
-  for kw in "${forbidden_keywords[@]}"; do
+  while IFS= read -r kw; do
+    if [[ "$kw" == "create" && "$allow_show_create" == "true" ]]; then
+      continue
+    fi
     if grep -Eiq "\\b${kw}\\b" <<<"$lower"; then
       error "forbidden SQL keyword detected: ${kw}"
     fi
-  done
+  done < <(parse_keyword_csv "$SQL_FORBIDDEN_KEYWORDS")
 
-  grep -Eiq '\binto[[:space:]]+outfile\b' <<<"$lower" && error "forbidden SQL pattern detected: INTO OUTFILE"
-  grep -Eiq '\binto[[:space:]]+dumpfile\b' <<<"$lower" && error "forbidden SQL pattern detected: INTO DUMPFILE"
-  grep -Eiq '\bload[[:space:]]+data\b' <<<"$lower" && error "forbidden SQL pattern detected: LOAD DATA"
-  grep -Eiq '\block[[:space:]]+tables?\b' <<<"$lower" && error "forbidden SQL pattern detected: LOCK TABLES"
-  grep -Eiq '\bunlock[[:space:]]+tables?\b' <<<"$lower" && error "forbidden SQL pattern detected: UNLOCK TABLES"
+  while IFS= read -r phrase; do
+    if [[ "$compact_sql" == *"$phrase"* ]]; then
+      error "forbidden SQL pattern detected: $(tr '[:lower:]' '[:upper:]' <<<"$phrase")"
+    fi
+  done < <(parse_phrase_csv "$SQL_FORBIDDEN_PHRASES")
 
   printf '%s' "$norm"
 }
@@ -158,6 +201,10 @@ ORDER_BY=""
 LIMIT="$DEFAULT_LIMIT"
 MAX_ROWS="$DEFAULT_MAX_ROWS"
 PROFILE=""
+OUTPUT_FORMAT="json"
+SQL_ALLOWED_START="$DEFAULT_SQL_ALLOWED_START"
+SQL_FORBIDDEN_KEYWORDS="$DEFAULT_SQL_FORBIDDEN_KEYWORDS"
+SQL_FORBIDDEN_PHRASES="$DEFAULT_SQL_FORBIDDEN_PHRASES"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -176,6 +223,7 @@ while [[ $# -gt 0 ]]; do
     --order-by) ORDER_BY="$2"; shift 2 ;;
     --limit) LIMIT="$2"; shift 2 ;;
     --max-rows) MAX_ROWS="$2"; shift 2 ;;
+    --format) OUTPUT_FORMAT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) error "unknown argument: $1" ;;
   esac
@@ -184,6 +232,13 @@ done
 [[ -f "$CONFIG_PATH" ]] || error "config file not found: $CONFIG_PATH"
 # shellcheck disable=SC1090
 source "$CONFIG_PATH"
+
+SQL_ALLOWED_START="${MYSQL_SQL_ALLOWED_START:-$DEFAULT_SQL_ALLOWED_START}"
+SQL_FORBIDDEN_KEYWORDS="${MYSQL_SQL_FORBIDDEN_KEYWORDS:-$DEFAULT_SQL_FORBIDDEN_KEYWORDS}"
+SQL_FORBIDDEN_PHRASES="${MYSQL_SQL_FORBIDDEN_PHRASES:-$DEFAULT_SQL_FORBIDDEN_PHRASES}"
+[[ -n "$(parse_keyword_csv "$SQL_ALLOWED_START")" ]] || SQL_ALLOWED_START="$DEFAULT_SQL_ALLOWED_START"
+[[ -n "$(parse_keyword_csv "$SQL_FORBIDDEN_KEYWORDS")" ]] || SQL_FORBIDDEN_KEYWORDS="$DEFAULT_SQL_FORBIDDEN_KEYWORDS"
+[[ -n "$(parse_phrase_csv "$SQL_FORBIDDEN_PHRASES")" ]] || SQL_FORBIDDEN_PHRASES="$DEFAULT_SQL_FORBIDDEN_PHRASES"
 
 PROFILE_HOST=""
 PROFILE_PORT=""
@@ -233,6 +288,11 @@ TIMEOUT="${TIMEOUT:-$PROFILE_TIMEOUT}"
 [[ "$MAX_ROWS" =~ ^[0-9]+$ ]] || error "--max-rows must be a positive integer"
 (( MAX_ROWS > 0 )) || error "--max-rows must be greater than 0"
 
+case "$OUTPUT_FORMAT" in
+  json|table) ;;
+  *) error "--format must be json or table" ;;
+esac
+
 if [[ -n "$QUERY" ]]; then
   FINAL_QUERY="$(validate_sql "$QUERY")"
 else
@@ -258,7 +318,47 @@ else
   MYSQL_OUTPUT="$("${MYSQL_CMD[@]}" 2>&1)" || error "$MYSQL_OUTPUT"
 fi
 
-NON_EMPTY_LINES="$(grep -cve '^[[:space:]]*$' <<<"$MYSQL_OUTPUT" || true)"
-ROW_COUNT=$(( NON_EMPTY_LINES > 0 ? NON_EMPTY_LINES - 1 : 0 ))
+NORMALIZED_OUTPUT="${MYSQL_OUTPUT//$'\r'/}"
+NORMALIZED_OUTPUT="${NORMALIZED_OUTPUT%$'\n'}"
+if [[ -z "$NORMALIZED_OUTPUT" ]]; then
+  LINE_COUNT=0
+else
+  LINE_COUNT="$(printf '%s' "$NORMALIZED_OUTPUT" | awk 'END { print NR }')"
+fi
+ROW_COUNT=$(( LINE_COUNT > 0 ? LINE_COUNT - 1 : 0 ))
 (( ROW_COUNT <= MAX_ROWS )) || error "query returned ${ROW_COUNT} rows, exceeding --max-rows=${MAX_ROWS}"
-printf '%s\n' "$MYSQL_OUTPUT"
+
+if [[ "$OUTPUT_FORMAT" == "table" ]]; then
+  printf '%s\n' "$MYSQL_OUTPUT"
+  exit 0
+fi
+
+printf '%s\n' "$MYSQL_OUTPUT" | perl -MJSON::PP -e '
+my $query = shift @ARGV;
+my $content = do { local $/; <STDIN> };
+$content = "" unless defined $content;
+$content =~ s/\r\n/\n/g;
+$content =~ s/\r/\n/g;
+$content =~ s/\n\z//;
+my @lines = length($content) ? split(/\n/, $content, -1) : ();
+my @columns = ();
+my @rows = ();
+if (@lines) {
+  @columns = split(/\t/, shift @lines, -1);
+  for my $line (@lines) {
+    my @vals = split(/\t/, $line, -1);
+    my %row;
+    for my $i (0 .. $#columns) {
+      $row{$columns[$i]} = defined $vals[$i] ? $vals[$i] : q{};
+    }
+    push @rows, \%row;
+  }
+}
+my %out = (
+  query => $query,
+  row_count => scalar(@rows),
+  columns => \@columns,
+  rows => \@rows,
+);
+print JSON::PP->new->utf8->pretty->encode(\%out);
+' "$FINAL_QUERY"

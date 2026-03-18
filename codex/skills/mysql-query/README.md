@@ -15,8 +15,10 @@
 - 仅允许只读 SQL
 - 拦截 `DELETE` 及其他写操作
 
-固定配置文件路径：`codex/skills/mysql-query/config.env`
+脚本目录：`~/.codex/skills/mysql-query/`（可直接使用绝对路径执行，无需先进入目录）
+固定配置文件路径：`~/.codex/skills/mysql-query/config.env`
 `config.env` 为必需文件，缺失时脚本会直接失败。
+默认输出为 JSON（可通过 `--format table` 输出表格文本）。
 
 ## 目录结构
 
@@ -27,33 +29,27 @@
 
 ## 快速开始
 
-1. 复制模板：
+1. 读取表数据（优先 PHP）：
 
 ```bash
-cp codex/skills/mysql-query/config.example.env codex/skills/mysql-query/config.env
-```
-
-2. 读取表数据（优先 PHP）：
-
-```bash
-php codex/skills/mysql-query/scripts/mysql_query.php \
+php ~/.codex/skills/mysql-query/scripts/mysql_query.php \
   --profile main \
   --table users \
   --limit 20
 ```
 
-3. 执行只读 SQL：
+2. 执行只读 SQL：
 
 ```bash
-php codex/skills/mysql-query/scripts/mysql_query.php \
+php ~/.codex/skills/mysql-query/scripts/mysql_query.php \
   --profile main \
   --query "SELECT id, name FROM users LIMIT 20"
 ```
 
-4. PHP 不可用时降级 Shell：
+3. PHP 不可用时降级 Shell：
 
 ```bash
-bash codex/skills/mysql-query/scripts/mysql_query.sh \
+bash ~/.codex/skills/mysql-query/scripts/mysql_query.sh \
   --profile main \
   --query "SELECT id, name FROM users LIMIT 20"
 ```
@@ -83,7 +79,7 @@ MYSQL_DATABASE_reporting=report_db
 使用：
 
 ```bash
-php codex/skills/mysql-query/scripts/mysql_query.php \
+php ~/.codex/skills/mysql-query/scripts/mysql_query.php \
   --profile reporting \
   --table report_daily \
   --limit 50
@@ -93,12 +89,26 @@ php codex/skills/mysql-query/scripts/mysql_query.php \
 - 不再使用 `MYSQL_HOST` 这类默认连接键
 - 未传 `--profile` 时，脚本会读取 `MYSQL_PROFILE`
 
+## SQL 规则配置（写在 config.env）
+
+- `MYSQL_SQL_ALLOWED_START`：允许的语句起始关键词（逗号分隔）
+- `MYSQL_SQL_FORBIDDEN_KEYWORDS`：禁止关键词（逗号分隔）
+- `MYSQL_SQL_FORBIDDEN_PHRASES`：禁止短语（逗号分隔，建议下划线写法，如 `into_outfile`）
+
+未配置上述变量时，脚本使用内置默认规则。
+
 ## 限制规则
 
 - 只允许：`SELECT / SHOW / DESC / DESCRIBE / EXPLAIN / WITH`
+- 允许：`SHOW CREATE TABLE ...` 等 `SHOW CREATE` 元数据查询
 - 禁止：`DELETE / INSERT / UPDATE / DROP / ALTER` 等写操作
 - 禁止多语句执行（例如 `SELECT ...; DELETE ...`）
 - 支持 `--max-rows` 限制结果行数，避免一次性返回过大
+
+## 输出格式
+
+- 默认输出 JSON（`query`、`row_count`、`columns`、`rows`）
+- 可通过 `--format table` 输出原始 TSV
 
 ## 常见问题
 

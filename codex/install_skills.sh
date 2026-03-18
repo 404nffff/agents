@@ -363,9 +363,32 @@ install_selected() {
 
     if [[ -e "${dest}" ]]; then
       if confirm "技能 ${name} 已存在，是否覆盖?" "N"; then
+        # 覆盖前保留本地 config.env，避免更新时冲掉本地配置。
+        local preserve_dir preserved_count cfg rel
+        preserve_dir="$(mktemp -d)"
+        preserved_count=0
+        while IFS= read -r cfg; do
+          rel="${cfg#${dest}/}"
+          mkdir -p "${preserve_dir}/$(dirname "${rel}")"
+          cp "${cfg}" "${preserve_dir}/${rel}"
+          ((preserved_count += 1))
+        done < <(find "${dest}" -type f -name 'config.env')
+
         mkdir -p "${dest}"
         cp -R "${src}/." "${dest}/"
-        echo "已覆盖同名文件: ${name} -> ${dest}（保留旧目录其他文件）"
+
+        if (( preserved_count > 0 )); then
+          while IFS= read -r cfg; do
+            rel="${cfg#${preserve_dir}/}"
+            mkdir -p "${dest}/$(dirname "${rel}")"
+            cp "${cfg}" "${dest}/${rel}"
+          done < <(find "${preserve_dir}" -type f -name 'config.env')
+          echo "已覆盖同名文件: ${name} -> ${dest}（保留旧目录其他文件，保留本地 config.env）"
+        else
+          echo "已覆盖同名文件: ${name} -> ${dest}（保留旧目录其他文件）"
+        fi
+
+        rm -rf "${preserve_dir}"
         ((overwritten += 1))
       else
         echo "跳过: ${name}（本地已存在: ${dest}）"

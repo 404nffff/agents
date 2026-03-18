@@ -5,6 +5,14 @@ declare(strict_types=1);
 const MAX_LIMIT = 1000;
 const DEFAULT_LIMIT = 100;
 const DEFAULT_MAX_ROWS = 2000;
+const DEFAULT_SQL_ALLOWED_START = ['select', 'show', 'desc', 'describe', 'explain', 'with'];
+const DEFAULT_SQL_FORBIDDEN_KEYWORDS = [
+    'delete', 'insert', 'update', 'replace', 'truncate', 'drop', 'alter', 'create',
+    'grant', 'revoke', 'rename', 'merge', 'call',
+];
+const DEFAULT_SQL_FORBIDDEN_PHRASES = [
+    'into outfile', 'into dumpfile', 'load data', 'lock tables', 'unlock tables',
+];
 
 function usage(): void
 {
@@ -28,6 +36,7 @@ Options:
   --order-by <expr>     order by expression
   --limit <n>           structured mode limit (1-1000)
   --max-rows <n>        maximum allowed result rows (default: 2000)
+  --format <json|table> output format (default: json)
   -h, --help            show this help
 TXT;
     fwrite(STDOUT, $text . PHP_EOL);
@@ -100,6 +109,7 @@ function parseArgs(array $argv): array
         'order_by' => '',
         'limit' => (string) DEFAULT_LIMIT,
         'max_rows' => (string) DEFAULT_MAX_ROWS,
+        'format' => 'json',
     ];
 
     $expectValueFor = null;
@@ -119,6 +129,7 @@ function parseArgs(array $argv): array
         '--order-by' => 'order_by',
         '--limit' => 'limit',
         '--max-rows' => 'max_rows',
+        '--format' => 'format',
     ];
 
     for ($i = 1; $i < count($argv); $i++) {
@@ -280,7 +291,79 @@ function normalizeSql(string $sql): string
     return trim($normalized);
 }
 
-function validateSql(string $sql): string
+function normalizeSpacesLower(string $value): string
+{
+    $normalized = preg_replace('/\s+/', ' ', strtolower(trim($value)));
+    return trim((string) $normalized);
+}
+
+function parseKeywordCsv(string $raw): array
+{
+    if (trim($raw) === '') {
+        return [];
+    }
+    $items = explode(',', $raw);
+    $out = [];
+    foreach ($items as $item) {
+        $normalized = normalizeSpacesLower($item);
+        if ($normalized === '') {
+            continue;
+        }
+        if (!preg_match('/^[a-z_][a-z0-9_]*$/', $normalized)) {
+            continue;
+        }
+        if (!in_array($normalized, $out, true)) {
+            $out[] = $normalized;
+        }
+    }
+    return $out;
+}
+
+function parsePhraseCsv(string $raw): array
+{
+    if (trim($raw) === '') {
+        return [];
+    }
+    $items = explode(',', $raw);
+    $out = [];
+    foreach ($items as $item) {
+        $normalized = str_replace('_', ' ', strtolower(trim($item)));
+        $normalized = normalizeSpacesLower($normalized);
+        if ($normalized === '') {
+            continue;
+        }
+        if (!in_array($normalized, $out, true)) {
+            $out[] = $normalized;
+        }
+    }
+    return $out;
+}
+
+function buildValidationRules(array $envVars): array
+{
+    $allowedStart = parseKeywordCsv((string) ($envVars['MYSQL_SQL_ALLOWED_START'] ?? ''));
+    if (count($allowedStart) === 0) {
+        $allowedStart = DEFAULT_SQL_ALLOWED_START;
+    }
+
+    $forbiddenKeywords = parseKeywordCsv((string) ($envVars['MYSQL_SQL_FORBIDDEN_KEYWORDS'] ?? ''));
+    if (count($forbiddenKeywords) === 0) {
+        $forbiddenKeywords = DEFAULT_SQL_FORBIDDEN_KEYWORDS;
+    }
+
+    $forbiddenPhrases = parsePhraseCsv((string) ($envVars['MYSQL_SQL_FORBIDDEN_PHRASES'] ?? ''));
+    if (count($forbiddenPhrases) === 0) {
+        $forbiddenPhrases = DEFAULT_SQL_FORBIDDEN_PHRASES;
+    }
+
+    return [
+        'allowed_start' => $allowedStart,
+        'forbidden_keywords' => $forbiddenKeywords,
+        'forbidden_phrases' => $forbiddenPhrases,
+    ];
+}
+
+function validateSql(string $sql, array $rules): string
 {
     $normalized = normalizeSql($sql);
     if ($normalized === '') {
@@ -291,33 +374,28 @@ function validateSql(string $sql): string
     }
 
     $lower = strtolower($normalized);
+    $allowShowCreate = preg_match('/^show\s+create\b/i', $lower) === 1;
     $parts = preg_split('/\s+/', $lower);
     $first = $parts[0] ?? '';
-    $allowed = ['select', 'show', 'desc', 'describe', 'explain', 'with'];
+    $allowed = $rules['allowed_start'];
     if (!in_array($first, $allowed, true)) {
-        fail('only read-only SQL is allowed (SELECT/SHOW/DESC/DESCRIBE/EXPLAIN/WITH)');
+        fail('only read-only SQL is allowed (allowed starts: ' . strtoupper(implode('/', $allowed)) . ')');
     }
 
-    $forbiddenKeywords = [
-        'delete', 'insert', 'update', 'replace', 'truncate', 'drop', 'alter', 'create',
-        'grant', 'revoke', 'rename', 'merge', 'call',
-    ];
+    $forbiddenKeywords = $rules['forbidden_keywords'];
     foreach ($forbiddenKeywords as $keyword) {
+        if ($keyword === 'create' && $allowShowCreate) {
+            continue;
+        }
         if (preg_match('/\b' . preg_quote($keyword, '/') . '\b/i', $lower)) {
             fail("forbidden SQL keyword detected: {$keyword}");
         }
     }
 
-    $forbiddenPatterns = [
-        '/\binto\s+outfile\b/i' => 'INTO OUTFILE',
-        '/\binto\s+dumpfile\b/i' => 'INTO DUMPFILE',
-        '/\bload\s+data\b/i' => 'LOAD DATA',
-        '/\block\s+tables?\b/i' => 'LOCK TABLES',
-        '/\bunlock\s+tables?\b/i' => 'UNLOCK TABLES',
-    ];
-    foreach ($forbiddenPatterns as $pattern => $label) {
-        if (preg_match($pattern, $lower)) {
-            fail("forbidden SQL pattern detected: {$label}");
+    $compactSql = normalizeSpacesLower($lower);
+    foreach ($rules['forbidden_phrases'] as $phrase) {
+        if ($phrase !== '' && strpos($compactSql, $phrase) !== false) {
+            fail('forbidden SQL pattern detected: ' . strtoupper($phrase));
         }
     }
 
@@ -443,20 +521,36 @@ function runMysql(array $conn, string $query): array
     ];
 }
 
-function countResultRows(string $output): int
+function parseTsvOutput(string $output): array
 {
-    $lines = preg_split('/\R/', $output);
-    $nonEmpty = 0;
-    foreach ($lines as $line) {
-        if (trim((string) $line) !== '') {
-            $nonEmpty++;
-        }
+    $normalized = str_replace("\r", '', $output);
+    $normalized = rtrim($normalized, "\n");
+    if ($normalized === '') {
+        return ['columns' => [], 'rows' => []];
     }
-    return max($nonEmpty - 1, 0);
+
+    $lines = preg_split('/\n/', $normalized, -1);
+    if ($lines === false || count($lines) === 0) {
+        return ['columns' => [], 'rows' => []];
+    }
+
+    $columns = explode("\t", (string) array_shift($lines));
+    $rows = [];
+    foreach ($lines as $line) {
+        $vals = explode("\t", (string) $line);
+        $row = [];
+        foreach ($columns as $idx => $col) {
+            $row[$col] = array_key_exists($idx, $vals) ? $vals[$idx] : '';
+        }
+        $rows[] = $row;
+    }
+
+    return ['columns' => $columns, 'rows' => $rows];
 }
 
 $opts = parseArgs($argv);
 $envVars = loadEnvFile($opts['config_path']);
+$validationRules = buildValidationRules($envVars);
 $conn = resolveConnection($opts, $envVars);
 
 $limit = parsePositiveInt($opts['limit'], '--limit');
@@ -464,13 +558,17 @@ if ($limit > MAX_LIMIT) {
     fail('--limit cannot exceed ' . MAX_LIMIT);
 }
 $maxRows = parsePositiveInt($opts['max_rows'], '--max-rows');
+$outputFormat = strtolower(trim($opts['format']));
+if (!in_array($outputFormat, ['json', 'table'], true)) {
+    fail('--format must be json or table');
+}
 
 $queryInput = trim($opts['query']);
 if ($queryInput !== '') {
-    $finalQuery = validateSql($queryInput);
+    $finalQuery = validateSql($queryInput, $validationRules);
 } else {
     $structuredQuery = buildStructuredQuery($opts, $limit);
-    $finalQuery = validateSql($structuredQuery);
+    $finalQuery = validateSql($structuredQuery, $validationRules);
 }
 
 $result = runMysql($conn, $finalQuery);
@@ -482,9 +580,25 @@ if ($result['exit_code'] !== 0) {
     fail($message);
 }
 
-$rowCount = countResultRows($result['stdout']);
+$parsed = parseTsvOutput($result['stdout']);
+$rowCount = count($parsed['rows']);
 if ($rowCount > $maxRows) {
     fail("query returned {$rowCount} rows, exceeding --max-rows={$maxRows}");
 }
 
-fwrite(STDOUT, $result['stdout']);
+if ($outputFormat === 'table') {
+    fwrite(STDOUT, $result['stdout']);
+    exit(0);
+}
+
+$payload = [
+    'query' => $finalQuery,
+    'row_count' => $rowCount,
+    'columns' => $parsed['columns'],
+    'rows' => $parsed['rows'],
+];
+$json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+if ($json === false) {
+    fail('failed to encode JSON output');
+}
+fwrite(STDOUT, $json . PHP_EOL);

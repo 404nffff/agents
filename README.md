@@ -72,11 +72,47 @@ curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/insta
 curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_skills.sh" | bash -s -- --github 404nffff/agents --ref master --skills-path codex/skills
 ```
 
+### Windows（PowerShell）
+
+```powershell
+$bat = "$env:TEMP\install_skills_windows.bat"
+Invoke-WebRequest "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_skills_windows.bat" -OutFile $bat
+& $bat
+```
+
+无交互覆盖：
+
+```powershell
+& $bat --yes
+```
+
+### Windows（cmd.exe）
+
+```bat
+curl -fsSL -o install_skills_windows.bat "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_skills_windows.bat"
+install_skills_windows.bat
+```
+
+无交互覆盖：
+
+```bat
+install_skills_windows.bat --yes
+```
+
 ### install_skills.sh 说明
 
 - 读取每个 skill 的 `SKILL.md/skill.md` 中的 `name`、`description`
 - 通过文本菜单勾选要安装的 skills
 - 安装到 `~/.codex/skills/<name>`
 - 同名 skill 会询问是否覆盖
-  - 选择覆盖：仅覆盖同名文件，保留目标目录其他文件
+  - 选择覆盖：仅覆盖同名文件，保留目标目录其他文件，并保留本地 `config.env`
   - 选择跳过：保持现状
+
+### install_skills_windows.bat 常用参数
+
+```bat
+--github <owner/repo>
+--ref <branch_or_tag>
+--skills-path <path_in_repo>
+--yes
+```
