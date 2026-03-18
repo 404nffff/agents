@@ -56,8 +56,45 @@ usage() {
   4) 读取每个 skill 的 SKILL.md/skill.md 的 name 与 description
   5) 交互勾选需要安装的 skills
   6) 安装到 ~/.codex/skills/
-  7) 若本地存在同名 skill，提示并跳过
+  7) 若本地存在同名 skill，提示是否覆盖
 EOF
+}
+
+confirm() {
+  local prompt="$1"
+  local default="${2:-N}"
+  local answer=""
+  local tty_opened="false"
+
+  if [[ -t 1 && -r /dev/tty ]] && exec 9<>/dev/tty 2>/dev/null; then
+    tty_opened="true"
+  fi
+
+  if [[ "${default}" == "Y" ]]; then
+    if [[ "${tty_opened}" == "true" ]]; then
+      printf "%s [Y/n]: " "${prompt}" >&9
+      IFS= read -r answer <&9 || true
+    else
+      printf "%s [Y/n]: " "${prompt}"
+      IFS= read -r answer || true
+    fi
+    answer="${answer:-Y}"
+  else
+    if [[ "${tty_opened}" == "true" ]]; then
+      printf "%s [y/N]: " "${prompt}" >&9
+      IFS= read -r answer <&9 || true
+    else
+      printf "%s [y/N]: " "${prompt}"
+      IFS= read -r answer || true
+    fi
+    answer="${answer:-N}"
+  fi
+
+  if [[ "${tty_opened}" == "true" ]]; then
+    exec 9<&-
+  fi
+
+  [[ "${answer}" =~ ^[Yy]$ ]]
 }
 
 normalize_github_repo() {
@@ -308,8 +345,9 @@ interactive_select() {
 install_selected() {
   mkdir -p "${TARGET_ROOT}"
 
-  local i name src dest installed skipped
+  local i name src dest installed overwritten skipped
   installed=0
+  overwritten=0
   skipped=0
 
   echo
@@ -324,8 +362,15 @@ install_selected() {
     dest="${TARGET_ROOT}/${name}"
 
     if [[ -e "${dest}" ]]; then
-      echo "跳过: ${name}（本地已存在: ${dest}）"
-      ((skipped += 1))
+      if confirm "技能 ${name} 已存在，是否覆盖?" "N"; then
+        mkdir -p "${dest}"
+        cp -R "${src}/." "${dest}/"
+        echo "已覆盖同名文件: ${name} -> ${dest}（保留旧目录其他文件）"
+        ((overwritten += 1))
+      else
+        echo "跳过: ${name}（本地已存在: ${dest}）"
+        ((skipped += 1))
+      fi
       continue
     fi
 
@@ -335,7 +380,7 @@ install_selected() {
   done
 
   echo
-  echo "安装完成: 成功 ${installed} 个，跳过 ${skipped} 个。"
+  echo "安装完成: 新增 ${installed} 个，覆盖 ${overwritten} 个，跳过 ${skipped} 个。"
 }
 
 main() {

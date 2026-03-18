@@ -44,3 +44,5 @@ plan
 
 web/static/uploads/
 logs
+
+config.env

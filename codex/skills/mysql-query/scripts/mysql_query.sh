@@ -11,7 +11,6 @@ Usage:
   mysql_query.sh [options]
 
 Options:
-  --config <path>       env config file path (default: ../config.env)
   --profile <name>      connection profile name in config env
   --host <host>         mysql host
   --port <port>         mysql port
@@ -162,7 +161,6 @@ PROFILE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --config) CONFIG_PATH="$2"; shift 2 ;;
     --profile) PROFILE="$2"; shift 2 ;;
     --host) HOST="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
@@ -183,18 +181,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -f "$CONFIG_PATH" ]]; then
-  # shellcheck disable=SC1090
-  source "$CONFIG_PATH"
-fi
-
-DEFAULT_HOST="${MYSQL_HOST:-}"
-DEFAULT_PORT="${MYSQL_PORT:-}"
-DEFAULT_USER="${MYSQL_USER:-}"
-DEFAULT_PASSWORD="${MYSQL_PASSWORD:-}"
-DEFAULT_DATABASE="${MYSQL_DATABASE:-}"
-DEFAULT_SOCKET="${MYSQL_SOCKET:-}"
-DEFAULT_TIMEOUT="${MYSQL_TIMEOUT:-}"
+[[ -f "$CONFIG_PATH" ]] || error "config file not found: $CONFIG_PATH"
+# shellcheck disable=SC1090
+source "$CONFIG_PATH"
 
 PROFILE_HOST=""
 PROFILE_PORT=""
@@ -225,13 +214,17 @@ if [[ -n "$PROFILE" ]]; then
 
 fi
 
-HOST="${HOST:-${PROFILE_HOST:-$DEFAULT_HOST}}"
-PORT="${PORT:-${PROFILE_PORT:-$DEFAULT_PORT}}"
-USER="${USER:-${PROFILE_USER:-$DEFAULT_USER}}"
-PASSWORD="${PASSWORD:-${PROFILE_PASSWORD:-$DEFAULT_PASSWORD}}"
-DATABASE="${DATABASE:-${PROFILE_DATABASE:-$DEFAULT_DATABASE}}"
-SOCKET="${SOCKET:-${PROFILE_SOCKET:-$DEFAULT_SOCKET}}"
-TIMEOUT="${TIMEOUT:-${PROFILE_TIMEOUT:-$DEFAULT_TIMEOUT}}"
+if [[ -z "$PROFILE" && -z "$HOST" && -z "$PORT" && -z "$USER" && -z "$PASSWORD" && -z "$DATABASE" && -z "$SOCKET" && -z "$TIMEOUT" ]]; then
+  error "profile is required: pass --profile or set MYSQL_PROFILE"
+fi
+
+HOST="${HOST:-$PROFILE_HOST}"
+PORT="${PORT:-$PROFILE_PORT}"
+USER="${USER:-$PROFILE_USER}"
+PASSWORD="${PASSWORD:-$PROFILE_PASSWORD}"
+DATABASE="${DATABASE:-$PROFILE_DATABASE}"
+SOCKET="${SOCKET:-$PROFILE_SOCKET}"
+TIMEOUT="${TIMEOUT:-$PROFILE_TIMEOUT}"
 
 [[ "$LIMIT" =~ ^[0-9]+$ ]] || error "--limit must be a positive integer"
 (( LIMIT > 0 )) || error "--limit must be greater than 0"
