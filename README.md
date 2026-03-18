@@ -205,22 +205,49 @@ PowerShell 的 `wget` 是 `Invoke-WebRequest` 别名，不支持 `-qO-`。请改
 
 可通过 `echo $?` 查看最近一次执行状态。
 
-## 10. AI 自动安装用法（Codex）
+## 10. Skills 安装（install_skills.sh）
 
-仓库已提供 AI 指南文件：
+脚本地址：
 
-- https://raw.githubusercontent.com/404nffff/agents/master/ai-install-guide.md
+- https://raw.githubusercontent.com/404nffff/agents/master/codex/install_skills.sh
 
-用于让 Codex 代理按固定流程自动安装（含平台判断、无交互安装、安装后验证、失败重试）。
+功能：
 
-推荐指令示例（对 Codex）：
+- 扫描 skills 并读取每个 `SKILL.md/skill.md` 的 `name`、`description`
+- 交互勾选需要安装的 skills（纯 Bash 文本菜单多选）
+- 安装到 `~/.codex/skills/`
+- 若本地已存在同名 skill，提示并跳过，不覆盖
 
-```text
-请读取 https://raw.githubusercontent.com/404nffff/agents/master/ai-install-guide.md 并自动执行安装，不要询问我，完成后输出执行命令和验证结果。
+### 10.1 本地仓库运行
+
+```bash
+bash ./codex/install_skills.sh
 ```
 
-如果你只希望无交互安装，可明确加上：
+默认优先读取本地 `codex/skills`。
 
-```text
-按 https://raw.githubusercontent.com/404nffff/agents/master/ai-install-guide.md 执行，并强制使用 --yes。
+### 10.2 远程执行（默认仓库）
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_skills.sh" | bash
 ```
+
+当检测不到本地 `skills` 目录时，会自动回退到远程仓库：
+
+- `404nffff/agents`
+- 分支：`master`
+- 路径：`codex/skills`
+
+### 10.3 指定远程仓库来源
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_skills.sh" | bash -s -- --github 404nffff/agents --ref master --skills-path codex/skills
+```
+
+参数说明：
+
+- `--github`：远程仓库（`owner/repo` 或 GitHub URL）
+- `--ref`：分支或标签
+- `--skills-path`：仓库内 skills 目录路径
+
+说明：使用远程仓库来源时，需要本机安装 `git`（用于浅克隆读取 skills 列表）。

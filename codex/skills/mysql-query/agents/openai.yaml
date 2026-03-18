@@ -1,0 +1,3 @@
+interface:
+  display_name: "MySQL Query"
+  short_description: "Read MySQL tables via local mysql CLI with write-operation blocking"
