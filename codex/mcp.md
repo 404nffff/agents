@@ -225,4 +225,5 @@ Codex should confirm it has access to the codebase-retrieval tool.
 [mcp_servers.codebase-retrieval]
 command = "auggie"
 args = ["--mcp", "--mcp-auto-workspace"]
+startup_timeout_sec = 60
 ```

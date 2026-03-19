@@ -1,144 +1,73 @@
-# Agents 安装说明（精简版）
+# Agents 安装说明（统一入口）
 
-本仓库提供三个安装脚本：
+推荐使用统一脚本：`codex/install.sh`。
 
-- `install_agents.sh`：安装/更新 `AGENTS.md`
-- `install_skills.sh`：安装 `skills` 到 `~/.codex/skills`
-- `install_mcp.sh`：按 `mcp.md` 清单安装/更新 `~/.codex/config.toml` 的 `mcp_servers` 配置
+它整合了以下安装流程：
+- `mcp`：按 `mcp.md` 清单安装/更新 `~/.codex/config.toml` 的 `mcp_servers`
+- `agents`：安装/更新 `AGENTS.md`
+- `skills`：安装 `skills` 到 `~/.codex/skills`
+- `all`：按顺序执行 `mcp -> agents -> skills`
 
-## 1) AGENTS.md 安装
+## 1) 快速开始
 
-### Linux / macOS / Git Bash
+### 本地仓库运行（推荐）
 
-交互模式：
-
-```bash
-curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" | bash
-```
-
-无交互自动覆盖：
+交互选择安装目标：
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents.sh" | bash -s -- --yes
+bash ./codex/install.sh
 ```
 
-### Windows（PowerShell，推荐）
-
-```powershell
-$bat = "$env:TEMP\install_agents_windows.bat"
-Invoke-WebRequest "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents_windows.bat" -OutFile $bat
-& $bat --yes
-```
-
-### Windows（cmd.exe）
-
-```bat
-curl -fsSL -o install_agents_windows.bat "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_agents_windows.bat"
-install_agents_windows.bat --yes
-```
-
-### install_agents.sh 常用参数
+直接指定目标：
 
 ```bash
---source <path_or_url>
---github <owner/repo>
---ref <branch_or_tag>
---file <path_in_repo>
---yes
+bash ./codex/install.sh mcp
+bash ./codex/install.sh agents
+bash ./codex/install.sh skills
+bash ./codex/install.sh all
 ```
 
-说明：
-
-- 默认源：`https://raw.githubusercontent.com/404nffff/agents/master/codex/AGENTS.md`
-- 安装目标：`~/.codex/AGENTS.md`
-- 可选创建：`当前目录/AGENTS.md`
-
-## 2) Skills 安装
-
-### 本地仓库运行
+无交互自动确认：
 
 ```bash
-bash ./codex/install_skills.sh
+bash ./codex/install.sh all --yes
 ```
 
-### 远程运行（默认仓库）
+### 远程运行（Linux / macOS / Git Bash）
+
+交互选择安装目标：
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_skills.sh" | bash
+curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install.sh" | bash
 ```
 
-### 指定远程仓库
+直接安装 skills（自动确认）：
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_skills.sh" | bash -s -- --github 404nffff/agents --ref master --skills-path codex/skills
+curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install.sh" | bash -s -- skills --yes
 ```
 
-### Windows（PowerShell）
-
-```powershell
-$bat = "$env:TEMP\install_skills_windows.bat"
-Invoke-WebRequest "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_skills_windows.bat" -OutFile $bat
-& $bat
-```
-
-无交互覆盖：
-
-```powershell
-& $bat --yes
-```
-
-### Windows（cmd.exe）
-
-```bat
-curl -fsSL -o install_skills_windows.bat "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_skills_windows.bat"
-install_skills_windows.bat
-```
-
-无交互覆盖：
-
-```bat
-install_skills_windows.bat --yes
-```
-
-### install_skills.sh 说明
-
-- 读取每个 skill 的 `SKILL.md/skill.md` 中的 `name`、`description`
-- 通过文本菜单勾选要安装的 skills
-- 安装到 `~/.codex/skills/<name>`
-- 同名 skill 会询问是否覆盖
-  - 选择覆盖：仅覆盖同名文件，保留目标目录其他文件，并保留本地 `config.env`
-  - 选择跳过：保持现状
-
-### install_skills_windows.bat 常用参数
-
-```bat
---github <owner/repo>
---ref <branch_or_tag>
---skills-path <path_in_repo>
---yes
-```
-
-## 3) MCP 安装
-
-### 本地仓库运行
+## 2) install.sh 用法
 
 ```bash
-bash ./codex/install_mcp.sh
+./install.sh
+./install.sh <mcp|agents|skills|all> [目标参数...]
+./install.sh --target <mcp|agents|skills|all> [目标参数...]
+./install.sh --mcp|--agents|--skills|--all [目标参数...]
 ```
 
-### 远程运行（默认仓库）
+目标帮助：
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install_mcp.sh" | bash
+./install.sh mcp --help
+./install.sh agents --help
+./install.sh skills --help
+./install.sh all --help
 ```
 
-### 指定来源（本地/URL）
+## 3) 各目标参数
 
-```bash
-bash ./codex/install_mcp.sh --source codex/mcp.md
-```
-
-### 常用参数
+### mcp
 
 ```bash
 --source <path_or_url>
@@ -149,10 +78,54 @@ bash ./codex/install_mcp.sh --source codex/mcp.md
 --yes
 ```
 
-### install_mcp.sh 说明
-
+说明：
 - 默认读取：`404nffff/agents@master:codex/mcp.md`
-- 远程失败时会回退到本地：`codex/mcp.md`
-- 菜单支持输入“编号”或“server 名称”勾选
-- 对比已存在配置后，按需提示是否覆盖
-- 仅更新 `config.toml` 中 `mcp_servers` 相关段落，不改动其他配置
+- 远程失败时回退到本地：`codex/mcp.md`（含脚本同目录和当前目录候选）
+- 仅更新 `config.toml` 中 `mcp_servers` 相关段落
+
+### agents
+
+```bash
+--source <path_or_url>
+--github <owner/repo>
+--ref <branch_or_tag>
+--file <path_in_repo>
+--yes
+```
+
+说明：
+- 默认优先远程：`404nffff/agents@master:codex/AGENTS.md`
+- 安装目标：`~/.codex/AGENTS.md`
+- 可选生成：`当前目录/AGENTS.md`
+
+### skills
+
+```bash
+--github <owner/repo>
+--ref <branch_or_tag>
+--skills-path <path_in_repo>
+--yes
+```
+
+说明：
+- 优先读取本地 `codex/skills`
+- 本地不存在时读取远程 `404nffff/agents@master:codex/skills`
+- 安装到 `~/.codex/skills/<name>`
+- 同名 skill 覆盖时保留本地 `config.env`
+
+### all
+
+```bash
+--yes
+```
+
+说明：
+- `all` 模式只支持 `--yes`，用于统一自动确认
+
+## 4) Windows 说明
+
+Windows 仍可使用已有批处理脚本：
+- `codex/install_agents_windows.bat`
+- `codex/install_skills_windows.bat`
+
+当前统一入口 `codex/install.sh` 主要面向 Bash 环境（Linux/macOS/Git Bash）。
