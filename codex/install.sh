@@ -434,7 +434,7 @@ install_skills_main() {
   local tmp_fetch_dir=""
   local archive_url archive_file extract_root candidate repo path
   local dir skill_file name desc
-  local cmd token idx
+  local cmd token idx tty_opened
   local installed overwritten skipped selected_count
   local src dest preserve_dir cfg rel
   local -a skill_dirs=()
@@ -560,6 +560,11 @@ install_skills_main() {
     return 1
   fi
 
+  tty_opened="false"
+  if [[ -t 1 && -r /dev/tty ]] && exec 9<>/dev/tty 2>/dev/null; then
+    tty_opened="true"
+  fi
+
   while true; do
     echo
     echo "可安装的 skills（来源: ${source_label}）"
@@ -574,7 +579,12 @@ install_skills_main() {
     echo
     echo "操作: 输入编号切换勾选（支持空格/逗号），a=全选，n=全不选，i=反选，d=开始安装，q=退出"
 
-    read -r -p "> " cmd || cmd="q"
+    if [[ "${tty_opened}" == "true" ]]; then
+      printf "> " >&9
+      IFS= read -r cmd <&9 || cmd="q"
+    else
+      read -r -p "> " cmd || cmd="q"
+    fi
     case "${cmd}" in
       a|A)
         for idx in "${!selected[@]}"; do selected[idx]=1; done
@@ -629,6 +639,10 @@ install_skills_main() {
         ;;
     esac
   done
+
+  if [[ "${tty_opened}" == "true" ]]; then
+    exec 9<&-
+  fi
 
   mkdir -p "${target_root}"
   installed=0
