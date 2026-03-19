@@ -57,6 +57,12 @@ cleanup() {
   fi
 }
 
+handle_interrupt() {
+  echo
+  echo "已取消安装（Ctrl+C）。"
+  exit 130
+}
+
 usage() {
   cat <<'EOF'
 用法:
@@ -388,7 +394,7 @@ render_menu() {
     fi
   done
   echo
-  echo "操作: 输入名称或编号切换勾选（支持空格/逗号），a=全选，n=全不选，i=反选，d=开始安装，q=退出"
+  echo "操作: 输入名称或编号切换勾选（支持空格/逗号），a=全选，n=全不选，i=反选，v=预览已选内容，d=开始安装，q=退出"
 }
 
 toggle_by_indices() {
@@ -426,6 +432,57 @@ toggle_by_indices() {
       fi
     fi
   done
+}
+
+preview_selected_items() {
+  local i selected_count preview_file line src_block
+  selected_count=0
+  for i in "${!SELECTED[@]}"; do
+    if [[ "${SELECTED[i]}" -eq 1 ]]; then
+      ((selected_count += 1))
+    fi
+  done
+
+  if (( selected_count == 0 )); then
+    echo "当前未勾选任何 MCP server。"
+    return
+  fi
+
+  preview_file="$(mktemp)"
+  {
+    echo "已选 MCP servers 预览（共 ${selected_count} 项）"
+    echo "来源: ${SOURCE_LABEL}"
+    echo
+    for i in "${!SELECTED[@]}"; do
+      if [[ "${SELECTED[i]}" -ne 1 ]]; then
+        continue
+      fi
+
+      echo "[$((i + 1))] ${SERVER_NAMES[i]} - ${SERVER_TITLES[i]}"
+      while IFS= read -r line; do
+        [[ -z "${line}" ]] && continue
+        echo "  ${line}"
+      done < <(printf "%s\n" "${SERVER_DESCS[i]}")
+      echo "  配置:"
+      src_block="${SOURCE_BLOCK_BY_NAME[${SERVER_NAMES[i]}]:-}"
+      if [[ -n "${src_block}" && -f "${src_block}" ]]; then
+        while IFS= read -r line; do
+          echo "    ${line}"
+        done < "${src_block}"
+      else
+        echo "    (未找到配置代码块)"
+      fi
+      echo
+    done
+  } > "${preview_file}"
+
+  if command -v less >/dev/null 2>&1 && [[ -t 1 ]]; then
+    less "${preview_file}"
+  else
+    cat "${preview_file}"
+  fi
+
+  rm -f "${preview_file}"
 }
 
 interactive_select() {
@@ -466,6 +523,9 @@ interactive_select() {
             SELECTED[i]=1
           fi
         done
+        ;;
+      v|V)
+        preview_selected_items
         ;;
       d|D)
         selected_count=0
@@ -776,6 +836,7 @@ main() {
   done
 
   trap cleanup EXIT
+  trap handle_interrupt INT
 
   fetch_source_file
   discover_servers

@@ -43,6 +43,12 @@ cleanup() {
   fi
 }
 
+handle_interrupt() {
+  echo
+  echo "已取消安装（Ctrl+C）。"
+  exit 130
+}
+
 usage() {
   cat <<'EOF'
 用法:
@@ -479,6 +485,7 @@ main() {
   fi
 
   trap cleanup EXIT
+  trap handle_interrupt INT
   resolve_skills_root
   discover_skills
   interactive_select
