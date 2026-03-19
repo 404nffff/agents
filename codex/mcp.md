@@ -201,3 +201,28 @@ type = "stdio"
 command = "uvx"
 args = ["code-index-mcp"]
 ```
+
+
+# mcp_servers.codebase-retrieval ace mcp代码检索
+## 说明
+地址 https://app.augmentcode.com/mcp/configuration
+
+1. Install Auggie CLI
+npm install -g @augmentcode/auggie@latest
+2. Sign in to Augment
+auggie login
+This will open a browser window for authentication.
+3. Configure the MCP server in Codex
+Add the MCP server using the Codex CLI:
+codex mcp add codebase-retrieval -- auggie --mcp --mcp-auto-workspace
+The --mcp-auto-workspace flag automatically detects your workspace when using Codex.
+4. Test the integration
+Run Codex and prompt it with:
+"What is this project? Please use the codebase-retrieval tool to get the answer."
+Codex should confirm it has access to the codebase-retrieval tool.
+## 安装命令
+```toml
+[mcp_servers.codebase-retrieval]
+command = "auggie"
+args = ["--mcp", "--mcp-auto-workspace"]
+```
