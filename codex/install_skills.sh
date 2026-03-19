@@ -134,22 +134,40 @@ fetch_remote_skills_root() {
   local repo="$1"
   local ref="$2"
   local path="$3"
-  local clone_url
-  local candidate
-
-  if ! command -v git >/dev/null 2>&1; then
-    echo "错误: 需要 git 来拉取远程仓库，请先安装 git。" >&2
-    exit 1
-  fi
+  local archive_url archive_file
+  local candidate extract_root
 
   TMP_FETCH_DIR="$(mktemp -d)"
-  clone_url="https://github.com/${repo}.git"
-  if ! git clone --depth 1 --branch "${ref}" "${clone_url}" "${TMP_FETCH_DIR}" >/dev/null 2>&1; then
-    echo "错误: 无法拉取远程仓库 ${repo} 分支 ${ref}" >&2
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "错误: 需要 curl 来拉取远程仓库压缩包。" >&2
+    exit 1
+  fi
+  if ! command -v tar >/dev/null 2>&1; then
+    echo "错误: 需要 tar 来解压远程仓库压缩包。" >&2
     exit 1
   fi
 
-  candidate="${TMP_FETCH_DIR}/${path}"
+  archive_url="https://codeload.github.com/${repo}/tar.gz/${ref}"
+  archive_file="${TMP_FETCH_DIR}/repo.tar.gz"
+  echo "正在使用 curl 拉取远程仓库压缩包: ${repo}@${ref}"
+  if ! curl -fsSL "${archive_url}" -o "${archive_file}" >/dev/null 2>&1; then
+    echo "错误: 无法下载远程仓库压缩包 ${archive_url}" >&2
+    exit 1
+  fi
+
+  if ! tar -xzf "${archive_file}" -C "${TMP_FETCH_DIR}" >/dev/null 2>&1; then
+    echo "错误: 无法解压远程仓库压缩包 ${archive_file}" >&2
+    exit 1
+  fi
+
+  extract_root="$(find "${TMP_FETCH_DIR}" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
+  if [[ -z "${extract_root}" ]]; then
+    echo "错误: 压缩包解压后未找到仓库目录 ${repo}@${ref}" >&2
+    exit 1
+  fi
+
+  candidate="${extract_root}/${path}"
   if [[ ! -d "${candidate}" ]]; then
     echo "错误: 远程仓库中不存在 skills 路径: ${path}" >&2
     echo "仓库: ${repo} 分支: ${ref}" >&2

@@ -24,6 +24,8 @@ GITHUB_REF="${DEFAULT_GITHUB_REF}"
 GITHUB_MCP_PATH="${DEFAULT_GITHUB_MCP_PATH}"
 SOURCE_LABEL=""
 LOCAL_FALLBACK_SOURCE=""
+CWD_FALLBACK_SOURCE_1="$(pwd)/codex/mcp.md"
+CWD_FALLBACK_SOURCE_2="$(pwd)/mcp.md"
 if [[ -n "${SCRIPT_DIR}" ]]; then
   LOCAL_FALLBACK_SOURCE="${SCRIPT_DIR}/mcp.md"
 fi
@@ -128,6 +130,18 @@ normalize_github_repo() {
   echo "${repo}"
 }
 
+use_local_fallback() {
+  local candidate=""
+  for candidate in "${LOCAL_FALLBACK_SOURCE}" "${CWD_FALLBACK_SOURCE_1}" "${CWD_FALLBACK_SOURCE_2}"; do
+    if [[ -n "${candidate}" && -f "${candidate}" ]]; then
+      cp "${candidate}" "${TMP_SOURCE_FILE}"
+      SOURCE_LABEL="本地回退 ${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 fetch_source_file() {
   TMP_SOURCE_FILE="$(mktemp)"
 
@@ -150,58 +164,41 @@ fetch_source_file() {
     return
   fi
 
-  if ! command -v git >/dev/null 2>&1; then
-    echo "错误: 需要 git 来拉取远程仓库，请先安装 git。" >&2
-    exit 1
-  fi
-
-  local repo clone_url candidate
+  local repo raw_url
   repo="$(normalize_github_repo "${GITHUB_REPO}")"
+  raw_url="https://raw.githubusercontent.com/${repo}/${GITHUB_REF}/${GITHUB_MCP_PATH}"
 
-  TMP_FETCH_DIR="$(mktemp -d)"
-  clone_url="https://github.com/${repo}.git"
   echo "正在拉取远程 MCP 清单: ${repo}@${GITHUB_REF}:${GITHUB_MCP_PATH}"
-  if command -v timeout >/dev/null 2>&1; then
-    if ! GIT_TERMINAL_PROMPT=0 timeout 30s git clone --depth 1 --branch "${GITHUB_REF}" "${clone_url}" "${TMP_FETCH_DIR}" >/dev/null 2>&1; then
-      if [[ -f "${LOCAL_FALLBACK_SOURCE}" ]]; then
-        echo "警告: 远程拉取失败，已回退到本地文件: ${LOCAL_FALLBACK_SOURCE}" >&2
-        cp "${LOCAL_FALLBACK_SOURCE}" "${TMP_SOURCE_FILE}"
-        SOURCE_LABEL="本地回退 ${LOCAL_FALLBACK_SOURCE}"
-        return
-      fi
-      echo "错误: 无法拉取远程仓库 ${repo} 分支 ${GITHUB_REF}" >&2
-      echo "提示: 可使用 --source 指定本地文件或 URL，例如: --source codex/mcp.md" >&2
-      exit 1
-    fi
-  else
-    if ! GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "${GITHUB_REF}" "${clone_url}" "${TMP_FETCH_DIR}" >/dev/null 2>&1; then
-      if [[ -f "${LOCAL_FALLBACK_SOURCE}" ]]; then
-        echo "警告: 远程拉取失败，已回退到本地文件: ${LOCAL_FALLBACK_SOURCE}" >&2
-        cp "${LOCAL_FALLBACK_SOURCE}" "${TMP_SOURCE_FILE}"
-        SOURCE_LABEL="本地回退 ${LOCAL_FALLBACK_SOURCE}"
-        return
-      fi
-      echo "错误: 无法拉取远程仓库 ${repo} 分支 ${GITHUB_REF}" >&2
-      echo "提示: 可使用 --source 指定本地文件或 URL，例如: --source codex/mcp.md" >&2
-      exit 1
-    fi
-  fi
-
-  candidate="${TMP_FETCH_DIR}/${GITHUB_MCP_PATH}"
-  if [[ ! -f "${candidate}" ]]; then
-    if [[ -f "${LOCAL_FALLBACK_SOURCE}" ]]; then
-      echo "警告: 远程文件不存在，已回退到本地文件: ${LOCAL_FALLBACK_SOURCE}" >&2
-      cp "${LOCAL_FALLBACK_SOURCE}" "${TMP_SOURCE_FILE}"
-      SOURCE_LABEL="本地回退 ${LOCAL_FALLBACK_SOURCE}"
+  if ! command -v curl >/dev/null 2>&1; then
+    if use_local_fallback; then
+      echo "警告: 未安装 curl，已回退到本地文件: ${SOURCE_LABEL#本地回退 }" >&2
       return
     fi
-    echo "错误: 远程仓库中不存在文件: ${GITHUB_MCP_PATH}" >&2
-    echo "仓库: ${repo} 分支: ${GITHUB_REF}" >&2
+    echo "错误: 未安装 curl，且未找到可用本地 mcp.md 回退文件。" >&2
+    echo "提示: 可使用 --source 指定本地文件或 URL，例如: --source codex/mcp.md" >&2
     exit 1
   fi
 
-  cp "${candidate}" "${TMP_SOURCE_FILE}"
-  SOURCE_LABEL="远程仓库 ${repo}@${GITHUB_REF}:${GITHUB_MCP_PATH}"
+  if command -v timeout >/dev/null 2>&1; then
+    if timeout 30s curl -fsSL "${raw_url}" -o "${TMP_SOURCE_FILE}" >/dev/null 2>&1; then
+      SOURCE_LABEL="远程文件 ${raw_url}"
+      return
+    fi
+  else
+    if curl -fsSL "${raw_url}" -o "${TMP_SOURCE_FILE}" >/dev/null 2>&1; then
+      SOURCE_LABEL="远程文件 ${raw_url}"
+      return
+    fi
+  fi
+
+  if use_local_fallback; then
+    echo "警告: 远程拉取失败，已回退到本地文件: ${SOURCE_LABEL#本地回退 }" >&2
+    return
+  fi
+
+  echo "错误: 无法拉取远程文件 ${raw_url}" >&2
+  echo "提示: 可使用 --source 指定本地文件或 URL，例如: --source codex/mcp.md" >&2
+  exit 1
 }
 
 discover_servers() {
