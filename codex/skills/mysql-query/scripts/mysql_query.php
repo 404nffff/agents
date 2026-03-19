@@ -414,6 +414,14 @@ function parsePositiveInt(string $value, string $name): int
     return $n;
 }
 
+function parseOptionalPositiveInt(string $value, string $name): int
+{
+    if (trim($value) === '') {
+        return 0;
+    }
+    return parsePositiveInt($value, $name);
+}
+
 function buildStructuredQuery(array $opts, int $limit): string
 {
     $table = trim($opts['table']);
@@ -456,96 +464,103 @@ function buildStructuredQuery(array $opts, int $limit): string
     return $query;
 }
 
-function shellJoin(array $parts): string
+function tsvEncodeValue($value): string
 {
-    return implode(' ', array_map('escapeshellarg', $parts));
+    if ($value === null) {
+        return '\N';
+    }
+    return (string) $value;
+}
+
+function renderTsvOutput(array $columns, array $rows): string
+{
+    if (count($columns) === 0) {
+        return '';
+    }
+
+    $lines = [implode("\t", $columns)];
+    foreach ($rows as $row) {
+        $vals = [];
+        foreach ($columns as $col) {
+            $vals[] = tsvEncodeValue($row[$col] ?? null);
+        }
+        $lines[] = implode("\t", $vals);
+    }
+
+    return implode("\n", $lines) . "\n";
 }
 
 function runMysql(array $conn, string $query): array
 {
-    $cmd = ['mysql', '--batch', '--raw', '--default-character-set=utf8mb4'];
-
-    if ($conn['host'] !== '') {
-        $cmd[] = '--host';
-        $cmd[] = $conn['host'];
-    }
-    if ($conn['port'] !== '') {
-        $cmd[] = '--port';
-        $cmd[] = $conn['port'];
-    }
-    if ($conn['user'] !== '') {
-        $cmd[] = '--user';
-        $cmd[] = $conn['user'];
-    }
-    if ($conn['socket'] !== '') {
-        $cmd[] = '--socket';
-        $cmd[] = $conn['socket'];
-    }
-    if ($conn['timeout'] !== '') {
-        $cmd[] = '--connect-timeout';
-        $cmd[] = $conn['timeout'];
-    }
-    if ($conn['database'] !== '') {
-        $cmd[] = $conn['database'];
-    }
-    $cmd[] = '--execute';
-    $cmd[] = $query;
-
-    $descriptorSpec = [
-        0 => ['pipe', 'r'],
-        1 => ['pipe', 'w'],
-        2 => ['pipe', 'w'],
-    ];
-
-    $env = $_ENV;
-    if ($conn['password'] !== '') {
-        $env['MYSQL_PWD'] = $conn['password'];
+    if (!function_exists('mysqli_init')) {
+        fail('mysqli extension is required');
     }
 
-    $process = proc_open(shellJoin($cmd), $descriptorSpec, $pipes, null, $env);
-    if (!is_resource($process)) {
-        fail('failed to execute mysql command');
+    mysqli_report(MYSQLI_REPORT_OFF);
+    $mysql = mysqli_init();
+    if ($mysql === false) {
+        fail('failed to initialize mysqli');
     }
 
-    fclose($pipes[0]);
-    $stdout = stream_get_contents($pipes[1]);
-    $stderr = stream_get_contents($pipes[2]);
-    fclose($pipes[1]);
-    fclose($pipes[2]);
-
-    $exitCode = proc_close($process);
-    return [
-        'exit_code' => $exitCode,
-        'stdout' => $stdout !== false ? $stdout : '',
-        'stderr' => $stderr !== false ? $stderr : '',
-    ];
-}
-
-function parseTsvOutput(string $output): array
-{
-    $normalized = str_replace("\r", '', $output);
-    $normalized = rtrim($normalized, "\n");
-    if ($normalized === '') {
-        return ['columns' => [], 'rows' => []];
+    $timeout = parseOptionalPositiveInt((string) $conn['timeout'], '--timeout');
+    if ($timeout > 0 && !mysqli_options($mysql, MYSQLI_OPT_CONNECT_TIMEOUT, $timeout)) {
+        mysqli_close($mysql);
+        fail('failed to apply mysql connection timeout');
     }
 
-    $lines = preg_split('/\n/', $normalized, -1);
-    if ($lines === false || count($lines) === 0) {
-        return ['columns' => [], 'rows' => []];
+    $port = parseOptionalPositiveInt((string) $conn['port'], '--port');
+    $host = $conn['host'] !== '' ? $conn['host'] : null;
+    $user = $conn['user'] !== '' ? $conn['user'] : null;
+    $password = $conn['password'] !== '' ? $conn['password'] : null;
+    $database = $conn['database'] !== '' ? $conn['database'] : null;
+    $socket = $conn['socket'] !== '' ? $conn['socket'] : null;
+
+    $connected = mysqli_real_connect($mysql, $host, $user, $password, $database, $port, $socket);
+    if ($connected !== true) {
+        $error = trim((string) mysqli_connect_error());
+        mysqli_close($mysql);
+        fail($error !== '' ? $error : 'mysql connection failed');
     }
 
-    $columns = explode("\t", (string) array_shift($lines));
+    if (!mysqli_set_charset($mysql, 'utf8mb4')) {
+        $error = trim(mysqli_error($mysql));
+        mysqli_close($mysql);
+        fail($error !== '' ? $error : 'failed to set mysql charset utf8mb4');
+    }
+
+    $result = mysqli_query($mysql, $query, MYSQLI_STORE_RESULT);
+    if ($result === false) {
+        $error = trim(mysqli_error($mysql));
+        mysqli_close($mysql);
+        fail($error !== '' ? $error : 'mysql query failed');
+    }
+    if ($result === true) {
+        mysqli_close($mysql);
+        return ['columns' => [], 'rows' => [], 'table_output' => ''];
+    }
+
+    $fields = mysqli_fetch_fields($result);
+    $columns = [];
+    foreach ($fields as $field) {
+        $columns[] = $field->name;
+    }
+
     $rows = [];
-    foreach ($lines as $line) {
-        $vals = explode("\t", (string) $line);
+    while (($vals = mysqli_fetch_row($result)) !== null) {
         $row = [];
         foreach ($columns as $idx => $col) {
-            $row[$col] = array_key_exists($idx, $vals) ? $vals[$idx] : '';
+            $row[$col] = array_key_exists($idx, $vals) ? $vals[$idx] : null;
         }
         $rows[] = $row;
     }
+    mysqli_free_result($result);
+    mysqli_close($mysql);
 
-    return ['columns' => $columns, 'rows' => $rows];
+    return [
+        'columns' => $columns,
+        'rows' => $rows,
+        'table_output' => renderTsvOutput($columns, $rows),
+    ];
 }
 
 $opts = parseArgs($argv);
@@ -572,30 +587,21 @@ if ($queryInput !== '') {
 }
 
 $result = runMysql($conn, $finalQuery);
-if ($result['exit_code'] !== 0) {
-    $message = trim($result['stderr']) !== '' ? trim($result['stderr']) : trim($result['stdout']);
-    if ($message === '') {
-        $message = 'mysql command failed';
-    }
-    fail($message);
-}
-
-$parsed = parseTsvOutput($result['stdout']);
-$rowCount = count($parsed['rows']);
+$rowCount = count($result['rows']);
 if ($rowCount > $maxRows) {
     fail("query returned {$rowCount} rows, exceeding --max-rows={$maxRows}");
 }
 
 if ($outputFormat === 'table') {
-    fwrite(STDOUT, $result['stdout']);
+    fwrite(STDOUT, $result['table_output']);
     exit(0);
 }
 
 $payload = [
     'query' => $finalQuery,
     'row_count' => $rowCount,
-    'columns' => $parsed['columns'],
-    'rows' => $parsed['rows'],
+    'columns' => $result['columns'],
+    'rows' => $result['rows'],
 ];
 $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
 if ($json === false) {
