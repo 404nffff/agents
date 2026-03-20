@@ -509,11 +509,11 @@ function runMysql(array $conn, string $query): array
     }
 
     $port = parseOptionalPositiveInt((string) $conn['port'], '--port');
-    $host = $conn['host'] !== '' ? $conn['host'] : null;
-    $user = $conn['user'] !== '' ? $conn['user'] : null;
-    $password = $conn['password'] !== '' ? $conn['password'] : null;
-    $database = $conn['database'] !== '' ? $conn['database'] : null;
-    $socket = $conn['socket'] !== '' ? $conn['socket'] : null;
+    $host = (string) ($conn['host'] ?? '');
+    $user = (string) ($conn['user'] ?? '');
+    $password = (string) ($conn['password'] ?? '');
+    $database = (string) ($conn['database'] ?? '');
+    $socket = (string) ($conn['socket'] ?? '');
 
     $connected = mysqli_real_connect($mysql, $host, $user, $password, $database, $port, $socket);
     if ($connected !== true) {

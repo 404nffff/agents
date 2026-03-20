@@ -13,6 +13,20 @@ else
   SCRIPT_DIR="$(pwd)"
 fi
 
+IS_NETWORK_REQUEST_EXECUTION="false"
+case "${SCRIPT_PATH}" in
+  /dev/fd/*|/proc/self/fd/*|/dev/stdin|stdin|-)
+    IS_NETWORK_REQUEST_EXECUTION="true"
+    ;;
+esac
+if [[ "${IS_NETWORK_REQUEST_EXECUTION}" != "true" && ! -f "${SCRIPT_PATH}" ]]; then
+  case "${SCRIPT_PATH}" in
+    bash|-bash|sh|-sh)
+      IS_NETWORK_REQUEST_EXECUTION="true"
+      ;;
+  esac
+fi
+
 DEFAULT_GITHUB_REPO="404nffff/agents"
 DEFAULT_GITHUB_REF="master"
 AUTO_YES="false"
@@ -97,8 +111,8 @@ skills_usage() {
   ./install.sh skills [--yes]
 
 说明:
-  1) 优先扫描本地 codex/skills 目录
-  2) 若本地 skills 不存在，则默认从远程仓库读取（404nffff/agents@master:codex/skills）
+  1) 本地执行优先扫描本地 codex/skills 目录
+  2) 网络请求执行默认从远程仓库读取（404nffff/agents@master:codex/skills）
   3) 可通过 --github / --ref / --skills-path 指定远程来源
   4) 交互勾选需要安装的 skills
   5) 安装到 ~/.codex/skills/
@@ -114,7 +128,7 @@ mcp_usage() {
   ./install.sh mcp [--source <path_or_url>] [--config <config_path>] [--yes]
 
 说明:
-  1) 默认从远程仓库读取 404nffff/agents@master:codex/mcp.md
+  1) 默认来源会自动判断：本地执行优先本地文件，网络请求执行优先远程仓库（404nffff/agents@master:codex/mcp.md）
   2) 读取 ~/.codex/config.toml 的 mcp_servers 相关配置并对比
   3) 交互勾选要安装/更新的 mcp server
   4) 若目标已存在且配置不同，会逐项询问是否覆盖（--yes 自动覆盖）
@@ -392,7 +406,9 @@ install_agents_main() {
     repo="$(normalize_github_repo "${github_repo}")"
     fetch_raw_from_github "${repo}" "${github_ref}" "${github_file}" "${tmp_source}"
   else
-    if fetch_raw_from_github "${DEFAULT_GITHUB_REPO}" "${DEFAULT_GITHUB_REF}" "codex/AGENTS.md" "${tmp_source}" 2>/dev/null; then
+    if [[ "${IS_NETWORK_REQUEST_EXECUTION}" != "true" && -f "${default_source_file}" ]]; then
+      cp "${default_source_file}" "${tmp_source}"
+    elif fetch_raw_from_github "${DEFAULT_GITHUB_REPO}" "${DEFAULT_GITHUB_REF}" "codex/AGENTS.md" "${tmp_source}" 2>/dev/null; then
       :
     elif [[ -f "${default_source_file}" ]]; then
       cp "${default_source_file}" "${tmp_source}"
@@ -480,7 +496,7 @@ install_skills_main() {
     github_repo="${DEFAULT_GITHUB_REPO}"
   fi
 
-  if [[ "${source_mode}" != "github" && -d "${local_skills_root}" ]]; then
+  if [[ "${source_mode}" != "github" && "${IS_NETWORK_REQUEST_EXECUTION}" != "true" && -d "${local_skills_root}" ]]; then
     skills_root="${local_skills_root}"
     source_label="本地目录 ${skills_root}"
   else
@@ -695,7 +711,7 @@ install_skills_main() {
 }
 
 install_mcp_main() {
-  local source_mode="github"
+  local source_mode=""
   local source_input=""
   local github_repo="${DEFAULT_GITHUB_REPO}"
   local github_ref="${DEFAULT_GITHUB_REF}"
@@ -742,6 +758,12 @@ install_mcp_main() {
         source_label="本地文件 ${source_input}"
       fi
       return
+    fi
+
+    if [[ "${source_mode}" != "github" && "${IS_NETWORK_REQUEST_EXECUTION}" != "true" ]]; then
+      if mcp_use_local_fallback; then
+        return
+      fi
     fi
 
     repo="$(normalize_github_repo "${github_repo}")"
@@ -1345,6 +1367,9 @@ install_mcp_main() {
           echo "错误: --ref 需要参数" >&2
           return 1
         fi
+        if [[ "${source_mode}" != "source" ]]; then
+          source_mode="github"
+        fi
         github_ref="${2:-}"
         shift 2
         ;;
@@ -1352,6 +1377,9 @@ install_mcp_main() {
         if [[ $# -lt 2 || -z "${2:-}" ]]; then
           echo "错误: --mcp-path 需要参数" >&2
           return 1
+        fi
+        if [[ "${source_mode}" != "source" ]]; then
+          source_mode="github"
         fi
         github_mcp_path="${2:-}"
         shift 2
