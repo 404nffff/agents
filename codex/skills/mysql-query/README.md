@@ -63,7 +63,7 @@ bash ~/.codex/skills/mysql-query/scripts/mysql_query.sh \
 - `MYSQL_PORT_<profile>`
 - `MYSQL_USER_<profile>`
 - `MYSQL_PASSWORD_<profile>`
-- `MYSQL_DATABASE_<profile>`
+- `MYSQL_DATABASE_<profile>`（支持单库或多库，逗号分隔）
 
 示例：
 
@@ -74,6 +74,7 @@ MYSQL_PORT_reporting=3306
 MYSQL_USER_reporting=report_user
 MYSQL_PASSWORD_reporting=report_password
 MYSQL_DATABASE_reporting=report_db
+MYSQL_DATABASE_main=rsync,main_db,analytics
 ```
 
 使用：
@@ -88,6 +89,7 @@ php ~/.codex/skills/mysql-query/scripts/mysql_query.php \
 说明：
 - 不再使用 `MYSQL_HOST` 这类默认连接键
 - 未传 `--profile` 时，脚本会读取 `MYSQL_PROFILE`
+- 当 `MYSQL_DATABASE_<profile>` 配置多个库时，必须显式传 `--database <db_name>`
 
 ## SQL 规则配置（写在 config.env）
 

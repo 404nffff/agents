@@ -79,6 +79,22 @@ parse_phrase_csv() {
   done | awk '!seen[$0]++'
 }
 
+parse_csv_values() {
+  local csv="$1"
+  local item trimmed_item
+  IFS=',' read -r -a items <<<"$csv"
+  for item in "${items[@]}"; do
+    trimmed_item="$(trim "$item")"
+    [[ -n "$trimmed_item" ]] || continue
+    printf '%s\n' "$trimmed_item"
+  done | awk '!seen[$0]++'
+}
+
+join_csv() {
+  local IFS=', '
+  printf '%s' "$*"
+}
+
 is_identifier() {
   [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]
 }
@@ -245,6 +261,8 @@ PROFILE_PORT=""
 PROFILE_USER=""
 PROFILE_PASSWORD=""
 PROFILE_DATABASE=""
+PROFILE_DATABASE_RAW=""
+PROFILE_DATABASE_CANDIDATES=()
 PROFILE_SOCKET=""
 PROFILE_TIMEOUT=""
 
@@ -259,12 +277,31 @@ if [[ -n "$PROFILE" ]]; then
   PROFILE_PORT="$(get_profile_var MYSQL_PORT "$PROFILE")"
   PROFILE_USER="$(get_profile_var MYSQL_USER "$PROFILE")"
   PROFILE_PASSWORD="$(get_profile_var MYSQL_PASSWORD "$PROFILE")"
-  PROFILE_DATABASE="$(get_profile_var MYSQL_DATABASE "$PROFILE")"
+  PROFILE_DATABASE_RAW="$(get_profile_var MYSQL_DATABASE "$PROFILE")"
+  mapfile -t PROFILE_DATABASE_CANDIDATES < <(parse_csv_values "$PROFILE_DATABASE_RAW")
+  if [[ ${#PROFILE_DATABASE_CANDIDATES[@]} -gt 0 ]]; then
+    PROFILE_DATABASE="${PROFILE_DATABASE_CANDIDATES[0]}"
+  fi
   PROFILE_SOCKET="$(get_profile_var MYSQL_SOCKET "$PROFILE")"
   PROFILE_TIMEOUT="$(get_profile_var MYSQL_TIMEOUT "$PROFILE")"
 
-  if [[ -z "$PROFILE_HOST" && -z "$PROFILE_PORT" && -z "$PROFILE_USER" && -z "$PROFILE_PASSWORD" && -z "$PROFILE_DATABASE" && -z "$PROFILE_SOCKET" && -z "$PROFILE_TIMEOUT" ]]; then
+  if [[ -z "$PROFILE_HOST" && -z "$PROFILE_PORT" && -z "$PROFILE_USER" && -z "$PROFILE_PASSWORD" && -z "$PROFILE_DATABASE_RAW" && -z "$PROFILE_SOCKET" && -z "$PROFILE_TIMEOUT" ]]; then
     error "profile not found: $PROFILE"
+  fi
+
+  if [[ -n "$DATABASE" && ${#PROFILE_DATABASE_CANDIDATES[@]} -gt 0 ]]; then
+    DATABASE_MATCHED="false"
+    for candidate in "${PROFILE_DATABASE_CANDIDATES[@]}"; do
+      if [[ "$DATABASE" == "$candidate" ]]; then
+        DATABASE_MATCHED="true"
+        break
+      fi
+    done
+    [[ "$DATABASE_MATCHED" == "true" ]] || error "--database must be one of MYSQL_DATABASE_${PROFILE}: $(join_csv "${PROFILE_DATABASE_CANDIDATES[@]}")"
+  fi
+
+  if [[ -z "$DATABASE" && ${#PROFILE_DATABASE_CANDIDATES[@]} -gt 1 ]]; then
+    error "multiple databases configured in MYSQL_DATABASE_${PROFILE}; pass --database ($(join_csv "${PROFILE_DATABASE_CANDIDATES[@]}"))"
   fi
 
 fi

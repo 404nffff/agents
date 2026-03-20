@@ -218,9 +218,31 @@ function getProfileValue(array $envVars, string $key, string $profile): string
     return (string) ($envVars[$profileKey] ?? '');
 }
 
+function parseCsvValues(string $raw): array
+{
+    if (trim($raw) === '') {
+        return [];
+    }
+
+    $items = explode(',', $raw);
+    $out = [];
+    foreach ($items as $item) {
+        $value = trim($item);
+        if ($value === '') {
+            continue;
+        }
+        if (!in_array($value, $out, true)) {
+            $out[] = $value;
+        }
+    }
+    return $out;
+}
+
 function resolveConnection(array $opts, array $envVars): array
 {
     $profile = $opts['profile'] !== '' ? $opts['profile'] : (string) ($envVars['MYSQL_PROFILE'] ?? '');
+    $requestedDatabase = trim((string) $opts['database']);
+    $profileDatabaseCandidates = [];
     $profileVals = [
         'host' => '',
         'port' => '',
@@ -236,12 +258,15 @@ function resolveConnection(array $opts, array $envVars): array
             fail("invalid --profile name: {$profile}");
         }
 
+        $profileDatabaseRaw = getProfileValue($envVars, 'MYSQL_DATABASE', $profile);
+        $profileDatabaseCandidates = parseCsvValues($profileDatabaseRaw);
+
         $profileVals = [
             'host' => getProfileValue($envVars, 'MYSQL_HOST', $profile),
             'port' => getProfileValue($envVars, 'MYSQL_PORT', $profile),
             'user' => getProfileValue($envVars, 'MYSQL_USER', $profile),
             'password' => getProfileValue($envVars, 'MYSQL_PASSWORD', $profile),
-            'database' => getProfileValue($envVars, 'MYSQL_DATABASE', $profile),
+            'database' => $profileDatabaseCandidates[0] ?? '',
             'socket' => getProfileValue($envVars, 'MYSQL_SOCKET', $profile),
             'timeout' => getProfileValue($envVars, 'MYSQL_TIMEOUT', $profile),
         ];
@@ -262,7 +287,7 @@ function resolveConnection(array $opts, array $envVars): array
         $opts['port'] !== '' ||
         $opts['user'] !== '' ||
         $opts['password'] !== '' ||
-        $opts['database'] !== '' ||
+        $requestedDatabase !== '' ||
         $opts['socket'] !== '' ||
         $opts['timeout'] !== '';
 
@@ -270,12 +295,26 @@ function resolveConnection(array $opts, array $envVars): array
         fail('profile is required: pass --profile or set MYSQL_PROFILE');
     }
 
+    $resolvedDatabase = $requestedDatabase !== '' ? $requestedDatabase : $profileVals['database'];
+    if ($profile !== '' && count($profileDatabaseCandidates) > 0) {
+        if ($requestedDatabase !== '') {
+            if (!in_array($requestedDatabase, $profileDatabaseCandidates, true)) {
+                fail("--database must be one of MYSQL_DATABASE_{$profile}: " . implode(', ', $profileDatabaseCandidates));
+            }
+            $resolvedDatabase = $requestedDatabase;
+        } elseif (count($profileDatabaseCandidates) > 1) {
+            fail("multiple databases configured in MYSQL_DATABASE_{$profile}; pass --database (" . implode(', ', $profileDatabaseCandidates) . ')');
+        } else {
+            $resolvedDatabase = $profileDatabaseCandidates[0];
+        }
+    }
+
     return [
         'host' => $opts['host'] !== '' ? $opts['host'] : $profileVals['host'],
         'port' => $opts['port'] !== '' ? $opts['port'] : $profileVals['port'],
         'user' => $opts['user'] !== '' ? $opts['user'] : $profileVals['user'],
         'password' => $opts['password'] !== '' ? $opts['password'] : $profileVals['password'],
-        'database' => $opts['database'] !== '' ? $opts['database'] : $profileVals['database'],
+        'database' => $resolvedDatabase,
         'socket' => $opts['socket'] !== '' ? $opts['socket'] : $profileVals['socket'],
         'timeout' => $opts['timeout'] !== '' ? $opts['timeout'] : $profileVals['timeout'],
     ];
