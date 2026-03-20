@@ -35,16 +35,49 @@ bash ./codex/install.sh all --yes
 
 ### 远程运行（Linux / macOS / Git Bash）
 
+先定义仓库与版本（`REF` 可填 tag 或分支）：
+
+```bash
+REPO="404nffff/agents"
+REF="v1.0.0" # 推荐用 tag 固定版本；追踪最新可改成 master
+INSTALL_URL="https://cdn.jsdelivr.net/gh/${REPO}@${REF}/codex/install.sh"
+```
+
 交互选择安装目标：
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install.sh" | bash
+curl -fsSL "${INSTALL_URL}" | bash
 ```
 
 直接安装 skills（自动确认）：
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install.sh" | bash -s -- skills --yes
+curl -fsSL "${INSTALL_URL}" | bash -s -- skills --yes
+```
+
+仅想跟踪最新主线时可直接写：
+
+```bash
+curl -fsSL "https://cdn.jsdelivr.net/gh/404nffff/agents@master/codex/install.sh" | bash
+```
+
+### 发布并推送 Tag（维护者）
+
+```bash
+# 1) 在当前提交打带注释 tag
+git tag -a v1.0.0 -m "release: v1.0.0"
+
+# 2) 推送该 tag
+git push origin v1.0.0
+
+# 3)（可选）一次性推送所有本地 tags
+git push origin --tags
+```
+
+推送后即可用该版本安装：
+
+```bash
+curl -fsSL "https://cdn.jsdelivr.net/gh/404nffff/agents@v1.0.0/codex/install.sh" | bash
 ```
 
 ## 2) install.sh 用法
