@@ -8,6 +8,7 @@ rsync-web.exe
 *.db-wal
 
 # Go相关
+*.exe
 *.exe~
 *.dll
 *.so
@@ -15,6 +16,7 @@ rsync-web.exe
 *.test
 *.out
 go.work
+bin/
 
 # IDE
 .idea/

@@ -2,23 +2,23 @@
 
 推荐使用统一脚本：`codex/install.sh`。
 
-它整合了以下安装流程：
+统一入口支持以下目标：
 - `mcp`：按 `mcp.md` 清单安装/更新 `~/.codex/config.toml` 的 `mcp_servers`
 - `agents`：安装/更新 `AGENTS.md`
 - `skills`：安装 `skills` 到 `~/.codex/skills`
 - `all`：按顺序执行 `mcp -> agents -> skills`
 
-## 1) 快速开始
+## 1) 安装方式
 
-### 本地仓库运行（推荐）
+### 本地仓库安装（推荐）
 
-交互选择安装目标：
+交互安装：
 
 ```bash
 bash ./codex/install.sh
 ```
 
-直接指定目标：
+指定目标安装：
 
 ```bash
 bash ./codex/install.sh mcp
@@ -33,66 +33,28 @@ bash ./codex/install.sh all
 bash ./codex/install.sh all --yes
 ```
 
-### 远程运行（Linux / macOS / Git Bash）
+### 远程安装（Linux / macOS / Git Bash）
 
-先定义安装地址（默认跟随最新 tag）：
+默认跟随最新 tag：
 
 ```bash
 INSTALL_URL="https://cdn.jsdelivr.net/gh/404nffff/agents@latest/codex/install.sh"
-```
-
-交互选择安装目标：
-
-```bash
 curl -fsSL "${INSTALL_URL}" | bash
 ```
 
-直接安装 skills（自动确认）：
+直接安装 `skills`（自动确认）：
 
 ```bash
 curl -fsSL "${INSTALL_URL}" | bash -s -- skills --yes
 ```
 
-若你要固定版本（可回滚），把 `latest` 换成具体 tag：
+固定版本安装（便于回滚）：
 
 ```bash
 curl -fsSL "https://cdn.jsdelivr.net/gh/404nffff/agents@v1.0.0/codex/install.sh" | bash
 ```
 
-### 发布并推送 Tag（维护者）
-
-```bash
-# 1) 在当前提交打带注释 tag
-git tag -a v1.0.0 -m "release: v1.0.0"
-
-# 2) 推送该 tag
-git push origin v1.0.0
-
-# 3)（可选）一次性推送所有本地 tags
-git push origin --tags
-```
-
-推送后即可用该版本安装：
-
-```bash
-curl -fsSL "https://cdn.jsdelivr.net/gh/404nffff/agents@v1.0.0/codex/install.sh" | bash
-```
-
-### Cloudflare Worker 配置
-
-仓库内已提供 Worker 脚本（反向代理 `/install.sh` 到 jsDelivr `@latest`）：
-
-- `codex/cloudflare-worker-install.js`
-- 部署后访问根路径 `/` 可查看安装说明页面
-
-### Nginx 配置（可选）
-
-仓库内已提供 Nginx + 静态页面示例：
-
-- `codex/nginx-install.conf`（`/install.sh` 302 跳转 + `/` 静态页）
-- `codex/index.html`（静态说明页面模板）
-
-## 2) install.sh 用法
+## 2) install.sh 命令总览
 
 ```bash
 ./install.sh
@@ -101,7 +63,7 @@ curl -fsSL "https://cdn.jsdelivr.net/gh/404nffff/agents@v1.0.0/codex/install.sh"
 ./install.sh --mcp|--agents|--skills|--all [目标参数...]
 ```
 
-目标帮助：
+查看目标帮助：
 
 ```bash
 ./install.sh mcp --help
@@ -167,10 +129,35 @@ curl -fsSL "https://cdn.jsdelivr.net/gh/404nffff/agents@v1.0.0/codex/install.sh"
 说明：
 - `all` 模式只支持 `--yes`，用于统一自动确认
 
-## 4) Windows 说明
+## 4) 维护者发布 Tag
+
+```bash
+# 1) 在当前提交打带注释 tag
+git tag -a v1.0.0 -m "release: v1.0.0"
+
+# 2) 推送该 tag
+git push origin v1.0.0
+
+# 3)（可选）一次性推送所有本地 tags
+git push origin --tags
+```
+
+推送后可直接按版本安装：
+
+```bash
+curl -fsSL "https://cdn.jsdelivr.net/gh/404nffff/agents@v1.0.0/codex/install.sh" | bash
+```
+
+## 5) Nginx 配置（可选）
+
+仓库内已提供 Nginx + 静态页面示例：
+- `codex/nginx-install.conf`（`/install.sh` 302 跳转 + `/` 静态页）
+- `codex/index.html`（静态说明页面模板）
+
+## 6) Windows 说明
 
 Windows 仍可使用已有批处理脚本：
 - `codex/install_agents_windows.bat`
 - `codex/install_skills_windows.bat`
 
-当前统一入口 `codex/install.sh` 主要面向 Bash 环境（Linux/macOS/Git Bash）。
+统一入口 `codex/install.sh` 主要面向 Bash 环境（Linux/macOS/Git Bash）。

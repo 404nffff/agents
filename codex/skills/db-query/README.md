@@ -42,6 +42,44 @@ bash scripts/build.sh
 - `bin/db-query-linux-amd64`
 - `bin/db-query-windows-amd64.exe`
 
+## 发布到 GitHub Release
+
+```bash
+cd /path/to/your/repo
+
+# 1) 构建二进制
+bash codex/skills/db-query/scripts/build.sh
+
+# 2) 提交并打 tag
+git add codex/skills/db-query
+git commit -m "release: db-query binaries"
+git tag -a v0.1.0 -m "db-query v0.1.0"
+git push origin HEAD --tags
+
+# 3) 创建 release 并上传 bin
+gh release create v0.1.0 \
+  codex/skills/db-query/bin/db-query-linux-amd64 \
+  codex/skills/db-query/bin/db-query-windows-amd64.exe \
+  --title "v0.1.0" \
+  --notes "db-query release binaries"
+```
+
+如果 release 已存在：
+
+```bash
+gh release upload v0.1.0 \
+  codex/skills/db-query/bin/db-query-linux-amd64 \
+  codex/skills/db-query/bin/db-query-windows-amd64.exe \
+  --clobber
+```
+
+`install_skills.sh` 在安装 `db-query` 时会按以下地址下载二进制：
+
+- 默认：`https://github.com/404nffff/agents/releases/latest/download`
+- 或者用环境变量覆盖：
+  - `DB_QUERY_RELEASE_BASE_URL`
+  - `DB_QUERY_RELEASE_REPO` + `DB_QUERY_RELEASE_TAG`
+
 ## 运行
 
 ### 直接运行 Linux 二进制

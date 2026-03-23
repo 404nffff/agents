@@ -20,6 +20,9 @@ TARGET_ROOT="${HOME}/.codex/skills"
 DEFAULT_GITHUB_REPO="404nffff/agents"
 DEFAULT_GITHUB_REF="master"
 DEFAULT_GITHUB_SKILLS_PATH="codex/skills"
+DB_QUERY_RELEASE_TAG="${DB_QUERY_RELEASE_TAG:-latest}"
+DB_QUERY_RELEASE_REPO="${DB_QUERY_RELEASE_REPO:-}"
+DB_QUERY_RELEASE_BASE_URL="${DB_QUERY_RELEASE_BASE_URL:-}"
 
 SOURCE_MODE=""
 GITHUB_REPO=""
@@ -63,6 +66,11 @@ usage() {
   5) 交互勾选需要安装的 skills
   6) 安装到 ~/.codex/skills/
   7) 若本地存在同名 skill，提示是否覆盖
+
+db-query 发行二进制下载配置（可选环境变量）:
+  DB_QUERY_RELEASE_BASE_URL  例如: https://github.com/owner/repo/releases/download/v0.1.0
+  DB_QUERY_RELEASE_REPO      例如: owner/repo（默认 404nffff/agents）
+  DB_QUERY_RELEASE_TAG       例如: v0.1.0（默认 latest）
 EOF
 }
 
@@ -412,6 +420,10 @@ install_selected() {
           echo "已覆盖同名文件: ${name} -> ${dest}（保留旧目录其他文件）"
         fi
 
+        if [[ "${name}" == "db-query" ]]; then
+          download_db_query_release_bins "${dest}"
+        fi
+
         rm -rf "${preserve_dir}"
         ((overwritten += 1))
       else
@@ -422,12 +434,66 @@ install_selected() {
     fi
 
     cp -R "${src}" "${dest}"
+
+    if [[ "${name}" == "db-query" ]]; then
+      download_db_query_release_bins "${dest}"
+    fi
+
     echo "已安装: ${name} -> ${dest}"
     ((installed += 1))
   done
 
   echo
   echo "安装完成: 新增 ${installed} 个，覆盖 ${overwritten} 个，跳过 ${skipped} 个。"
+}
+
+resolve_db_query_release_base_url() {
+  if [[ -n "${DB_QUERY_RELEASE_BASE_URL}" ]]; then
+    echo "${DB_QUERY_RELEASE_BASE_URL}"
+    return
+  fi
+
+  local repo
+  if [[ -n "${DB_QUERY_RELEASE_REPO}" ]]; then
+    repo="$(normalize_github_repo "${DB_QUERY_RELEASE_REPO}")"
+  elif [[ "${SOURCE_MODE}" == "github" && -n "${GITHUB_REPO}" ]]; then
+    repo="$(normalize_github_repo "${GITHUB_REPO}")"
+  else
+    repo="${DEFAULT_GITHUB_REPO}"
+  fi
+
+  if [[ "${DB_QUERY_RELEASE_TAG}" == "latest" ]]; then
+    echo "https://github.com/${repo}/releases/latest/download"
+  else
+    echo "https://github.com/${repo}/releases/download/${DB_QUERY_RELEASE_TAG}"
+  fi
+}
+
+download_db_query_release_bins() {
+  local dest="$1"
+  local base_url url tmp_file asset
+  base_url="$(resolve_db_query_release_base_url)"
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "错误: 下载 db-query release 二进制需要 curl。" >&2
+    exit 1
+  fi
+
+  mkdir -p "${dest}/bin"
+  for asset in "db-query-linux-amd64" "db-query-windows-amd64.exe"; do
+    url="${base_url}/${asset}"
+    tmp_file="${dest}/bin/.tmp-${asset}"
+    if ! curl -fsSL "${url}" -o "${tmp_file}" >/dev/null 2>&1; then
+      rm -f "${tmp_file}"
+      echo "错误: 下载 db-query release 文件失败: ${url}" >&2
+      echo "可通过 DB_QUERY_RELEASE_BASE_URL 覆盖地址。" >&2
+      exit 1
+    fi
+    mv "${tmp_file}" "${dest}/bin/${asset}"
+  done
+
+  chmod +x "${dest}/bin/db-query-linux-amd64" 2>/dev/null || true
+  echo "已同步 db-query release 二进制: ${base_url}"
 }
 
 main() {
