@@ -307,7 +307,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | 读取必须优先使用 `mcp__codebase-retrieval__codebase-retrieval`，若无法使用则降级到 `mcp__fast-context__fast_context_search`，若仍无法使用再降级到 `mcp__code-index__*`、Read、Grep 等检索接口 | |
 | 所有工具可用（Read、Edit、Write、Bash、Grep、Glob、sequential-thinking、`mcp__shrimp-task-manager__*`、`mcp__codebase-retrieval__codebase-retrieval`、`mcp__fast-context__fast_context_search`、exa、`mcp__code-index__*` 等），无使用限制 | 保持全工具访问权限 |
 | 工具不可用时，评估替代方案或报告用户，记录原因和采取的措施 | 自主决策替代方案 |
-| 只要代码中涉及 MySQL 查询（包含 SQL 读写、DDL、DML），必须强制使用 `mysql-query` skill，禁止绕过该 skill 直接执行数据库查询 | MySQL 查询工具强制规则 |
+| 只要代码中涉及数据库查询（包含 MySQL、Redis、Mongo、PGSQL），必须先使用 `db-query` skill；若为 MySQL 查询且 `db-query` 连续重试 3 次仍不可用、不存在或执行失败，才允许降级使用 `mysql-query` skill；禁止绕过该流程直接执行数据库查询 | 数据库查询工具优先级与降级规则 |
 | 强制禁止读取任何配置类文件，包括但不限于 `config` 目录/文件、`.env`、`.env.*`、`*.yaml`、`*.yml`、`*.toml`、`*.ini`、`*.conf` | 配置文件访问禁令 |
 | 所有工具调用需在 `operations-log.md` 留痕：时间、工具名、参数、输出摘要 | |
 | 网络搜索必须先执行 `grok-search` skill；若其不可用、未配置、执行失败或结果不足，则降级到 exa；再次失败后才可使用其他搜索工具。内部检索优先 `mcp__codebase-retrieval__codebase-retrieval`；若其不可用、未注入、未调通或结果不足则降级到 `mcp__fast-context__fast_context_search`；若仍不可用或结果不足再降级到 `mcp__code-index__*`、`rg` 或 Read。若输入为接口地址/路由路径（如 `/admin/student/export_student`），必须按该降级顺序执行；深度思考必用 sequential-thinking | 工具优先级规范 |

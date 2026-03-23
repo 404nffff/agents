@@ -29,9 +29,13 @@ fi
 
 DEFAULT_GITHUB_REPO="404nffff/agents"
 DEFAULT_GITHUB_REF="master"
-DB_QUERY_RELEASE_TAG="${DB_QUERY_RELEASE_TAG:-latest}"
+DB_QUERY_RELEASE_TAG="${DB_QUERY_RELEASE_TAG:-}"
 DB_QUERY_RELEASE_REPO="${DB_QUERY_RELEASE_REPO:-}"
 DB_QUERY_RELEASE_BASE_URL="${DB_QUERY_RELEASE_BASE_URL:-}"
+DB_QUERY_RELEASE_TAG_EXPLICIT="false"
+if [[ -n "${DB_QUERY_RELEASE_TAG}" ]]; then
+  DB_QUERY_RELEASE_TAG_EXPLICIT="true"
+fi
 AUTO_YES="false"
 HELP_EXIT_CODE=100
 CHOSEN_MODE=""
@@ -110,21 +114,21 @@ skills_usage() {
   cat <<'EOF'
 用法:
   ./install.sh skills
-  ./install.sh skills [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--skills-path <path_in_repo>]
+  ./install.sh skills [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--skills-path <path_in_repo>] [--db-query-tag <tag>]
   ./install.sh skills [--yes]
 
 说明:
   1) 本地执行优先扫描本地 codex/skills 目录
-  2) 网络请求执行默认从远程仓库读取（404nffff/agents@master:codex/skills）
-  3) 可通过 --github / --ref / --skills-path 指定远程来源
-  4) 交互勾选需要安装的 skills
+  2) 网络请求执行时，先读取远程 codex/skills/README.md 展示可选 skill 列表
+  3) 选中 skill 后才会拉取远程仓库并执行安装
+  4) 可通过 --github / --ref / --skills-path 指定远程来源
   5) 安装到 ~/.codex/skills/
   6) 若本地存在同名 skill，提示是否覆盖（--yes 自动覆盖）
 
 db-query 二进制发布地址可通过以下环境变量覆盖：
   DB_QUERY_RELEASE_BASE_URL  例如: https://github.com/owner/repo/releases/download/v0.1.0
   DB_QUERY_RELEASE_REPO      例如: owner/repo（默认 404nffff/agents）
-  DB_QUERY_RELEASE_TAG       例如: v0.1.0（默认 latest）
+  DB_QUERY_RELEASE_TAG       例如: v0.1.0（默认自动探测最近 tag）
 EOF
 }
 
@@ -247,12 +251,28 @@ fetch_raw_from_github() {
 resolve_db_query_release_base_url_for_skills_install() {
   local source_mode="$1"
   local github_repo="$2"
-  local repo=""
+  local resolved_tag
+  local repo
 
-  if [[ -n "${DB_QUERY_RELEASE_BASE_URL}" ]]; then
-    printf "%s\n" "${DB_QUERY_RELEASE_BASE_URL}"
-    return
+  repo="$(resolve_db_query_release_repo_for_skills_install "${source_mode}" "${github_repo}")"
+
+  if [[ -z "${DB_QUERY_RELEASE_TAG}" ]]; then
+    resolved_tag="latest"
+  else
+    resolved_tag="${DB_QUERY_RELEASE_TAG}"
   fi
+
+  if [[ "${resolved_tag}" == "latest" ]]; then
+    printf "https://github.com/%s/releases/latest/download\n" "${repo}"
+  else
+    printf "https://github.com/%s/releases/download/%s\n" "${repo}" "${resolved_tag}"
+  fi
+}
+
+resolve_db_query_release_repo_for_skills_install() {
+  local source_mode="$1"
+  local github_repo="$2"
+  local repo=""
 
   if [[ -n "${DB_QUERY_RELEASE_REPO}" ]]; then
     repo="$(normalize_github_repo "${DB_QUERY_RELEASE_REPO}")"
@@ -262,11 +282,88 @@ resolve_db_query_release_base_url_for_skills_install() {
     repo="${DEFAULT_GITHUB_REPO}"
   fi
 
-  if [[ "${DB_QUERY_RELEASE_TAG}" == "latest" ]]; then
-    printf "https://github.com/%s/releases/latest/download\n" "${repo}"
-  else
-    printf "https://github.com/%s/releases/download/%s\n" "${repo}" "${DB_QUERY_RELEASE_TAG}"
+  printf "%s\n" "${repo}"
+}
+
+fetch_latest_tag_from_github_repo() {
+  local repo="$1"
+  local json latest_tag
+
+  if ! command -v curl >/dev/null 2>&1; then
+    printf "latest\n"
+    return 0
   fi
+
+  json="$(curl -fsSL "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null || true)"
+  latest_tag="$(printf "%s\n" "${json}" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+  if [[ -n "${latest_tag}" ]]; then
+    printf "%s\n" "${latest_tag}"
+    return 0
+  fi
+
+  json="$(curl -fsSL "https://api.github.com/repos/${repo}/tags?per_page=1" 2>/dev/null || true)"
+  latest_tag="$(printf "%s\n" "${json}" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+  if [[ -n "${latest_tag}" ]]; then
+    printf "%s\n" "${latest_tag}"
+    return 0
+  fi
+
+  printf "latest\n"
+}
+
+prompt_db_query_release_tag_if_needed() {
+  local has_db_query_selected="$1"
+  local source_mode="$2"
+  local github_repo="$3"
+  local repo default_tag input
+  local tty_opened="false"
+
+  if [[ "${has_db_query_selected}" != "true" ]]; then
+    return 0
+  fi
+  if [[ -n "${DB_QUERY_RELEASE_BASE_URL}" ]]; then
+    return 0
+  fi
+  if [[ "${DB_QUERY_RELEASE_TAG_EXPLICIT}" == "true" && -n "${DB_QUERY_RELEASE_TAG}" ]]; then
+    return 0
+  fi
+
+  repo="$(resolve_db_query_release_repo_for_skills_install "${source_mode}" "${github_repo}")"
+  default_tag="$(fetch_latest_tag_from_github_repo "${repo}")"
+  [[ -z "${default_tag}" ]] && default_tag="latest"
+
+  if [[ "${AUTO_YES}" == "true" ]]; then
+    DB_QUERY_RELEASE_TAG="${default_tag}"
+    echo "已自动选择 db-query release tag: ${DB_QUERY_RELEASE_TAG}"
+    return 0
+  fi
+
+  if [[ -t 1 && -r /dev/tty ]] && exec 9<>/dev/tty 2>/dev/null; then
+    tty_opened="true"
+  fi
+
+  if [[ "${tty_opened}" == "true" ]]; then
+    printf "请输入 db-query release tag（默认 %s，输入 latest 使用最新 release）: " "${default_tag}" >&9
+    IFS= read -r input <&9 || true
+    exec 9<&-
+  else
+    input=""
+  fi
+
+  input="${input:-${default_tag}}"
+  DB_QUERY_RELEASE_TAG="${input}"
+  DB_QUERY_RELEASE_TAG_EXPLICIT="true"
+  echo "已选择 db-query release tag: ${DB_QUERY_RELEASE_TAG}"
+}
+
+resolve_db_query_release_base_url_for_skills_install_with_override() {
+  local source_mode="$1"
+  local github_repo="$2"
+  if [[ -n "${DB_QUERY_RELEASE_BASE_URL}" ]]; then
+    printf "%s\n" "${DB_QUERY_RELEASE_BASE_URL}"
+    return
+  fi
+  resolve_db_query_release_base_url_for_skills_install "${source_mode}" "${github_repo}"
 }
 
 download_db_query_release_bins_for_skills_install() {
@@ -275,7 +372,7 @@ download_db_query_release_bins_for_skills_install() {
   local github_repo="$3"
   local base_url url tmp_file asset
 
-  base_url="$(resolve_db_query_release_base_url_for_skills_install "${source_mode}" "${github_repo}")"
+  base_url="$(resolve_db_query_release_base_url_for_skills_install_with_override "${source_mode}" "${github_repo}")"
 
   if ! command -v curl >/dev/null 2>&1; then
     echo "错误: 下载 db-query release 二进制需要 curl。" >&2
@@ -529,15 +626,20 @@ install_skills_main() {
   local target_root="${HOME}/.codex/skills"
   local skills_root=""
   local source_label=""
+  local remote_repo=""
+  local remote_path=""
+  local remote_skills_root=""
   local tmp_fetch_dir=""
-  local archive_url archive_file extract_root candidate repo path
-  local dir skill_file name desc
+  local tmp_catalog_file=""
+  local archive_url archive_file extract_root candidate
+  local dir skill_file name desc rel_path
   local cmd token idx tty_opened
   local installed overwritten skipped selected_count
   local src dest preserve_dir cfg rel
-  local -a skill_dirs=()
+  local release_source_mode=""
   local -a skill_names=()
   local -a skill_descs=()
+  local -a skill_paths=()
   local -a selected=()
   declare -A seen_names=()
 
@@ -556,6 +658,15 @@ install_skills_main() {
       --skills-path)
         source_mode="github"
         github_skills_path="${2:-}"
+        shift 2
+        ;;
+      --db-query-tag)
+        if [[ $# -lt 2 || -z "${2:-}" ]]; then
+          echo "错误: --db-query-tag 需要参数" >&2
+          return 1
+        fi
+        DB_QUERY_RELEASE_TAG="${2:-}"
+        DB_QUERY_RELEASE_TAG_EXPLICIT="true"
         shift 2
         ;;
       --yes)
@@ -581,81 +692,119 @@ install_skills_main() {
   if [[ "${source_mode}" != "github" && "${IS_NETWORK_REQUEST_EXECUTION}" != "true" && -d "${local_skills_root}" ]]; then
     skills_root="${local_skills_root}"
     source_label="本地目录 ${skills_root}"
-  else
-    repo="$(normalize_github_repo "${github_repo:-${DEFAULT_GITHUB_REPO}}")"
-    path="${github_skills_path}"
-    tmp_fetch_dir="$(new_tmp_dir)"
-
-    if ! command -v curl >/dev/null 2>&1; then
-      echo "错误: 需要 curl 来拉取远程仓库压缩包。" >&2
-      return 1
-    fi
-    if ! command -v tar >/dev/null 2>&1; then
-      echo "错误: 需要 tar 来解压远程仓库压缩包。" >&2
-      return 1
-    fi
-
-    archive_url="https://codeload.github.com/${repo}/tar.gz/${github_ref}"
-    archive_file="${tmp_fetch_dir}/repo.tar.gz"
-    echo "正在使用 curl 拉取远程仓库压缩包: ${repo}@${github_ref}"
-    if ! curl -fsSL "${archive_url}" -o "${archive_file}" >/dev/null 2>&1; then
-      echo "错误: 无法下载远程仓库压缩包 ${archive_url}" >&2
-      return 1
-    fi
-
-    if ! tar -xzf "${archive_file}" -C "${tmp_fetch_dir}" >/dev/null 2>&1; then
-      echo "错误: 无法解压远程仓库压缩包 ${archive_file}" >&2
-      return 1
-    fi
-
-    extract_root="$(find "${tmp_fetch_dir}" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
-    if [[ -z "${extract_root}" ]]; then
-      echo "错误: 压缩包解压后未找到仓库目录 ${repo}@${github_ref}" >&2
-      return 1
-    fi
-
-    candidate="${extract_root}/${path}"
-    if [[ ! -d "${candidate}" ]]; then
-      echo "错误: 远程仓库中不存在 skills 路径: ${path}" >&2
-      echo "仓库: ${repo} 分支: ${github_ref}" >&2
-      return 1
-    fi
-
-    skills_root="${candidate}"
-    source_label="远程仓库 ${repo}@${github_ref}:${path}"
   fi
 
-  while IFS= read -r dir; do
-    skill_file=""
-    if [[ -f "${dir}/SKILL.md" ]]; then
-      skill_file="${dir}/SKILL.md"
-    elif [[ -f "${dir}/skill.md" ]]; then
-      skill_file="${dir}/skill.md"
-    else
-      continue
+  if [[ -n "${skills_root}" ]]; then
+    while IFS= read -r dir; do
+      skill_file=""
+      if [[ -f "${dir}/SKILL.md" ]]; then
+        skill_file="${dir}/SKILL.md"
+      elif [[ -f "${dir}/skill.md" ]]; then
+        skill_file="${dir}/skill.md"
+      else
+        continue
+      fi
+
+      name="$(read_frontmatter_field "${skill_file}" "name")"
+      desc="$(read_frontmatter_field "${skill_file}" "description")"
+      rel_path="$(basename "${dir}")"
+
+      [[ -z "${name}" ]] && name="${rel_path}"
+      [[ -z "${desc}" ]] && desc="(无 description)"
+
+      if [[ -n "${seen_names[${name}]+x}" ]]; then
+        echo "警告: 发现重复 skill 名称 '${name}'，已忽略目录: ${dir}" >&2
+        continue
+      fi
+      seen_names["${name}"]=1
+
+      skill_names+=("${name}")
+      skill_descs+=("${desc}")
+      skill_paths+=("${rel_path}")
+      selected+=(0)
+    done < <(find "${skills_root}" -mindepth 1 -maxdepth 1 -type d | sort)
+
+    if [[ ${#skill_names[@]} -eq 0 ]]; then
+      echo "错误: 未在 ${skills_root} 下找到可安装的 skill" >&2
+      return 1
+    fi
+  else
+    remote_repo="$(normalize_github_repo "${github_repo:-${DEFAULT_GITHUB_REPO}}")"
+    remote_path="${github_skills_path}"
+    tmp_catalog_file="$(new_tmp_file)"
+    if ! fetch_raw_from_github "${remote_repo}" "${github_ref}" "${remote_path}/README.md" "${tmp_catalog_file}" >/dev/null 2>&1; then
+      echo "错误: 无法读取远程 skills 目录清单 README.md" >&2
+      echo "地址: https://raw.githubusercontent.com/${remote_repo}/${github_ref}/${remote_path}/README.md" >&2
+      return 1
     fi
 
-    name="$(read_frontmatter_field "${skill_file}" "name")"
-    desc="$(read_frontmatter_field "${skill_file}" "description")"
+    while IFS=$'\t' read -r name rel_path desc; do
+      [[ -z "${name}" || -z "${rel_path}" ]] && continue
+      [[ -z "${desc}" ]] && desc="(无 description)"
 
-    [[ -z "${name}" ]] && name="$(basename "${dir}")"
-    [[ -z "${desc}" ]] && desc="(无 description)"
+      if [[ -n "${seen_names[${name}]+x}" ]]; then
+        echo "警告: 发现重复 skill 名称 '${name}'，已忽略目录: ${rel_path}" >&2
+        continue
+      fi
+      seen_names["${name}"]=1
 
-    if [[ -n "${seen_names[${name}]+x}" ]]; then
-      echo "警告: 发现重复 skill 名称 '${name}'，已忽略目录: ${dir}" >&2
-      continue
+      skill_names+=("${name}")
+      skill_descs+=("${desc}")
+      skill_paths+=("${rel_path}")
+      selected+=(0)
+    done < <(
+      awk '
+        function trim(s) {
+          gsub(/^[[:space:]]+/, "", s)
+          gsub(/[[:space:]]+$/, "", s)
+          return s
+        }
+
+        BEGIN { in_catalog = 0 }
+
+        /<!--[[:space:]]*SKILL_CATALOG_START[[:space:]]*-->/ { in_catalog = 1; next }
+        /<!--[[:space:]]*SKILL_CATALOG_END[[:space:]]*-->/ { in_catalog = 0; next }
+
+        {
+          if (in_catalog == 0) {
+            next
+          }
+          if ($0 !~ /^\|/) {
+            next
+          }
+
+          line = $0
+          sub(/^\|/, "", line)
+          sub(/\|[[:space:]]*$/, "", line)
+          count = split(line, cols, "|")
+          if (count < 3) {
+            next
+          }
+
+          name = trim(cols[1])
+          path = trim(cols[2])
+          desc = trim(cols[3])
+
+          lower_name = tolower(name)
+          lower_path = tolower(path)
+          if (lower_name == "name" || lower_path == "directory") {
+            next
+          }
+          if (name ~ /^-+$/ || path ~ /^-+$/) {
+            next
+          }
+
+          gsub(/\r/, "", desc)
+          print name "\t" path "\t" desc
+        }
+      ' "${tmp_catalog_file}"
+    )
+
+    if [[ ${#skill_names[@]} -eq 0 ]]; then
+      echo "错误: 远程 skills README.md 未包含可解析目录（缺少 SKILL_CATALOG 标记或内容为空）" >&2
+      return 1
     fi
-    seen_names["${name}"]=1
-
-    skill_dirs+=("${dir}")
-    skill_names+=("${name}")
-    skill_descs+=("${desc}")
-    selected+=(0)
-  done < <(find "${skills_root}" -mindepth 1 -maxdepth 1 -type d | sort)
-
-  if [[ ${#skill_dirs[@]} -eq 0 ]]; then
-    echo "错误: 未在 ${skills_root} 下找到可安装的 skill" >&2
-    return 1
+    source_label="远程目录 ${remote_repo}@${github_ref}:${remote_path}（先读取 README 列表）"
   fi
 
   tty_opened="false"
@@ -742,10 +891,63 @@ install_skills_main() {
     exec 9<&-
   fi
 
+  local has_db_query_selected="false"
+  for idx in "${!skill_names[@]}"; do
+    if [[ "${selected[idx]}" -eq 1 && "${skill_names[idx]}" == "db-query" ]]; then
+      has_db_query_selected="true"
+      break
+    fi
+  done
+
+  if ! prompt_db_query_release_tag_if_needed "${has_db_query_selected}" "${source_mode}" "${remote_repo:-${github_repo}}"; then
+    return 1
+  fi
+
   mkdir -p "${target_root}"
   installed=0
   overwritten=0
   skipped=0
+
+  if [[ -n "${remote_repo}" ]]; then
+    if ! command -v curl >/dev/null 2>&1; then
+      echo "错误: 需要 curl 来拉取远程仓库压缩包。" >&2
+      return 1
+    fi
+    if ! command -v tar >/dev/null 2>&1; then
+      echo "错误: 需要 tar 来解压远程仓库压缩包。" >&2
+      return 1
+    fi
+
+    tmp_fetch_dir="$(new_tmp_dir)"
+    archive_url="https://codeload.github.com/${remote_repo}/tar.gz/${github_ref}"
+    archive_file="${tmp_fetch_dir}/repo.tar.gz"
+    echo "已选择 ${selected_count} 个 skill，开始拉取远程仓库: ${remote_repo}@${github_ref}"
+    if ! curl -fsSL "${archive_url}" -o "${archive_file}" >/dev/null 2>&1; then
+      echo "错误: 无法下载远程仓库压缩包 ${archive_url}" >&2
+      return 1
+    fi
+    if ! tar -xzf "${archive_file}" -C "${tmp_fetch_dir}" >/dev/null 2>&1; then
+      echo "错误: 无法解压远程仓库压缩包 ${archive_file}" >&2
+      return 1
+    fi
+    extract_root="$(find "${tmp_fetch_dir}" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
+    if [[ -z "${extract_root}" ]]; then
+      echo "错误: 压缩包解压后未找到仓库目录 ${remote_repo}@${github_ref}" >&2
+      return 1
+    fi
+    candidate="${extract_root}/${remote_path}"
+    if [[ ! -d "${candidate}" ]]; then
+      echo "错误: 远程仓库中不存在 skills 路径: ${remote_path}" >&2
+      echo "仓库: ${remote_repo} 分支: ${github_ref}" >&2
+      return 1
+    fi
+    remote_skills_root="${candidate}"
+  fi
+  if [[ -n "${remote_repo}" ]]; then
+    release_source_mode="github"
+  else
+    release_source_mode="${source_mode}"
+  fi
 
   echo
   echo "开始安装到: ${target_root}"
@@ -753,7 +955,16 @@ install_skills_main() {
     [[ "${selected[idx]}" -ne 1 ]] && continue
 
     name="${skill_names[idx]}"
-    src="${skill_dirs[idx]}"
+    rel_path="${skill_paths[idx]}"
+    if [[ -n "${remote_skills_root}" ]]; then
+      src="${remote_skills_root}/${rel_path}"
+    else
+      src="${skills_root}/${rel_path}"
+    fi
+    if [[ ! -d "${src}" ]]; then
+      echo "错误: skill 源目录不存在: ${src}" >&2
+      return 1
+    fi
     dest="${target_root}/${name}"
 
     if [[ -e "${dest}" ]]; then
@@ -775,7 +986,7 @@ install_skills_main() {
         done < <(find "${preserve_dir}" -type f -name 'config.env')
 
         if [[ "${name}" == "db-query" ]]; then
-          if ! sync_db_query_release_bins_for_skills_install "${dest}" "${source_mode}" "${github_repo}"; then
+          if ! sync_db_query_release_bins_for_skills_install "${dest}" "${release_source_mode}" "${remote_repo:-${github_repo}}"; then
             return 1
           fi
         fi
@@ -785,7 +996,7 @@ install_skills_main() {
       else
         echo "跳过: ${name}（本地已存在: ${dest}）"
         if [[ "${name}" == "db-query" ]]; then
-          if ! sync_db_query_release_bins_for_skills_install "${dest}" "${source_mode}" "${github_repo}"; then
+          if ! sync_db_query_release_bins_for_skills_install "${dest}" "${release_source_mode}" "${remote_repo:-${github_repo}}"; then
             return 1
           fi
           echo "已同步 db-query release 二进制（未覆盖其他文件）: ${dest}/bin"
@@ -797,7 +1008,7 @@ install_skills_main() {
 
     cp -R "${src}" "${dest}"
     if [[ "${name}" == "db-query" ]]; then
-      if ! sync_db_query_release_bins_for_skills_install "${dest}" "${source_mode}" "${github_repo}"; then
+      if ! sync_db_query_release_bins_for_skills_install "${dest}" "${release_source_mode}" "${remote_repo:-${github_repo}}"; then
         return 1
       fi
     fi
