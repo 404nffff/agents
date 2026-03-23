@@ -35,12 +35,10 @@ bash ./codex/install.sh all --yes
 
 ### 远程运行（Linux / macOS / Git Bash）
 
-先定义仓库与版本（`REF` 可填 tag 或分支）：
+先定义安装地址（默认跟随最新 tag）：
 
 ```bash
-REPO="404nffff/agents"
-REF="v1.0.0" # 推荐用 tag 固定版本；追踪最新可改成 master
-INSTALL_URL="https://cdn.jsdelivr.net/gh/${REPO}@${REF}/codex/install.sh"
+INSTALL_URL="https://cdn.jsdelivr.net/gh/404nffff/agents@latest/codex/install.sh"
 ```
 
 交互选择安装目标：
@@ -55,10 +53,10 @@ curl -fsSL "${INSTALL_URL}" | bash
 curl -fsSL "${INSTALL_URL}" | bash -s -- skills --yes
 ```
 
-仅想跟踪最新主线时可直接写：
+若你要固定版本（可回滚），把 `latest` 换成具体 tag：
 
 ```bash
-curl -fsSL "https://cdn.jsdelivr.net/gh/404nffff/agents@master/codex/install.sh" | bash
+curl -fsSL "https://cdn.jsdelivr.net/gh/404nffff/agents@v1.0.0/codex/install.sh" | bash
 ```
 
 ### 发布并推送 Tag（维护者）
@@ -79,6 +77,20 @@ git push origin --tags
 ```bash
 curl -fsSL "https://cdn.jsdelivr.net/gh/404nffff/agents@v1.0.0/codex/install.sh" | bash
 ```
+
+### Cloudflare Worker 配置
+
+仓库内已提供 Worker 脚本（反向代理 `/install.sh` 到 jsDelivr `@latest`）：
+
+- `codex/cloudflare-worker-install.js`
+- 部署后访问根路径 `/` 可查看安装说明页面
+
+### Nginx 配置（可选）
+
+仓库内已提供 Nginx + 静态页面示例：
+
+- `codex/nginx-install.conf`（`/install.sh` 302 跳转 + `/` 静态页）
+- `codex/index.html`（静态说明页面模板）
 
 ## 2) install.sh 用法
 

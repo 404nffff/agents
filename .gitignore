@@ -8,7 +8,6 @@ rsync-web.exe
 *.db-wal
 
 # Go相关
-*.exe
 *.exe~
 *.dll
 *.so
@@ -30,7 +29,6 @@ Thumbs.db
 
 *.log
 
-bin/
 
 .nfs*
 test/
