@@ -421,13 +421,21 @@ install_selected() {
         fi
 
         if [[ "${name}" == "db-query" ]]; then
-          download_db_query_release_bins "${dest}"
+          if ! sync_db_query_release_bins "${dest}"; then
+            exit 1
+          fi
         fi
 
         rm -rf "${preserve_dir}"
         ((overwritten += 1))
       else
         echo "跳过: ${name}（本地已存在: ${dest}）"
+        if [[ "${name}" == "db-query" ]]; then
+          if ! sync_db_query_release_bins "${dest}"; then
+            exit 1
+          fi
+          echo "已同步 db-query release 二进制（未覆盖其他文件）: ${dest}/bin"
+        fi
         ((skipped += 1))
       fi
       continue
@@ -436,7 +444,9 @@ install_selected() {
     cp -R "${src}" "${dest}"
 
     if [[ "${name}" == "db-query" ]]; then
-      download_db_query_release_bins "${dest}"
+      if ! sync_db_query_release_bins "${dest}"; then
+        exit 1
+      fi
     fi
 
     echo "已安装: ${name} -> ${dest}"
@@ -476,7 +486,7 @@ download_db_query_release_bins() {
 
   if ! command -v curl >/dev/null 2>&1; then
     echo "错误: 下载 db-query release 二进制需要 curl。" >&2
-    exit 1
+    return 1
   fi
 
   mkdir -p "${dest}/bin"
@@ -487,13 +497,30 @@ download_db_query_release_bins() {
       rm -f "${tmp_file}"
       echo "错误: 下载 db-query release 文件失败: ${url}" >&2
       echo "可通过 DB_QUERY_RELEASE_BASE_URL 覆盖地址。" >&2
-      exit 1
+      return 1
     fi
     mv "${tmp_file}" "${dest}/bin/${asset}"
   done
 
   chmod +x "${dest}/bin/db-query-linux-amd64" 2>/dev/null || true
   echo "已同步 db-query release 二进制: ${base_url}"
+  return 0
+}
+
+sync_db_query_release_bins() {
+  local dest="$1"
+
+  if download_db_query_release_bins "${dest}"; then
+    return 0
+  fi
+
+  if [[ -s "${dest}/bin/db-query-linux-amd64" && -s "${dest}/bin/db-query-windows-amd64.exe" ]]; then
+    echo "警告: release 下载失败，已保留本地现有 db-query 二进制。"
+    return 0
+  fi
+
+  echo "错误: db-query 缺少可用二进制，请检查 release 地址后重试。" >&2
+  return 1
 }
 
 main() {
