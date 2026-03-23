@@ -29,6 +29,9 @@ fi
 
 DEFAULT_GITHUB_REPO="404nffff/agents"
 DEFAULT_GITHUB_REF="master"
+DB_QUERY_RELEASE_TAG="${DB_QUERY_RELEASE_TAG:-latest}"
+DB_QUERY_RELEASE_REPO="${DB_QUERY_RELEASE_REPO:-}"
+DB_QUERY_RELEASE_BASE_URL="${DB_QUERY_RELEASE_BASE_URL:-}"
 AUTO_YES="false"
 HELP_EXIT_CODE=100
 CHOSEN_MODE=""
@@ -117,6 +120,11 @@ skills_usage() {
   4) 交互勾选需要安装的 skills
   5) 安装到 ~/.codex/skills/
   6) 若本地存在同名 skill，提示是否覆盖（--yes 自动覆盖）
+
+db-query 二进制发布地址可通过以下环境变量覆盖：
+  DB_QUERY_RELEASE_BASE_URL  例如: https://github.com/owner/repo/releases/download/v0.1.0
+  DB_QUERY_RELEASE_REPO      例如: owner/repo（默认 404nffff/agents）
+  DB_QUERY_RELEASE_TAG       例如: v0.1.0（默认 latest）
 EOF
 }
 
@@ -234,6 +242,80 @@ fetch_raw_from_github() {
 
   raw_url="https://raw.githubusercontent.com/${repo}/${ref}/${path}"
   curl -fsSL "${raw_url}" -o "${out_file}"
+}
+
+resolve_db_query_release_base_url_for_skills_install() {
+  local source_mode="$1"
+  local github_repo="$2"
+  local repo=""
+
+  if [[ -n "${DB_QUERY_RELEASE_BASE_URL}" ]]; then
+    printf "%s\n" "${DB_QUERY_RELEASE_BASE_URL}"
+    return
+  fi
+
+  if [[ -n "${DB_QUERY_RELEASE_REPO}" ]]; then
+    repo="$(normalize_github_repo "${DB_QUERY_RELEASE_REPO}")"
+  elif [[ "${source_mode}" == "github" && -n "${github_repo}" ]]; then
+    repo="$(normalize_github_repo "${github_repo}")"
+  else
+    repo="${DEFAULT_GITHUB_REPO}"
+  fi
+
+  if [[ "${DB_QUERY_RELEASE_TAG}" == "latest" ]]; then
+    printf "https://github.com/%s/releases/latest/download\n" "${repo}"
+  else
+    printf "https://github.com/%s/releases/download/%s\n" "${repo}" "${DB_QUERY_RELEASE_TAG}"
+  fi
+}
+
+download_db_query_release_bins_for_skills_install() {
+  local dest="$1"
+  local source_mode="$2"
+  local github_repo="$3"
+  local base_url url tmp_file asset
+
+  base_url="$(resolve_db_query_release_base_url_for_skills_install "${source_mode}" "${github_repo}")"
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "错误: 下载 db-query release 二进制需要 curl。" >&2
+    return 1
+  fi
+
+  mkdir -p "${dest}/bin"
+  for asset in "db-query-linux-amd64" "db-query-windows-amd64.exe"; do
+    url="${base_url}/${asset}"
+    tmp_file="${dest}/bin/.tmp-${asset}"
+    if ! curl -fsSL "${url}" -o "${tmp_file}" >/dev/null 2>&1; then
+      rm -f "${tmp_file}"
+      echo "错误: 下载 db-query release 文件失败: ${url}" >&2
+      echo "可通过 DB_QUERY_RELEASE_BASE_URL 覆盖地址。" >&2
+      return 1
+    fi
+    mv "${tmp_file}" "${dest}/bin/${asset}"
+  done
+
+  chmod +x "${dest}/bin/db-query-linux-amd64" 2>/dev/null || true
+  echo "已同步 db-query release 二进制: ${base_url}"
+  return 0
+}
+
+sync_db_query_release_bins_for_skills_install() {
+  local dest="$1"
+  local source_mode="$2"
+  local github_repo="$3"
+
+  if download_db_query_release_bins_for_skills_install "${dest}" "${source_mode}" "${github_repo}"; then
+    return 0
+  fi
+
+  if [[ -s "${dest}/bin/db-query-linux-amd64" && -s "${dest}/bin/db-query-windows-amd64.exe" ]]; then
+    echo "警告: release 下载失败，已保留本地现有 db-query 二进制。"
+    return 0
+  fi
+
+  echo "错误: db-query 缺少可用二进制，请检查 release 地址后重试。" >&2
+  return 1
 }
 
 install_file_with_prompt() {
@@ -692,16 +774,33 @@ install_skills_main() {
           cp "${cfg}" "${dest}/${rel}"
         done < <(find "${preserve_dir}" -type f -name 'config.env')
 
+        if [[ "${name}" == "db-query" ]]; then
+          if ! sync_db_query_release_bins_for_skills_install "${dest}" "${source_mode}" "${github_repo}"; then
+            return 1
+          fi
+        fi
+
         echo "已覆盖同名 skill: ${name} -> ${dest}（保留本地 config.env）"
         ((overwritten += 1))
       else
         echo "跳过: ${name}（本地已存在: ${dest}）"
+        if [[ "${name}" == "db-query" ]]; then
+          if ! sync_db_query_release_bins_for_skills_install "${dest}" "${source_mode}" "${github_repo}"; then
+            return 1
+          fi
+          echo "已同步 db-query release 二进制（未覆盖其他文件）: ${dest}/bin"
+        fi
         ((skipped += 1))
       fi
       continue
     fi
 
     cp -R "${src}" "${dest}"
+    if [[ "${name}" == "db-query" ]]; then
+      if ! sync_db_query_release_bins_for_skills_install "${dest}" "${source_mode}" "${github_repo}"; then
+        return 1
+      fi
+    fi
     echo "已安装: ${name} -> ${dest}"
     ((installed += 1))
   done
