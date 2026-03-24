@@ -59,14 +59,13 @@ curl -fsSL "https://cdn.jsdelivr.net/gh/404nffff/agents@v1.0.0/codex/install.sh"
 默认分支（master）：
 
 ```bash
-RAW_INSTALL_URL="https://raw.githubusercontent.com/404nffff/agents/master/codex/install.sh"
-curl -fsSL "${RAW_INSTALL_URL}" | bash
+curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install.sh" | bash
 ```
 
 仅安装 skills（自动确认）：
 
 ```bash
-curl -fsSL "${RAW_INSTALL_URL}" | bash -s -- skills --yes
+curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install.sh" | bash -s -- skills --yes
 ```
 
 固定版本 tag：
@@ -133,6 +132,7 @@ curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/v1.0.0/codex/insta
 --ref <branch_or_tag>
 --skills-path <path_in_repo>
 --db-query-tag <tag>
+--db-query-download <yes|no>
 --yes
 ```
 
@@ -142,6 +142,7 @@ curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/v1.0.0/codex/insta
 - 安装到 `~/.codex/skills/<name>`
 - 同名 skill 覆盖时保留本地 `config.env`
 - 安装 `db-query` 时会提示输入 release tag（默认自动带出远程最近 tag）
+- 安装 `db-query` 时会先判断当前平台并只下载对应 bin；若选不远程下载，脚本会提示 release 页面和目标 `bin` 目录，需手动下载并复制
 
 ### all
 

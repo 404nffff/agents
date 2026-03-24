@@ -32,9 +32,14 @@ DEFAULT_GITHUB_REF="master"
 DB_QUERY_RELEASE_TAG="${DB_QUERY_RELEASE_TAG:-}"
 DB_QUERY_RELEASE_REPO="${DB_QUERY_RELEASE_REPO:-}"
 DB_QUERY_RELEASE_BASE_URL="${DB_QUERY_RELEASE_BASE_URL:-}"
+DB_QUERY_REMOTE_DOWNLOAD="${DB_QUERY_REMOTE_DOWNLOAD:-}"
 DB_QUERY_RELEASE_TAG_EXPLICIT="false"
 if [[ -n "${DB_QUERY_RELEASE_TAG}" ]]; then
   DB_QUERY_RELEASE_TAG_EXPLICIT="true"
+fi
+DB_QUERY_REMOTE_DOWNLOAD_EXPLICIT="false"
+if [[ -n "${DB_QUERY_REMOTE_DOWNLOAD}" ]]; then
+  DB_QUERY_REMOTE_DOWNLOAD_EXPLICIT="true"
 fi
 AUTO_YES="false"
 HELP_EXIT_CODE=100
@@ -114,7 +119,7 @@ skills_usage() {
   cat <<'EOF'
 用法:
   ./install.sh skills
-  ./install.sh skills [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--skills-path <path_in_repo>] [--db-query-tag <tag>]
+  ./install.sh skills [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--skills-path <path_in_repo>] [--db-query-tag <tag>] [--db-query-download <yes|no>]
   ./install.sh skills [--yes]
 
 说明:
@@ -129,6 +134,7 @@ db-query 二进制发布地址可通过以下环境变量覆盖：
   DB_QUERY_RELEASE_BASE_URL  例如: https://github.com/owner/repo/releases/download/v0.1.0
   DB_QUERY_RELEASE_REPO      例如: owner/repo（默认 404nffff/agents）
   DB_QUERY_RELEASE_TAG       例如: v0.1.0（默认自动探测最近 tag）
+  DB_QUERY_REMOTE_DOWNLOAD   yes|no（默认交互询问，--yes 下默认 yes）
 EOF
 }
 
@@ -285,6 +291,61 @@ resolve_db_query_release_repo_for_skills_install() {
   printf "%s\n" "${repo}"
 }
 
+resolve_db_query_release_page_url_for_skills_install() {
+  local source_mode="$1"
+  local github_repo="$2"
+  local repo resolved_tag
+
+  repo="$(resolve_db_query_release_repo_for_skills_install "${source_mode}" "${github_repo}")"
+  resolved_tag="${DB_QUERY_RELEASE_TAG:-latest}"
+
+  if [[ "${resolved_tag}" == "latest" ]]; then
+    printf "https://github.com/%s/releases/latest\n" "${repo}"
+  else
+    printf "https://github.com/%s/releases/tag/%s\n" "${repo}" "${resolved_tag}"
+  fi
+}
+
+resolve_db_query_release_asset_for_current_platform() {
+  local os arch
+  os="$(uname -s 2>/dev/null || printf "unknown")"
+  arch="$(uname -m 2>/dev/null || printf "unknown")"
+
+  case "${arch}" in
+    x86_64|amd64)
+      ;;
+    *)
+      echo "错误: 当前架构 ${arch} 暂不支持自动下载 db-query 二进制（仅支持 amd64）。" >&2
+      return 1
+      ;;
+  esac
+
+  case "${os}" in
+    Linux*)
+      printf "db-query-linux-amd64\n"
+      return 0
+      ;;
+    MINGW*|MSYS*|CYGWIN*|Windows_NT*)
+      printf "db-query-windows-amd64.exe\n"
+      return 0
+      ;;
+    Darwin*)
+      echo "错误: 当前平台 Darwin 暂无预编译 db-query 二进制，请改为手动下载。" >&2
+      return 1
+      ;;
+    *)
+      case "${OSTYPE:-}" in
+        msys*|cygwin*|win32*)
+          printf "db-query-windows-amd64.exe\n"
+          return 0
+          ;;
+      esac
+      echo "错误: 无法识别平台 ${os}/${arch}，请改为手动下载 db-query 二进制。" >&2
+      return 1
+      ;;
+  esac
+}
+
 fetch_latest_tag_from_github_repo() {
   local repo="$1"
   local json latest_tag
@@ -309,6 +370,58 @@ fetch_latest_tag_from_github_repo() {
   fi
 
   printf "latest\n"
+}
+
+prompt_db_query_remote_download_if_needed() {
+  local has_db_query_selected="$1"
+  local input=""
+  local tty_opened="false"
+
+  if [[ "${has_db_query_selected}" != "true" ]]; then
+    return 0
+  fi
+
+  if [[ "${DB_QUERY_REMOTE_DOWNLOAD_EXPLICIT}" == "true" ]]; then
+    case "${DB_QUERY_REMOTE_DOWNLOAD}" in
+      yes|YES|Yes|y|Y|true|TRUE|1)
+        DB_QUERY_REMOTE_DOWNLOAD="yes"
+        return 0
+        ;;
+      no|NO|No|n|N|false|FALSE|0)
+        DB_QUERY_REMOTE_DOWNLOAD="no"
+        return 0
+        ;;
+      *)
+        echo "错误: DB_QUERY_REMOTE_DOWNLOAD 仅支持 yes 或 no，当前值: ${DB_QUERY_REMOTE_DOWNLOAD}" >&2
+        return 1
+        ;;
+    esac
+  fi
+
+  if [[ "${AUTO_YES}" == "true" ]]; then
+    DB_QUERY_REMOTE_DOWNLOAD="yes"
+    echo "已自动选择远程下载 db-query 二进制: yes"
+    return 0
+  fi
+
+  if [[ -t 1 && -r /dev/tty ]] && exec 9<>/dev/tty 2>/dev/null; then
+    tty_opened="true"
+  fi
+
+  if [[ "${tty_opened}" == "true" ]]; then
+    printf "是否远程下载 db-query 二进制到 bin 目录? [Y/n]: " >&9
+    IFS= read -r input <&9 || true
+    exec 9<&-
+  fi
+
+  input="${input:-Y}"
+  if [[ "${input}" =~ ^[Nn]$ ]]; then
+    DB_QUERY_REMOTE_DOWNLOAD="no"
+  else
+    DB_QUERY_REMOTE_DOWNLOAD="yes"
+  fi
+  DB_QUERY_REMOTE_DOWNLOAD_EXPLICIT="true"
+  echo "已选择远程下载 db-query 二进制: ${DB_QUERY_REMOTE_DOWNLOAD}"
 }
 
 prompt_db_query_release_tag_if_needed() {
@@ -356,6 +469,28 @@ prompt_db_query_release_tag_if_needed() {
   echo "已选择 db-query release tag: ${DB_QUERY_RELEASE_TAG}"
 }
 
+print_db_query_manual_download_notice() {
+  local dest="$1"
+  local source_mode="$2"
+  local github_repo="$3"
+  local release_page platform_asset
+
+  mkdir -p "${dest}/bin"
+  release_page="$(resolve_db_query_release_page_url_for_skills_install "${source_mode}" "${github_repo}")"
+  platform_asset="$(resolve_db_query_release_asset_for_current_platform 2>/dev/null || true)"
+
+  echo "已选择不远程下载 db-query 二进制。"
+  echo "请前往 release 页面手动下载并复制到以下目录："
+  echo "  页面: ${release_page}"
+  echo "  目标目录: ${dest}/bin"
+  if [[ -n "${platform_asset}" ]]; then
+    echo "  当前平台文件: ${platform_asset}"
+  else
+    echo "  文件1: db-query-linux-amd64"
+    echo "  文件2: db-query-windows-amd64.exe"
+  fi
+}
+
 resolve_db_query_release_base_url_for_skills_install_with_override() {
   local source_mode="$1"
   local github_repo="$2"
@@ -373,6 +508,7 @@ download_db_query_release_bins_for_skills_install() {
   local base_url url tmp_file asset
 
   base_url="$(resolve_db_query_release_base_url_for_skills_install_with_override "${source_mode}" "${github_repo}")"
+  asset="$(resolve_db_query_release_asset_for_current_platform)"
 
   if ! command -v curl >/dev/null 2>&1; then
     echo "错误: 下载 db-query release 二进制需要 curl。" >&2
@@ -380,20 +516,20 @@ download_db_query_release_bins_for_skills_install() {
   fi
 
   mkdir -p "${dest}/bin"
-  for asset in "db-query-linux-amd64" "db-query-windows-amd64.exe"; do
-    url="${base_url}/${asset}"
-    tmp_file="${dest}/bin/.tmp-${asset}"
-    if ! curl -fsSL "${url}" -o "${tmp_file}" >/dev/null 2>&1; then
-      rm -f "${tmp_file}"
-      echo "错误: 下载 db-query release 文件失败: ${url}" >&2
-      echo "可通过 DB_QUERY_RELEASE_BASE_URL 覆盖地址。" >&2
-      return 1
-    fi
-    mv "${tmp_file}" "${dest}/bin/${asset}"
-  done
+  url="${base_url}/${asset}"
+  tmp_file="${dest}/bin/.tmp-${asset}"
+  if ! curl -fsSL "${url}" -o "${tmp_file}" >/dev/null 2>&1; then
+    rm -f "${tmp_file}"
+    echo "错误: 下载 db-query release 文件失败: ${url}" >&2
+    echo "可通过 DB_QUERY_RELEASE_BASE_URL 覆盖地址。" >&2
+    return 1
+  fi
+  mv "${tmp_file}" "${dest}/bin/${asset}"
 
-  chmod +x "${dest}/bin/db-query-linux-amd64" 2>/dev/null || true
-  echo "已同步 db-query release 二进制: ${base_url}"
+  if [[ "${asset}" == "db-query-linux-amd64" ]]; then
+    chmod +x "${dest}/bin/db-query-linux-amd64" 2>/dev/null || true
+  fi
+  echo "已同步 db-query release 二进制: ${base_url} (${asset})"
   return 0
 }
 
@@ -401,18 +537,33 @@ sync_db_query_release_bins_for_skills_install() {
   local dest="$1"
   local source_mode="$2"
   local github_repo="$3"
+  local asset
 
   if download_db_query_release_bins_for_skills_install "${dest}" "${source_mode}" "${github_repo}"; then
     return 0
   fi
 
-  if [[ -s "${dest}/bin/db-query-linux-amd64" && -s "${dest}/bin/db-query-windows-amd64.exe" ]]; then
-    echo "警告: release 下载失败，已保留本地现有 db-query 二进制。"
+  asset="$(resolve_db_query_release_asset_for_current_platform 2>/dev/null || true)"
+  if [[ -n "${asset}" && -s "${dest}/bin/${asset}" ]]; then
+    echo "警告: release 下载失败，已保留本地现有 db-query 二进制 (${asset})。"
     return 0
   fi
 
-  echo "错误: db-query 缺少可用二进制，请检查 release 地址后重试。" >&2
+  echo "错误: db-query 缺少可用平台二进制，请检查 release 地址或改为手动下载。" >&2
   return 1
+}
+
+copy_skill_payload_for_install() {
+  local name="$1"
+  local src="$2"
+  local dest="$3"
+
+  mkdir -p "${dest}"
+  if [[ "${name}" == "db-query" ]]; then
+    find "${src}" -mindepth 1 -maxdepth 1 ! -name 'scripts' -exec cp -R "{}" "${dest}/" \;
+  else
+    cp -R "${src}/." "${dest}/"
+  fi
 }
 
 install_file_with_prompt() {
@@ -669,6 +820,15 @@ install_skills_main() {
         DB_QUERY_RELEASE_TAG_EXPLICIT="true"
         shift 2
         ;;
+      --db-query-download)
+        if [[ $# -lt 2 || -z "${2:-}" ]]; then
+          echo "错误: --db-query-download 需要参数 yes|no" >&2
+          return 1
+        fi
+        DB_QUERY_REMOTE_DOWNLOAD="${2:-}"
+        DB_QUERY_REMOTE_DOWNLOAD_EXPLICIT="true"
+        shift 2
+        ;;
       --yes)
         AUTO_YES="true"
         shift
@@ -899,7 +1059,22 @@ install_skills_main() {
     fi
   done
 
-  if ! prompt_db_query_release_tag_if_needed "${has_db_query_selected}" "${source_mode}" "${remote_repo:-${github_repo}}"; then
+  if ! prompt_db_query_remote_download_if_needed "${has_db_query_selected}"; then
+    return 1
+  fi
+
+  if [[ "${has_db_query_selected}" == "true" && "${DB_QUERY_REMOTE_DOWNLOAD}" != "no" ]]; then
+    if ! prompt_db_query_release_tag_if_needed "${has_db_query_selected}" "${source_mode}" "${remote_repo:-${github_repo}}"; then
+      return 1
+    fi
+  fi
+
+  if [[ "${has_db_query_selected}" == "true" && "${DB_QUERY_REMOTE_DOWNLOAD}" == "no" ]]; then
+    echo "db-query 将跳过远程下载二进制，安装后会提示手动下载路径。"
+  fi
+
+  if [[ "${has_db_query_selected}" == "true" && "${DB_QUERY_REMOTE_DOWNLOAD}" != "yes" && "${DB_QUERY_REMOTE_DOWNLOAD}" != "no" ]]; then
+    echo "错误: db-query 下载选项无效: ${DB_QUERY_REMOTE_DOWNLOAD}（仅支持 yes|no）" >&2
     return 1
   fi
 
@@ -977,7 +1152,7 @@ install_skills_main() {
         done < <(find "${dest}" -type f -name 'config.env')
 
         mkdir -p "${dest}"
-        cp -R "${src}/." "${dest}/"
+        copy_skill_payload_for_install "${name}" "${src}" "${dest}"
 
         while IFS= read -r cfg; do
           rel="${cfg#${preserve_dir}/}"
@@ -986,8 +1161,12 @@ install_skills_main() {
         done < <(find "${preserve_dir}" -type f -name 'config.env')
 
         if [[ "${name}" == "db-query" ]]; then
-          if ! sync_db_query_release_bins_for_skills_install "${dest}" "${release_source_mode}" "${remote_repo:-${github_repo}}"; then
-            return 1
+          if [[ "${DB_QUERY_REMOTE_DOWNLOAD}" == "no" ]]; then
+            print_db_query_manual_download_notice "${dest}" "${release_source_mode}" "${remote_repo:-${github_repo}}"
+          else
+            if ! sync_db_query_release_bins_for_skills_install "${dest}" "${release_source_mode}" "${remote_repo:-${github_repo}}"; then
+              return 1
+            fi
           fi
         fi
 
@@ -996,20 +1175,28 @@ install_skills_main() {
       else
         echo "跳过: ${name}（本地已存在: ${dest}）"
         if [[ "${name}" == "db-query" ]]; then
-          if ! sync_db_query_release_bins_for_skills_install "${dest}" "${release_source_mode}" "${remote_repo:-${github_repo}}"; then
-            return 1
+          if [[ "${DB_QUERY_REMOTE_DOWNLOAD}" == "no" ]]; then
+            print_db_query_manual_download_notice "${dest}" "${release_source_mode}" "${remote_repo:-${github_repo}}"
+          else
+            if ! sync_db_query_release_bins_for_skills_install "${dest}" "${release_source_mode}" "${remote_repo:-${github_repo}}"; then
+              return 1
+            fi
+            echo "已同步 db-query release 二进制（未覆盖其他文件）: ${dest}/bin"
           fi
-          echo "已同步 db-query release 二进制（未覆盖其他文件）: ${dest}/bin"
         fi
         ((skipped += 1))
       fi
       continue
     fi
 
-    cp -R "${src}" "${dest}"
+    copy_skill_payload_for_install "${name}" "${src}" "${dest}"
     if [[ "${name}" == "db-query" ]]; then
-      if ! sync_db_query_release_bins_for_skills_install "${dest}" "${release_source_mode}" "${remote_repo:-${github_repo}}"; then
-        return 1
+      if [[ "${DB_QUERY_REMOTE_DOWNLOAD}" == "no" ]]; then
+        print_db_query_manual_download_notice "${dest}" "${release_source_mode}" "${remote_repo:-${github_repo}}"
+      else
+        if ! sync_db_query_release_bins_for_skills_install "${dest}" "${release_source_mode}" "${remote_repo:-${github_repo}}"; then
+          return 1
+        fi
       fi
     fi
     echo "已安装: ${name} -> ${dest}"
