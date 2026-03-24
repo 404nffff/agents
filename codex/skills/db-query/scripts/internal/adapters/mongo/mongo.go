@@ -69,7 +69,7 @@ func Query(ctx context.Context, cfg core.MongoConnConfig, queryRaw string, maxRo
 
 	client, err := mongo.Connect(connCtx, options.Client().ApplyURI(cfg.URI))
 	if err != nil {
-		return nil, nil, core.WrapAppError(core.CodeConnectionError, "failed to connect mongo", err)
+		return nil, nil, wrapMongoError(core.CodeConnectionError, "failed to connect mongo", err)
 	}
 	defer func() { _ = client.Disconnect(context.Background()) }()
 
@@ -96,7 +96,7 @@ func runFind(ctx context.Context, coll *mongo.Collection, req queryRequest, maxR
 
 	cursor, err := coll.Find(ctx, req.Filter, opts)
 	if err != nil {
-		return nil, nil, core.WrapAppError(core.CodeExecutionError, "mongo find failed", err)
+		return nil, nil, wrapMongoError(core.CodeExecutionError, "mongo find failed", err)
 	}
 	defer cursor.Close(ctx)
 
@@ -139,7 +139,7 @@ func runAggregate(ctx context.Context, coll *mongo.Collection, req queryRequest,
 
 	cursor, err := coll.Aggregate(ctx, pipeline, options.Aggregate().SetMaxTime(30*time.Second))
 	if err != nil {
-		return nil, nil, core.WrapAppError(core.CodeExecutionError, "mongo aggregate failed", err)
+		return nil, nil, wrapMongoError(core.CodeExecutionError, "mongo aggregate failed", err)
 	}
 	defer cursor.Close(ctx)
 
@@ -159,4 +159,40 @@ func runAggregate(ctx context.Context, coll *mongo.Collection, req queryRequest,
 	}
 
 	return nil, rows, nil
+}
+
+func wrapMongoError(code, message string, err error) error {
+	if err == nil {
+		return nil
+	}
+
+	errText := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(errText, "unsupported mechanism scram-sha-256"):
+		return core.WrapAppError(
+			code,
+			message+"; mongo server does not support SCRAM-SHA-256, try authMechanism=SCRAM-SHA-1 or remove authMechanism",
+			err,
+		)
+	case strings.Contains(errText, "unable to authenticate using mechanism \"scram-sha-1\""):
+		return core.WrapAppError(
+			code,
+			message+"; SCRAM-SHA-1 authentication failed, check username/password/authSource or try SCRAM-SHA-256",
+			err,
+		)
+	case strings.Contains(errText, "unable to authenticate using mechanism \"scram-sha-256\""):
+		return core.WrapAppError(
+			code,
+			message+"; SCRAM-SHA-256 authentication failed, check username/password/authSource",
+			err,
+		)
+	case strings.Contains(errText, "authenticationfailed"):
+		return core.WrapAppError(
+			code,
+			message+"; authentication failed, check username/password/authSource",
+			err,
+		)
+	default:
+		return core.WrapAppError(code, message, err)
+	}
 }
