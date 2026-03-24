@@ -12,6 +12,6 @@
 | file-naming-helper | file-naming-helper | 根据中文描述生成英文文件名。当用户提到命名、起名、文件名、英文名等关键词时使用此 Skill。 |
 | git-commit-helper | git-commit-helper | 根据 Git 历史生成提交信息。当用户提到 commit、提交、git 提交等关键词，或在 git add 后准备提交时使用此 Skill。 |
 | grok-search | grok-skill | Real-time web research/search with sources (outputs JSON). |
+| lanhu-plan | lanhu-plan | 使用 lanhu-mcp 拉取蓝湖/Axure 页面信息并生成页面级执行文档。执行前必须先检测输入链接与 lanhu-mcp 安装状态。 |
 | mysql-query | mysql-query | 使用本地 mysql 命令连接 MySQL 并读取指定表数据。连接配置采用 `MYSQL_*_profile` 多库模式（例如 `MYSQL_HOST_main`），并通过 `--profile` 或 `MYSQL_PROFILE` 选择。用于“查表数据”“执行只读 SQL”场景。脚本会拒绝 DELETE 及其他写操作。 |
 <!-- SKILL_CATALOG_END -->
-
