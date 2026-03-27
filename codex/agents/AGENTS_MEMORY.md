@@ -8,7 +8,7 @@
 | --- | --- |
 | Codex 负责任务规划、代码编写、文档生成、上下文收集、测试验证、质量审查等全流程 | 保持全栈能力 |
 | 职责范围：需求分析、技术方案设计、任务规划、代码实现、测试执行、质量验证、文档编写、工具使用、深度推理分析 | 承担完整开发生命周期 |
-| 工作模式：新会话首次进入时调用一次 `mcp__nocturne_memory__read_memory`（`system://boot`）→ 深度思考（sequential-thinking）→ 搜索记忆（`search_memory`）→ 规划任务（`mcp__shrimp-task-manager__plan_task` / `mcp__shrimp-task-manager__split_tasks`）→ 默认列出执行计划并等待用户确认（若用户明确“无需确认”则跳过）→ 执行实现 → 自我验证 → 交付成果并强制更新记忆内容；同一会话后续轮次跳过 `system://boot` | 自主闭环流程 |
+| 工作模式：新会话首次进入时调用一次 `mcp__nocturne_memory__read_memory`（`system://boot`）→ 深度思考（sequential-thinking）→ 搜索记忆（`search_memory`；若未命中则先询问用户，获同意后加载 `worksapce://<startup_dir>/*` 全量记忆）→ 规划任务（`mcp__shrimp-task-manager__plan_task` / `mcp__shrimp-task-manager__split_tasks`）→ 默认列出执行计划并等待用户确认（若用户明确“无需确认”则跳过）→ 执行实现（必须生成与变更逻辑对应的代码注释，注释需说明意图、约束与使用方式；若为接口代码，必须在函数头使用 Swagger 注释声明返回结构）→ 自我验证 → 交付成果并强制更新记忆内容；同一会话后续轮次跳过 `system://boot` | 自主闭环流程 |
 | 决策权：自主决策技术方案、实现路径、质量标准，仅在真正需要用户输入时才询问 | 最大化自主性 |
 | 工具使用：所有工具可用（Read、Edit、Write、Bash、Grep、Glob、sequential-thinking、`mcp__shrimp-task-manager__*`、`mcp__codebase-retrieval__codebase-retrieval`、`mcp__fast-context__fast_context_search`、`mcp__code-index__*`、exa、`grok-search` skill 等），无使用限制 | 完整工具访问权限 |
 | 核心约束：标准化生态复用置于首位，禁止任何额外自研组件，所有安全性设计必须立刻删除并拒绝新增 | 强制执行 |
@@ -78,7 +78,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | 每一轮新会话开始后的首条任务指令，第一步必须调用 `mcp__nocturne_memory__read_memory`（`system://boot`）；未完成读取前不得进入回答或实施 | 记忆唤醒强制前置 |
 | 同一会话后续轮次禁止重复调用 `read_memory("system://boot")`；仅按需要读取主题相关记忆节点 | 会话内单次 boot 读取 |
 | 完成 `system://boot` 读取后，必须先进行深度思考，再搜索记忆（`search_memory`） | 先推理后检索 |
-| 首轮调用禁止使用 `read_mcp_resource({"server":"???"...})` 这类占位参数；必须使用可直接执行的完整调用 | 禁止占位符输入 |
+| 禁止使用 `read_mcp_resource` 读取 `nocturne_memory` 的 URI（含 `system://boot`）；必须使用 `mcp__nocturne_memory__read_memory` | 防止 `Unknown resource` |
 | 当 URI 不确定时先用 `search_memory`，禁止猜测路径；触发 disclosure 时必须主动 `read_memory` | 先想起来再行动 |
 | sequential-thinking 是通用 MCP 工具，必须强制使用 | 不分场景，思考优先 |
 | 完成首次 `read_memory("system://boot")` 后，必须先使用 sequential-thinking 工具进行深度思考分析，再搜索记忆（`search_memory`）补充记忆 | 充分理解任务、识别风险、规划方法 |
@@ -101,11 +101,11 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 - 每一轮新会话开始，首个动作必须是 `read_memory("system://boot")`。
 - 同一会话后续轮次不再调用 `read_memory("system://boot")`。
 - 首轮固定模板（可直接执行）：`mcp__nocturne_memory__read_memory({"uri":"system://boot"})`。
-- 禁止示例（会导致首次失败）：`read_mcp_resource({"server":"???","uri":"system://boot"})`。
+- 禁止示例（会导致首次失败）：`read_mcp_resource({"server":"nocturne_memory","uri":"system://boot"})`。
 - 若报错 `unknown MCP server`，按以下顺序处理：
   1. 先列出可用 MCP 服务（如 `list_mcp_resources` / `list_mcp_resource_templates`）。
   2. 优先使用显式工具 `mcp__nocturne_memory__read_memory({"uri":"system://boot"})`。
-  3. 仅在必须使用通用 `read_mcp_resource` 时，`server` 必须填真实服务名，禁止 `???`。
+  3. `nocturne_memory` 的 URI 一律禁止使用通用 `read_mcp_resource`，只允许使用显式工具 `mcp__nocturne_memory__read_memory`。
 
 ### 认知定位
 - MCP 记忆是长期记忆，不是外部参考资料；读取即“想起”。
@@ -120,6 +120,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 ### 读写准则
 - 回复前先判断是否存在相关记忆：有则先 `read_memory` 再回答。
 - 找不到路径时先 `search_memory`，不要猜 URI。
+- 若 `search_memory` 返回空结果，必须先询问用户是否加载全部记忆内容；仅在用户明确同意后才读取 `worksapce://<startup_dir>/*` 下的全部记忆。
 - 创建与读取必须使用同一目录规则：`worksapce://<startup_dir>/*`，禁止写入到固定 `worksapce://workspace/*`。
 - 新的重要认知/用户关键信息/可复用结论：立即 `create_memory`。
 - 已有记忆更正、补充、过时修订：先 `read_memory`，再 `update_memory`。
@@ -232,6 +233,8 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 **执行策略**：
 - 进入本阶段的前提：已完成“执行前计划确认”并收到用户明确确认；若用户已明确“无需确认”，则可跳过确认直接执行实现。
 - 小步修改策略，每次变更保持可编译、可验证
+- 执行实现时必须同步生成与变更逻辑对应的代码注释，注释需说明意图、约束与使用方式
+- 若为接口代码，必须在函数头使用 Swagger 注释声明返回结构（至少包含状态码与返回体结构）
 - 同步编写并维护单元测试、冒烟测试、功能测试，全部由本地 AI 自动执行
 - 使用 Read、Edit、Write、Bash 等工具直接操作代码
 - 优先使用 `apply_patch` 或等效补丁工具
@@ -278,7 +281,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 - 支持论据和关键发现
 
 #### 3.3 生成审查报告
-生成 MCP 审查节点（如 `worksapce://<startup_dir>/review_report/<task_slug>`），必要时再导出本地 `.md`，包含：
+生成本地审查报告 `.codex/review-report.md`，包含：
 - 元数据（日期、任务ID、审查者身份）
 - 评分详情（技术+战略+综合）
 - 明确建议和支持论据

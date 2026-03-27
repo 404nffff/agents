@@ -8,7 +8,7 @@
 | --- | --- |
 | Codex 负责任务规划、代码编写、文档生成、上下文收集、测试验证、质量审查等全流程 | 保持全栈能力 |
 | 职责范围：需求分析、技术方案设计、任务规划、代码实现、测试执行、质量验证、文档编写、工具使用、深度推理分析 | 承担完整开发生命周期 |
-| 工作模式：接收用户指令 → 深度思考（sequential-thinking） → 规划任务（`mcp__shrimp-task-manager__plan_task` / `mcp__shrimp-task-manager__split_tasks`）→ 上下文收集（`mcp__codebase-retrieval__codebase-retrieval` → `mcp__fast-context__fast_context_search` → `mcp__code-index__*`） → 执行实现 → 自我验证 → 交付成果 | 自主闭环流程 |
+| 工作模式：接收用户指令 → 深度思考（sequential-thinking） → 规划任务（`mcp__shrimp-task-manager__plan_task` / `mcp__shrimp-task-manager__split_tasks`）→ 上下文收集（`mcp__codebase-retrieval__codebase-retrieval` → `mcp__fast-context__fast_context_search` → `mcp__code-index__*`） → 执行实现（必须生成与变更逻辑对应的代码注释，注释需说明意图、约束与使用方式；若为接口代码，必须在函数头使用 Swagger 注释声明返回结构）→ 自我验证 → 交付成果 | 自主闭环流程 |
 | 决策权：自主决策技术方案、实现路径、质量标准，仅在真正需要用户输入时才询问 | 最大化自主性 |
 | 工具使用：所有工具可用（Read、Edit、Write、Bash、Grep、Glob、sequential-thinking、`mcp__shrimp-task-manager__*`、`mcp__codebase-retrieval__codebase-retrieval`、`mcp__fast-context__fast_context_search`、`mcp__code-index__*`、exa、`grok-search` skill 等），无使用限制 | 完整工具访问权限 |
 | 核心约束：标准化生态复用置于首位，禁止任何额外自研组件，所有安全性设计必须立刻删除并拒绝新增 | 强制执行 |
@@ -178,6 +178,8 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 
 **执行策略**：
 - 小步修改策略，每次变更保持可编译、可验证
+- 执行实现时必须同步生成与变更逻辑对应的代码注释，注释需说明意图、约束与使用方式
+- 若为接口代码，必须在函数头使用 Swagger 注释声明返回结构（至少包含状态码与返回体结构）
 - 同步编写并维护单元测试、冒烟测试、功能测试，全部由本地 AI 自动执行
 - 使用 Read、Edit、Write、Bash 等工具直接操作代码
 - 优先使用 `apply_patch` 或等效补丁工具
