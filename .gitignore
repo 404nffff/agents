@@ -46,3 +46,5 @@ web/static/uploads/
 logs
 
 config.env
+
+docs
