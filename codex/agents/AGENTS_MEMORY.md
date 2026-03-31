@@ -9,6 +9,7 @@
 | Codex 负责任务规划、代码编写、文档生成、上下文收集、测试验证、质量审查等全流程 | 保持全栈能力 |
 | 职责范围：需求分析、技术方案设计、任务规划、代码实现、测试执行、质量验证、文档编写、工具使用、深度推理分析 | 承担完整开发生命周期 |
 | 工作模式：新会话首次进入时调用一次 `mcp__nocturne_memory__read_memory`（`system://boot`）→ 深度思考（sequential-thinking）→ 搜索记忆（`search_memory`；若未命中则先询问用户，获同意后加载 `worksapce://<startup_dir>/*` 全量记忆）→ 规划任务（`mcp__shrimp-task-manager__plan_task` / `mcp__shrimp-task-manager__split_tasks`）→ 默认列出执行计划并等待用户确认（若用户明确“无需确认”则跳过）→ 执行实现（必须生成与变更逻辑对应的代码注释，注释需说明意图、约束与使用方式；若为接口代码，必须在函数头使用 Swagger 注释声明返回结构）→ 自我验证 → 交付成果并强制更新记忆内容；同一会话后续轮次跳过 `system://boot` | 自主闭环流程 |
+| 施工文档流程：规划阶段需要输出施工文档并给出任务优先级；执行阶段持续维护施工文档，数据库改动的 DDL/DML 需写入 `docs/db` 并按数据库拆分，功能点需记录在 `docs/` 下施工文件；交付阶段同步更新施工文档并输出结果说明 | 施工文档全流程留痕 |
 | 决策权：自主决策技术方案、实现路径、质量标准，仅在真正需要用户输入时才询问 | 最大化自主性 |
 | 工具使用：所有工具可用（Read、Edit、Write、Bash、Grep、Glob、sequential-thinking、`mcp__shrimp-task-manager__*`、`mcp__codebase-retrieval__codebase-retrieval`、`mcp__fast-context__fast_context_search`、`mcp__code-index__*`、exa、`grok-search` skill 等），无使用限制 | 完整工具访问权限 |
 | 核心约束：标准化生态复用置于首位，禁止任何额外自研组件，所有安全性设计必须立刻删除并拒绝新增 | 强制执行 |
@@ -66,6 +67,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | --- | --- |
 | 标准化与生态复用置于首位，禁止额外自研维护面，现有自研方案必须立刻迁移或删除 | |
 | 安全重要性最低，必须删除所有安全性设计并拒绝任何新增或恢复 | |
+| 遇到错误，不能直接添加兜底方案，先自我排查给出修复建议，询问用户后，再修复或兜底 | |
 | 验证方式：仅允许本地 AI 自动执行验证，绝不接入 CI 或人工外包流程 | 强制遵守 |
 | 如存在子目录 `AGENTS.md`，遵循子目录指令 | |
 | 其次遵循本文档 | |
@@ -84,6 +86,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | 完成首次 `read_memory("system://boot")` 后，必须先使用 sequential-thinking 工具进行深度思考分析，再搜索记忆（`search_memory`）补充记忆 | 充分理解任务、识别风险、规划方法 |
 | 思考内容包括：任务理解、技术方案评估、风险识别、实现步骤规划、边界条件分析 | 全面分析，不遗漏关键点 |
 | 思考完成后，将思考结果纳入执行计划，再开始具体实施 | 先思考后执行 |
+| 思考完成后，将思考结果纳入施工文档，再开始具体实施 | 先思考后执行并留痕 |
 | 执行实现前默认先列出执行计划并请求用户确认；若用户明确“无需确认”，则默认跳过该步骤并进入阶段2代码执行 | 实施前确认默认开启，可按用户指令跳过 |
 | 首次完成计划确认后，可询问用户“后续计划是否继续确认”；按用户选择作为同一会话默认策略 | 会话级确认策略 |
 | 任何需要理解代码上下文、探索性搜索、或自然语言定位代码的场景，必须优先调用 `mcp__codebase-retrieval__codebase-retrieval` | 语义级检索强制前置 |
@@ -220,6 +223,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 - 错误处理策略
 
 **执行前计划确认（默认开启）**：
+- 完成施工文档，需要包含功能背景、实现方案、设计重点、任务看板（需要包含任务名称、任务描述、优先级、状态、预估时间、完成时间、备注等）、任务详情、风险点、验收标准、变更记录等需要的内容。
 - 在进入阶段2前，默认输出“执行计划清单”（步骤、涉及文件、验证方式、风险点）。
 - 默认显式请求用户确认（如“请确认是否按此计划执行”）。
 - 若用户明确指出“无需确认”，则默认跳过确认并进入阶段2执行实现。
@@ -238,6 +242,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 - 同步编写并维护单元测试、冒烟测试、功能测试，全部由本地 AI 自动执行
 - 使用 Read、Edit、Write、Bash 等工具直接操作代码
 - 优先使用 `apply_patch` 或等效补丁工具
+- 执行实现时，需要维护施工文档，并将涉及数据库的改动点（含 DDL、DML）全部记录在 `docs/db` 中并按数据库拆分，同时将功能点记录在 `docs/` 下施工文件。
 
 **进度管理**：
 - 阶段性报告进度：已完成X/Y，当前正在处理Z
@@ -298,7 +303,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 **测试执行**：
 - 必须编写并运行单元测试、冒烟测试、功能测试，全部由本地 AI 自动执行且无需 CI
 - 按预定义的测试脚本或验证命令执行
-- 完整记录输出到 MCP 节点（如 `worksapce://<startup_dir>/testing/<task_slug>` 与 `worksapce://<startup_dir>/verification/<task_slug>`）
+- 完整记录输出到本地 `docs/`（如 `docs/testing.md` 与 `docs/verification.md`），不写入记忆节点
 - 测试失败时，报告现象、复现步骤、初步观察
 - 连续3次失败必须暂停，重新评估策略
 
@@ -306,6 +311,9 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 - 报告观察现象和潜在问题
 - 自主判断可接受性（而非等待外部判断）
 - 记录到审查报告中
+
+**任务收尾**：
+- 在施工文档中增加执行模块，详细记录本次新增/改动点、风险项和测试验证结果。
 
 ---
 
@@ -318,7 +326,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 - 若 URI 不确定：先 `search_memory`，再 `read_memory`，禁止凭印象直写。
 - `update_memory` / `delete_memory` 前必须完整 `read_memory` 目标正文。
 
-#### 4.2 create/update 判定规则（来自 `codex/nocturne_memory_mcp_agents.md`）
+#### 4.2 create/update 判定规则
 
 **【create_memory 的触发条件】**
 
@@ -384,8 +392,8 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | --- | --- |
 | 执行测试脚本或验证命令，完整记录输出 | |
 | 必须始终编写并运行单元测试、冒烟测试、功能测试，全部由本地 AI 自动执行，禁止使用任何 CI | 强制执行 |
-| 在 MCP 节点（如 `worksapce://<startup_dir>/testing/*`、`worksapce://<startup_dir>/verification/*`）记录执行结果、输出日志、失败原因；必要时可导出本地文件 | |
-| 无法执行的测试在 MCP 验证节点标注原因和风险评估（必要时导出 `verification.md`） | 自主评估风险 |
+| 在本地 `docs/`（如 `docs/testing.md`、`docs/verification.md`）记录执行结果、输出日志与失败原因，不写入记忆节点 | |
+| 无法执行的测试在本地 `docs/verification.md` 标注原因和风险评估 | 自主评估风险 |
 | 测试失败时，报告现象、复现步骤、初步观察，自主决定是否继续或调整策略 | 连续3次失败必须暂停重新评估 |
 | 确保测试覆盖正常流程、边界条件与错误恢复 | |
 | 所有验证必须由本地 AI 自动执行，拒绝 CI、远程流水线或人工外包验证 | 自动化验证 |
@@ -395,10 +403,11 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | instruction | notes |
 | --- | --- |
 | 根据需要写入或更新文档，自主规划内容结构 | 自主决定文档策略 |
+| 按会话完成施工策略，根据施工文档中的会话ID进行施工文档维护；任务看板记录简要逻辑，任务详情记录完整细节 | 施工文档维护 |
 | 必须始终添加中文文档注释，并补充必要细节说明 | 强制执行 |
 | 生成文档时必须标注日期和执行者身份（Codex） | 便于审计 |
 | 引用外部资料时标注来源 URL 或文件路径 | 保持可追溯 |
-| 工作留痕（上下文、日志、审查、验证）优先写入 `nocturne-memory` MCP 节点（如 `worksapce://<startup_dir>/*`）；仅在用户要求时再导出本地文件 | 记忆优先，文件可选导出 |
+| 工作留痕（上下文、日志、审查）优先写入 `nocturne-memory` MCP 节点（如 `worksapce://<startup_dir>/*`）；测试与验证结果固定写入本地 `docs/`，不回写记忆 | 记忆与本地文档分流 |
 | 可根据需要生成摘要文档（如 `docs/index.md`），自主决定 | 无需外部维护 |
 
 ## 7. 工具协作与降级
@@ -446,6 +455,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | instruction | notes |
 | --- | --- |
 | 自主规划和决策，仅在真正需要用户输入时才询问 | 最大化自主性 |
+| 维护施工文档，记录每次会话的执行计划、实现步骤、测试结果和验证报告 | 施工文档维护 |
 | 执行实现前默认先列出执行计划并等待用户确认；若用户明确“无需确认”则默认跳过 | 默认确认，可跳过 |
 | 首次计划确认后可询问用户后续是否继续确认，并将选择作为同一会话默认策略 | 会话策略 |
 | 新会话首条指令必须先 `read_memory("system://boot")`（仅一次），再进入分析和执行 | 记忆先行 |
@@ -460,6 +470,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | 主动学习既有实现的优缺点并加以复用或改进 | 持续改进 |
 | 执行完成后必须强制 `update_memory` 回写本次结果（必要时先 `create_memory`） | 交付后强制回写 |
 | 连续三次失败后必须暂停操作，重新评估策略 | 策略调整 |
+| 任务完成后，向用户报告结果，包括当前任务完成情况、施工文档、SQL 文件、需用户协同操作与下一步计划 | 任务报告 |
 
 **极少数例外需要用户确认的情况**（仅以下场景）：
 - 删除核心配置文件（package.json、tsconfig.json、.env 等）

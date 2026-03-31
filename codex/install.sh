@@ -1111,6 +1111,7 @@ install_skills_main() {
   local -a skill_paths=()
   local -a selected=()
   declare -A seen_names=()
+  declare -A seen_dirs=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1173,19 +1174,19 @@ install_skills_main() {
   fi
 
   if [[ -n "${skills_root}" ]]; then
-    while IFS= read -r dir; do
-      skill_file=""
-      if [[ -f "${dir}/SKILL.md" ]]; then
-        skill_file="${dir}/SKILL.md"
-      elif [[ -f "${dir}/skill.md" ]]; then
-        skill_file="${dir}/skill.md"
-      else
+    while IFS= read -r skill_file; do
+      dir="$(dirname "${skill_file}")"
+      if [[ -n "${seen_dirs[${dir}]+x}" ]]; then
         continue
       fi
+      seen_dirs["${dir}"]=1
 
       name="$(read_frontmatter_field "${skill_file}" "name")"
       desc="$(read_frontmatter_field "${skill_file}" "description")"
-      rel_path="$(basename "${dir}")"
+      rel_path="${dir#${skills_root}/}"
+      if [[ "${rel_path}" == "${dir}" ]]; then
+        rel_path="$(basename "${dir}")"
+      fi
 
       [[ -z "${name}" ]] && name="${rel_path}"
       [[ -z "${desc}" ]] && desc="(无 description)"
@@ -1200,7 +1201,7 @@ install_skills_main() {
       skill_descs+=("${desc}")
       skill_paths+=("${rel_path}")
       selected+=(0)
-    done < <(find "${skills_root}" -mindepth 1 -maxdepth 1 -type d | sort)
+    done < <(find "${skills_root}" -type f \( -name 'SKILL.md' -o -name 'skill.md' \) | sort)
 
     if [[ ${#skill_names[@]} -eq 0 ]]; then
       echo "错误: 未在 ${skills_root} 下找到可安装的 skill" >&2

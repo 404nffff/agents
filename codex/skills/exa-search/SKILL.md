@@ -1,6 +1,6 @@
 ---
 name: exa-search
-description: Neural web search for source-first research, especially official docs, API references, pricing pages, product specs, company pages, and any task where low-noise results and direct text extraction matter. Use when you need precise, high-quality, non-SEO-biased web results or extracted page text/highlights. Prefer this over generic web search for official documentation and structured source retrieval. Prefer grok-search instead for breaking news, X/Twitter dynamics, real-time sentiment, or broad multi-source live synthesis.
+description: 面向“来源优先”研究场景的语义 Web 搜索能力，尤其适用于官方文档、API 参考、价格页面、产品规格、公司官网，以及任何需要低噪声结果和直接提取正文的任务。当你需要高精度、高质量、非 SEO 噪声导向的搜索结果，或需要获取页面正文/高亮内容时优先使用。相比通用搜索，它更适合官方文档与结构化资料检索；对于突发新闻、X/Twitter 动态、实时舆情或多来源实时综合分析，应优先使用 grok-search。
 ---
 
 # Exa Search

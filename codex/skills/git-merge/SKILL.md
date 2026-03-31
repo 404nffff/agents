@@ -1,6 +1,6 @@
 ---
 name: git-merge
-description: 对比两个分支（默认 develop/master），按提交人和提交历史筛选 develop 提交，生成 git-merge.md 汇总；用户确认后自动写入目标分支。
+description: 在 develop_dir 中按 git log 与作者筛选提交，生成改动计划，用户确认后自动把改动写入 master_dir。
 ---
 
 # Git Merge
@@ -9,14 +9,14 @@ description: 对比两个分支（默认 develop/master），按提交人和提�
 
 本 skill 使用两阶段流程：
 
-1. `prepare`：筛选提交并生成 `git-merge.md` 汇总日志。
-2. `apply`：在用户确认无误后，把筛选后的提交写入目标分支（默认 `master`）。
+1. `prepare`：在 `develop_dir` 按分支范围、作者和时间条件筛选 git 提交，生成改动计划报告。
+2. `apply`：在用户确认无误后，把计划内改动自动写入 `master_dir`。
 
 ## 必填输入
 
-1. `--source`：源分支（通常是 `develop`）
-2. `--target`：目标分支（通常是 `master`）
-3. `--author`：提交人（姓名、邮箱或正则关键字）
+1. `--develop-dir`：开发仓库目录（源）
+2. `--master-dir`：目标目录（写入目录）
+3. `--author`：提交人筛选（姓名、邮箱或关键字）
 4. 提交历史筛选（至少一个）：
    - `--since <date>`（建议）
    - `--max-count <N>`
@@ -25,6 +25,8 @@ description: 对比两个分支（默认 develop/master），按提交人和提�
 
 ```bash
 bash ~/.codex/skills/git-merge/scripts/git_merge.sh prepare \
+  --develop-dir /path/to/develop_dir \
+  --master-dir /path/to/master_dir \
   --source develop \
   --target master \
   --author "alice@example.com" \
@@ -36,8 +38,9 @@ bash ~/.codex/skills/git-merge/scripts/git_merge.sh prepare \
 
 执行后会生成：
 
-1. `git-merge.md`：提交摘要、修改文件、增删统计、关键 diff 片段
+1. `git-merge.md`：提交摘要 + 修改计划（新增/修改/删除文件清单）
 2. `.git-merge-plan.env`：后续 apply 使用的执行计划
+3. `.git-merge-plan.env.added/.modified/.deleted`：机器可读文件清单
 
 ## 第二步：用户确认后执行写入
 
@@ -51,15 +54,14 @@ bash ~/.codex/skills/git-merge/scripts/git_merge.sh apply \
 
 该步骤会：
 
-1. 检查工作区是否干净
-2. 自动切换到目标分支
-3. 按计划顺序逐个 `cherry-pick` 到目标分支
+1. 严格校验 `--confirm yes`
+2. 按计划从 `develop_dir` 的 `source` 分支导出文件并写入 `master_dir`
+3. 按计划删除 `master_dir` 中多余文件
 4. 在 `git-merge.md` 追加执行结果
 
 ## 失败处理
 
-如果 `cherry-pick` 冲突，脚本会中断并提示：
+如果 apply 阶段遇到路径缺失或文件写入失败，脚本会中断并提示：
 
-1. 手动解决冲突后执行 `git cherry-pick --continue`
-2. 或执行 `git cherry-pick --abort` 后重新规划
-
+1. 修复目录或权限问题后重新执行 `prepare`
+2. 再次确认计划后执行 `apply --confirm yes`

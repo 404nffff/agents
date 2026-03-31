@@ -1,0 +1,1480 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#e9f1f8">
+  <title>GitHub Repo Tool</title>
+  <style>
+    :root {
+      --bg: #f4f0e7;
+      --fg: #1d232b;
+      --card: #fffdf8;
+      --muted: #ebe7de;
+      --muted-fg: #666159;
+      --border: #c8bca9;
+      --primary: #0e7b6c;
+      --primary-fg: #eafef9;
+      --accent: #d75d35;
+      --accent-fg: #fff3ed;
+      --shadow: 0 30px 80px rgba(38, 34, 23, 0.18);
+      --shell-radius: 30px;
+      --card-radius: 18px;
+      --pill-radius: 999px;
+      --font-display: "Avenir Next", "PingFang SC", "Segoe UI", sans-serif;
+      --font-text: "Noto Sans SC", "PingFang SC", "Segoe UI", sans-serif;
+      --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    }
+
+    .dark {
+      --bg: #111519;
+      --fg: #edf2f7;
+      --card: #171f24;
+      --muted: #222d34;
+      --muted-fg: #94a6b4;
+      --border: #384a57;
+      --primary: #48cbb8;
+      --primary-fg: #07231f;
+      --accent: #ff9065;
+      --accent-fg: #341307;
+      --shadow: 0 30px 90px rgba(1, 7, 11, 0.45);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      color-scheme: light;
+    }
+
+    html.dark {
+      color-scheme: dark;
+    }
+
+    body {
+      overflow-x: hidden;
+      font-family: var(--font-text);
+      color: var(--fg);
+      background-color: var(--bg);
+      background-image:
+        radial-gradient(circle at 8% 7%, color-mix(in oklab, var(--primary) 19%, transparent) 0, transparent 35%),
+        radial-gradient(circle at 82% 12%, color-mix(in oklab, var(--accent) 16%, transparent) 0, transparent 34%),
+        linear-gradient(144deg, #f4f0e7 0%, #ece7dc 46%, #f8f5ed 100%);
+    }
+
+    .dark body {
+      background-image:
+        radial-gradient(circle at 8% 8%, color-mix(in oklab, var(--primary) 24%, transparent) 0, transparent 38%),
+        radial-gradient(circle at 85% 10%, color-mix(in oklab, var(--accent) 16%, transparent) 0, transparent 32%),
+        linear-gradient(144deg, #111519 0%, #141b21 46%, #0d1115 100%);
+    }
+
+    button,
+    a,
+    input {
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: rgba(14, 123, 108, 0.15);
+    }
+
+    .skip-link {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 50;
+      transform: translateY(-220%);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--card);
+      color: var(--fg);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 9px 12px;
+      transition: transform 0.18s ease;
+    }
+
+    .skip-link:focus-visible {
+      transform: translateY(0);
+      outline: 2px solid color-mix(in oklab, var(--primary) 46%, transparent);
+      outline-offset: 2px;
+    }
+
+    .backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      overflow: hidden;
+      pointer-events: none;
+    }
+
+    .noise-layer {
+      position: absolute;
+      inset: 0;
+      opacity: 0.17;
+      background-image: radial-gradient(rgba(0, 0, 0, 0.11) 0.5px, transparent 0.5px);
+      background-size: 2px 2px;
+    }
+
+    .grid-layer {
+      position: absolute;
+      inset: 0;
+      opacity: 0.17;
+      background-image:
+        linear-gradient(to right, color-mix(in oklab, var(--border) 40%, transparent) 1px, transparent 1px),
+        linear-gradient(to bottom, color-mix(in oklab, var(--border) 40%, transparent) 1px, transparent 1px);
+      background-size: 34px 34px;
+    }
+
+    .decor-a,
+    .decor-b {
+      position: absolute;
+      filter: blur(2px);
+    }
+
+    .decor-a {
+      left: -70px;
+      top: 50px;
+      width: 230px;
+      height: 230px;
+      border-radius: 36px;
+      transform: rotate(16deg);
+      border: 1px solid color-mix(in oklab, var(--primary) 44%, transparent);
+      background:
+        linear-gradient(145deg, color-mix(in oklab, var(--primary) 20%, transparent), transparent),
+        color-mix(in oklab, var(--primary) 9%, transparent);
+    }
+
+    .decor-b {
+      right: -55px;
+      bottom: 44px;
+      width: 270px;
+      height: 270px;
+      border-radius: 999px;
+      transform: rotate(-12deg);
+      border: 1px solid color-mix(in oklab, var(--accent) 48%, transparent);
+      background:
+        linear-gradient(145deg, color-mix(in oklab, var(--accent) 22%, transparent), transparent),
+        color-mix(in oklab, var(--accent) 10%, transparent);
+    }
+
+    .page {
+      max-width: 1560px;
+      margin: 0 auto;
+      padding:
+        calc(18px + env(safe-area-inset-top))
+        calc(16px + env(safe-area-inset-right))
+        calc(34px + env(safe-area-inset-bottom))
+        calc(16px + env(safe-area-inset-left));
+    }
+
+    .shell {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+      border-radius: var(--shell-radius);
+      background:
+        linear-gradient(160deg, color-mix(in oklab, var(--card) 96%, transparent), color-mix(in oklab, var(--card) 84%, transparent));
+      box-shadow: var(--shadow);
+      padding: 18px;
+    }
+
+    .header {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 18px;
+      align-items: end;
+      border-bottom: 1px solid color-mix(in oklab, var(--border) 76%, transparent);
+      padding-bottom: 22px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border-radius: var(--pill-radius);
+      border: 1px solid color-mix(in oklab, var(--primary) 42%, transparent);
+      background: color-mix(in oklab, var(--primary) 13%, transparent);
+      color: var(--primary);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.24em;
+      text-transform: uppercase;
+      padding: 7px 13px;
+    }
+
+    .title {
+      margin: 11px 0 10px;
+      font-family: var(--font-display);
+      font-size: clamp(34px, 4.3vw, 56px);
+      font-weight: 800;
+      line-height: 1.01;
+      letter-spacing: -0.032em;
+      text-wrap: balance;
+    }
+
+    .lead {
+      margin: 0;
+      max-width: 800px;
+      color: var(--muted-fg);
+      font-size: 15px;
+      line-height: 1.76;
+    }
+
+    .intro-card {
+      border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+      border-radius: var(--card-radius);
+      background:
+        linear-gradient(160deg, color-mix(in oklab, var(--muted) 68%, transparent), color-mix(in oklab, var(--muted) 42%, transparent));
+      padding: 14px;
+    }
+
+    .section-title {
+      margin: 0 0 10px;
+      color: var(--muted-fg);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    .intro-card ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted-fg);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .theme-btn {
+      margin-top: 12px;
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: color-mix(in oklab, var(--card) 90%, transparent);
+      color: var(--fg);
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 700;
+      padding: 10px 12px;
+      transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease;
+    }
+
+    .theme-btn:hover {
+      border-color: color-mix(in oklab, var(--primary) 66%, transparent);
+      background: color-mix(in oklab, var(--card) 98%, transparent);
+    }
+
+    .theme-btn:focus-visible,
+    .primary-btn:focus-visible,
+    .view-btn:focus-visible,
+    .nav-item:focus-visible {
+      outline: 2px solid color-mix(in oklab, var(--primary) 50%, transparent);
+      outline-offset: 2px;
+    }
+
+    .tool-layout {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: 328px minmax(0, 1fr);
+      gap: 16px;
+    }
+
+    .left-panel,
+    .right-panel {
+      border: 1px solid color-mix(in oklab, var(--border) 74%, transparent);
+      border-radius: var(--card-radius);
+      background: color-mix(in oklab, var(--card) 93%, transparent);
+    }
+
+    .left-panel {
+      padding: 14px;
+    }
+
+    .right-panel {
+      padding: 14px;
+    }
+
+    .control-group + .control-group {
+      margin-top: 11px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--muted-fg);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    input {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: color-mix(in oklab, var(--card) 96%, transparent);
+      color: var(--fg);
+      font-family: var(--font-text);
+      font-size: 14px;
+      padding: 10px 12px;
+      transition: border-color 0.18s ease, background-color 0.18s ease;
+    }
+
+    input[name="token"] {
+      font-family: var(--font-mono);
+      font-size: 13px;
+    }
+
+    input::placeholder {
+      color: color-mix(in oklab, var(--muted-fg) 82%, transparent);
+    }
+
+    input:focus-visible {
+      outline: 2px solid color-mix(in oklab, var(--primary) 37%, transparent);
+      outline-offset: 2px;
+      border-color: color-mix(in oklab, var(--primary) 56%, transparent);
+    }
+
+    .primary-btn {
+      width: 100%;
+      border: 1px solid color-mix(in oklab, var(--primary) 72%, transparent);
+      border-radius: 12px;
+      background:
+        linear-gradient(160deg, color-mix(in oklab, var(--primary) 95%, white), var(--primary));
+      color: var(--primary-fg);
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 700;
+      padding: 11px 12px;
+      transition: filter 0.18s ease, transform 0.18s ease;
+    }
+
+    .primary-btn:hover {
+      filter: brightness(1.05);
+      transform: translateY(-1px);
+    }
+
+    .primary-btn:disabled {
+      opacity: 0.72;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .left-divider {
+      border-top: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+      margin-top: 14px;
+      padding-top: 14px;
+    }
+
+    .stat-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .stat-pill {
+      border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+      border-radius: var(--pill-radius);
+      background: color-mix(in oklab, var(--muted) 86%, transparent);
+      color: var(--muted-fg);
+      font: 700 11px/1 var(--font-mono);
+      font-variant-numeric: tabular-nums;
+      padding: 7px 10px;
+    }
+
+    .nav-list {
+      margin-top: 12px;
+      max-height: 55vh;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding-right: 2px;
+    }
+
+    .nav-list-group + .nav-list-group {
+      margin-top: 10px;
+    }
+
+    .group-title {
+      margin: 0 0 8px;
+      color: var(--muted-fg);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    .nav-item {
+      position: relative;
+      width: 100%;
+      margin-bottom: 8px;
+      text-align: left;
+      cursor: pointer;
+      border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+      border-radius: var(--card-radius);
+      background:
+        linear-gradient(160deg, color-mix(in oklab, var(--card) 95%, transparent), color-mix(in oklab, var(--card) 88%, transparent));
+      color: var(--fg);
+      content-visibility: auto;
+      contain-intrinsic-size: 92px;
+      padding: 11px 12px 11px 14px;
+      transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+    }
+
+    .nav-item::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 10px;
+      bottom: 10px;
+      width: 3px;
+      border-radius: 999px;
+      background: color-mix(in oklab, var(--border) 70%, transparent);
+      transition: background-color 0.18s ease;
+    }
+
+    .nav-item:hover {
+      transform: translateY(-2px);
+      border-color: color-mix(in oklab, var(--primary) 44%, transparent);
+      box-shadow: 0 9px 24px rgba(26, 31, 38, 0.13);
+    }
+
+    .nav-item.active {
+      border-color: color-mix(in oklab, var(--primary) 74%, transparent);
+      background: color-mix(in oklab, var(--primary) 90%, white);
+      color: var(--primary-fg);
+      box-shadow: 0 12px 24px rgba(14, 123, 108, 0.28);
+    }
+
+    .nav-item.active::before {
+      background: color-mix(in oklab, var(--primary-fg) 88%, transparent);
+    }
+
+    .nav-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .nav-title > span:first-child {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .nav-kind {
+      flex: 0 0 auto;
+      font: 700 11px/1 var(--font-mono);
+      color: inherit;
+      opacity: 0.9;
+    }
+
+    .nav-desc {
+      margin-top: 5px;
+      color: inherit;
+      opacity: 0.86;
+      font-size: 12px;
+      line-height: 1.45;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .meta-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      border: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+      border-radius: 12px;
+      background:
+        linear-gradient(160deg, color-mix(in oklab, var(--muted) 62%, transparent), color-mix(in oklab, var(--muted) 46%, transparent));
+      padding: 10px 12px;
+    }
+
+    .meta-text {
+      color: var(--muted-fg);
+      font-size: 14px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+
+    .view-mode {
+      display: flex;
+      gap: 6px;
+      padding: 4px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: color-mix(in oklab, var(--card) 93%, transparent);
+    }
+
+    .view-btn {
+      cursor: pointer;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted-fg);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 7px 12px;
+      transition: color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
+    }
+
+    .view-btn.active {
+      background: var(--primary);
+      color: var(--primary-fg);
+      box-shadow: 0 6px 14px rgba(14, 123, 108, 0.22);
+    }
+
+    .metrics {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted-fg);
+      font: 700 12px/1 var(--font-mono);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .metrics span {
+      border-radius: 999px;
+      background: color-mix(in oklab, var(--muted) 85%, transparent);
+      padding: 7px 10px;
+    }
+
+    .status {
+      margin-top: 10px;
+      border-radius: 12px;
+      border: 1px solid color-mix(in oklab, var(--border) 68%, transparent);
+      background: color-mix(in oklab, var(--muted) 58%, transparent);
+      color: var(--muted-fg);
+      padding: 9px 12px;
+      font-size: 14px;
+    }
+
+    .status.success {
+      border-color: color-mix(in oklab, var(--primary) 45%, transparent);
+      background: color-mix(in oklab, var(--primary) 10%, transparent);
+      color: var(--primary);
+    }
+
+    .status.error {
+      border-color: color-mix(in oklab, var(--accent) 55%, transparent);
+      background: color-mix(in oklab, var(--accent) 12%, transparent);
+      color: var(--accent);
+    }
+
+    .content {
+      margin-top: 10px;
+      min-height: 58vh;
+      border: 1px solid color-mix(in oklab, var(--border) 68%, transparent);
+      border-radius: 12px;
+      background: color-mix(in oklab, var(--card) 97%, transparent);
+      padding: 14px;
+      overflow: auto;
+      line-height: 1.75;
+      word-break: break-word;
+    }
+
+    .raw-content {
+      margin: 0;
+      color: color-mix(in oklab, var(--fg) 96%, transparent);
+      font: 500 12.5px/1.65 var(--font-mono);
+      white-space: pre-wrap;
+      word-break: break-word;
+      tab-size: 2;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    .md h1,
+    .md h2,
+    .md h3 {
+      margin: 16px 0 8px;
+      font-family: var(--font-display);
+      line-height: 1.2;
+      scroll-margin-top: 14px;
+      text-wrap: balance;
+    }
+
+    .md h1 {
+      margin-top: 2px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+      font-size: 31px;
+    }
+
+    .md h2 {
+      padding-bottom: 6px;
+      border-bottom: 1px solid color-mix(in oklab, var(--border) 66%, transparent);
+      font-size: 24px;
+    }
+
+    .md h3 {
+      font-size: 20px;
+    }
+
+    .md p {
+      margin: 10px 0;
+    }
+
+    .md ul {
+      margin: 8px 0 12px;
+      padding-left: 22px;
+    }
+
+    .md li {
+      margin: 6px 0;
+    }
+
+    .md code {
+      border-radius: 7px;
+      background: color-mix(in oklab, var(--muted) 92%, transparent);
+      color: var(--primary);
+      font: 600 12px/1.2 var(--font-mono);
+      padding: 2px 6px;
+    }
+
+    .md pre {
+      margin: 12px 0;
+      border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+      border-radius: 10px;
+      background: color-mix(in oklab, var(--muted) 52%, transparent);
+      padding: 12px;
+      overflow: auto;
+    }
+
+    .md pre code {
+      padding: 0;
+      background: transparent;
+      color: inherit;
+    }
+
+    .md blockquote {
+      margin: 12px 0;
+      border-left: 4px solid var(--accent);
+      background: color-mix(in oklab, var(--accent) 11%, transparent);
+      color: color-mix(in oklab, var(--fg) 92%, transparent);
+      padding: 8px 12px;
+    }
+
+    .md a {
+      color: var(--primary);
+      text-underline-offset: 2px;
+    }
+
+    .md table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+      font-size: 13px;
+    }
+
+    .md th,
+    .md td {
+      border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+      text-align: left;
+      vertical-align: top;
+      padding: 7px 8px;
+    }
+
+    .md th {
+      background: color-mix(in oklab, var(--muted) 66%, transparent);
+      font-weight: 700;
+    }
+
+    .empty-box {
+      border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+      border-radius: 14px;
+      background: color-mix(in oklab, var(--card) 78%, transparent);
+      color: var(--muted-fg);
+      font-size: 14px;
+      padding: 14px;
+    }
+
+    @media (min-width: 1121px) {
+      .left-panel {
+        position: sticky;
+        top: 14px;
+        align-self: start;
+      }
+    }
+
+    @media (max-width: 1120px) {
+      .header {
+        grid-template-columns: 1fr;
+      }
+
+      .tool-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .nav-list {
+        max-height: 42vh;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        animation: none !important;
+        transition: none !important;
+        scroll-behavior: auto !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a href="#mainContent" class="skip-link">跳到主内容</a>
+
+  <div class="backdrop" aria-hidden="true">
+    <div class="noise-layer"></div>
+    <div class="grid-layer"></div>
+    <div class="decor-a"></div>
+    <div class="decor-b"></div>
+  </div>
+
+  <div class="page">
+    <section class="shell">
+      <header class="header">
+        <div>
+          <div class="badge">Repo Tool</div>
+          <h1 class="title">GitHub 仓库内容台<br>默认加载 404nffff/agents</h1>
+          <p class="lead">左侧是仓库配置与内容导航，右侧支持 Markdown 预览与源码视图，适合快速查看仓库核心资料。</p>
+        </div>
+        <aside class="intro-card">
+          <p class="section-title">快捷说明</p>
+          <ul>
+            <li>默认进入 `404nffff/agents`。</li>
+            <li>可切换 owner/repo 读取其它公开仓库。</li>
+            <li>可选 Token 提升 API 频率限制。</li>
+          </ul>
+          <button id="themeBtn" class="theme-btn" type="button">切换夜色</button>
+        </aside>
+      </header>
+
+      <div id="mainContent" tabindex="-1" class="tool-layout">
+        <aside class="left-panel">
+          <form id="repoForm">
+            <div class="control-group">
+              <label for="ownerInput">Owner</label>
+              <input id="ownerInput" name="owner" value="404nffff" placeholder="例如 404nffff…" autocomplete="off" spellcheck="false" required>
+            </div>
+            <div class="control-group">
+              <label for="repoInput">Repo</label>
+              <input id="repoInput" name="repo" value="agents" placeholder="例如 agents…" autocomplete="off" spellcheck="false" required>
+            </div>
+            <div class="control-group">
+              <label for="tokenInput">GitHub Token（可选）</label>
+              <input id="tokenInput" name="token" type="password" placeholder="ghp_xxx 或 github_pat_xxx…" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="control-group">
+              <button id="loadBtn" class="primary-btn" type="submit">重新加载仓库</button>
+            </div>
+          </form>
+
+          <div class="left-divider">
+            <label for="docSearchInput">导航筛选</label>
+            <input id="docSearchInput" name="docSearch" placeholder="按标题或分组筛选…" autocomplete="off">
+            <div class="stat-row">
+              <span id="statDocCount" class="stat-pill">0 项</span>
+              <span id="statPath" class="stat-pill">-</span>
+            </div>
+          </div>
+
+          <div class="left-divider">
+            <p class="section-title">内容导航</p>
+            <div id="docList" class="nav-list"></div>
+          </div>
+        </aside>
+
+        <main class="right-panel">
+          <div class="meta-bar">
+            <div id="contentMeta" class="meta-text">准备加载仓库内容…</div>
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+              <div id="viewMode" class="view-mode" role="group" aria-label="内容视图切换">
+                <button data-view="preview" class="view-btn" type="button">预览</button>
+                <button data-view="raw" class="view-btn" type="button">源码</button>
+              </div>
+              <div class="metrics">
+                <span id="lineCount">0 行</span>
+                <span id="charCount">0 字符</span>
+              </div>
+            </div>
+          </div>
+
+          <div id="statusText" class="status" role="status" aria-live="polite">尚未加载数据。</div>
+
+          <section id="previewPanel" class="content md"></section>
+          <pre id="rawPanel" class="content raw-content hidden"></pre>
+        </main>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const DEFAULT_OWNER = "404nffff";
+    const DEFAULT_REPO = "agents";
+
+    const state = {
+      owner: DEFAULT_OWNER,
+      repo: DEFAULT_REPO,
+      token: "",
+      docs: [],
+      activeDocId: "",
+      filterText: "",
+      viewMode: "preview",
+      requestToken: 0,
+    };
+
+    const elements = {
+      repoForm: document.getElementById("repoForm"),
+      ownerInput: document.getElementById("ownerInput"),
+      repoInput: document.getElementById("repoInput"),
+      tokenInput: document.getElementById("tokenInput"),
+      loadBtn: document.getElementById("loadBtn"),
+      docSearchInput: document.getElementById("docSearchInput"),
+      docList: document.getElementById("docList"),
+      contentMeta: document.getElementById("contentMeta"),
+      statusText: document.getElementById("statusText"),
+      previewPanel: document.getElementById("previewPanel"),
+      rawPanel: document.getElementById("rawPanel"),
+      lineCount: document.getElementById("lineCount"),
+      charCount: document.getElementById("charCount"),
+      statDocCount: document.getElementById("statDocCount"),
+      statPath: document.getElementById("statPath"),
+      themeBtn: document.getElementById("themeBtn"),
+    };
+
+    function updateThemeMetaColor() {
+      const meta = document.querySelector("meta[name='theme-color']");
+      if (!meta) return;
+      meta.setAttribute("content", document.documentElement.classList.contains("dark") ? "#070f1b" : "#e9f1f8");
+    }
+
+    function setThemeLabel() {
+      elements.themeBtn.textContent = document.documentElement.classList.contains("dark") ? "切换亮色" : "切换夜色";
+      updateThemeMetaColor();
+    }
+
+    function setStatus(text, type = "info") {
+      elements.statusText.className = "status";
+      if (type === "success") elements.statusText.classList.add("success");
+      if (type === "error") elements.statusText.classList.add("error");
+      elements.statusText.textContent = text;
+    }
+
+    function escapeHtml(text = "") {
+      return String(text)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function decodeBase64Utf8(base64Text = "") {
+      const compact = base64Text.replace(/\s+/g, "");
+      const binary = atob(compact);
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+      return new TextDecoder("utf-8").decode(bytes);
+    }
+
+    function formatTime(iso = "") {
+      if (!iso) return "-";
+      return new Intl.DateTimeFormat("zh-CN", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(new Date(iso));
+    }
+
+    function updateUrlParams() {
+      const params = new URLSearchParams();
+      params.set("owner", state.owner);
+      params.set("repo", state.repo);
+      if (state.activeDocId) params.set("doc", state.activeDocId);
+      if (state.filterText) params.set("filter", state.filterText);
+      if (state.viewMode !== "preview") params.set("view", state.viewMode);
+      history.replaceState({}, "", `${location.pathname}?${params.toString()}`);
+    }
+
+    function parseQueryDefaults() {
+      const params = new URLSearchParams(location.search);
+      state.owner = params.get("owner") || DEFAULT_OWNER;
+      state.repo = params.get("repo") || DEFAULT_REPO;
+      state.filterText = params.get("filter") || "";
+      state.viewMode = params.get("view") === "raw" ? "raw" : "preview";
+      elements.ownerInput.value = state.owner;
+      elements.repoInput.value = state.repo;
+      elements.docSearchInput.value = state.filterText;
+      return params.get("doc") || "";
+    }
+
+    function setViewMode(mode) {
+      state.viewMode = mode === "raw" ? "raw" : "preview";
+      elements.previewPanel.classList.toggle("hidden", state.viewMode !== "preview");
+      elements.rawPanel.classList.toggle("hidden", state.viewMode !== "raw");
+      document.querySelectorAll("#viewMode [data-view]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.view === state.viewMode);
+      });
+      updateUrlParams();
+    }
+
+    function getFilteredDocs() {
+      const keyword = state.filterText.trim().toLowerCase();
+      if (!keyword) return state.docs;
+      return state.docs.filter((doc) => doc.title.toLowerCase().includes(keyword) || doc.group.toLowerCase().includes(keyword));
+    }
+
+    function updateStats(filteredCount = getFilteredDocs().length) {
+      elements.statDocCount.textContent = `${filteredCount} 项`;
+      elements.statPath.textContent = `${state.owner}/${state.repo}`;
+    }
+
+    function updateContentMetrics(text = "") {
+      const lines = text ? text.split(/\r?\n/).length : 0;
+      elements.lineCount.textContent = `${lines} 行`;
+      elements.charCount.textContent = `${text.length} 字符`;
+    }
+
+    function applyInlineMarkdown(text = "") {
+      return text
+        .replace(/`([^`]+)`/g, "<code>$1</code>")
+        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+    }
+
+    function markdownToHtml(markdownText = "") {
+      const lines = markdownText.replace(/\r/g, "").split("\n");
+      const html = [];
+      let paragraph = [];
+      let list = [];
+      let code = [];
+      let table = [];
+      let inCode = false;
+
+      const flushParagraph = () => {
+        if (paragraph.length === 0) return;
+        const content = applyInlineMarkdown(escapeHtml(paragraph.join(" ")));
+        html.push(`<p>${content}</p>`);
+        paragraph = [];
+      };
+
+      const flushList = () => {
+        if (list.length === 0) return;
+        html.push("<ul>");
+        list.forEach((item) => html.push(`<li>${applyInlineMarkdown(escapeHtml(item))}</li>`));
+        html.push("</ul>");
+        list = [];
+      };
+
+      const flushCode = () => {
+        if (code.length === 0) return;
+        html.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
+        code = [];
+      };
+
+      const flushTable = () => {
+        if (table.length < 2) {
+          table = [];
+          return;
+        }
+        const rows = table
+          .map((line) => line.trim())
+          .filter((line) => line.startsWith("|") && line.endsWith("|"))
+          .map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()));
+        if (rows.length < 2) {
+          table = [];
+          return;
+        }
+        const header = rows[0];
+        const body = rows.slice(2);
+        html.push("<table><thead><tr>");
+        header.forEach((cell) => html.push(`<th>${applyInlineMarkdown(escapeHtml(cell))}</th>`));
+        html.push("</tr></thead><tbody>");
+        body.forEach((row) => {
+          html.push("<tr>");
+          row.forEach((cell) => html.push(`<td>${applyInlineMarkdown(escapeHtml(cell))}</td>`));
+          html.push("</tr>");
+        });
+        html.push("</tbody></table>");
+        table = [];
+      };
+
+      for (const rawLine of lines) {
+        const line = rawLine;
+        const trimmed = line.trim();
+
+        if (trimmed.startsWith("```")) {
+          flushParagraph();
+          flushList();
+          flushTable();
+          if (inCode) {
+            flushCode();
+            inCode = false;
+          } else {
+            inCode = true;
+          }
+          continue;
+        }
+
+        if (inCode) {
+          code.push(line);
+          continue;
+        }
+
+        if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+          flushParagraph();
+          flushList();
+          table.push(line);
+          continue;
+        }
+
+        if (table.length > 0) flushTable();
+
+        if (!trimmed) {
+          flushParagraph();
+          flushList();
+          continue;
+        }
+
+        if (trimmed.startsWith("- ")) {
+          flushParagraph();
+          list.push(trimmed.slice(2));
+          continue;
+        }
+
+        if (list.length > 0) flushList();
+
+        if (trimmed.startsWith("# ")) {
+          flushParagraph();
+          html.push(`<h1>${applyInlineMarkdown(escapeHtml(trimmed.slice(2)))}</h1>`);
+          continue;
+        }
+        if (trimmed.startsWith("## ")) {
+          flushParagraph();
+          html.push(`<h2>${applyInlineMarkdown(escapeHtml(trimmed.slice(3)))}</h2>`);
+          continue;
+        }
+        if (trimmed.startsWith("### ")) {
+          flushParagraph();
+          html.push(`<h3>${applyInlineMarkdown(escapeHtml(trimmed.slice(4)))}</h3>`);
+          continue;
+        }
+        if (trimmed.startsWith("> ")) {
+          flushParagraph();
+          html.push(`<blockquote>${applyInlineMarkdown(escapeHtml(trimmed.slice(2)))}</blockquote>`);
+          continue;
+        }
+
+        paragraph.push(trimmed);
+      }
+
+      flushTable();
+      flushList();
+      flushParagraph();
+      flushCode();
+      return html.join("");
+    }
+
+    function renderContent(doc) {
+      const content = doc?.content || "";
+      elements.contentMeta.textContent = `${state.owner}/${state.repo} · ${doc?.title || "未选择内容"}`;
+      elements.previewPanel.innerHTML = doc?.kind === "markdown"
+        ? markdownToHtml(content)
+        : `<pre class="raw-content">${escapeHtml(content)}</pre>`;
+      elements.rawPanel.textContent = content;
+      updateContentMetrics(content);
+      updateUrlParams();
+    }
+
+    function emptyDocList(message) {
+      elements.docList.innerHTML = `<div class="empty-box">${escapeHtml(message)}</div>`;
+    }
+
+    function renderDocList() {
+      const docs = getFilteredDocs();
+      updateStats(docs.length);
+      elements.docList.innerHTML = "";
+
+      if (docs.length === 0) {
+        emptyDocList("没有匹配项，请调整筛选词。");
+        return;
+      }
+
+      const groups = docs.reduce((bucket, doc) => {
+        if (!bucket[doc.group]) bucket[doc.group] = [];
+        bucket[doc.group].push(doc);
+        return bucket;
+      }, {});
+
+      Object.entries(groups).forEach(([groupName, items]) => {
+        const wrapper = document.createElement("div");
+        wrapper.className = "nav-list-group";
+
+        const title = document.createElement("p");
+        title.className = "group-title";
+        title.textContent = groupName;
+        wrapper.appendChild(title);
+
+        items.forEach((doc) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "nav-item";
+          button.classList.toggle("active", doc.id === state.activeDocId);
+          button.innerHTML = `
+            <div class="nav-title">
+              <span>${escapeHtml(doc.title)}</span>
+              <span class="nav-kind">${escapeHtml(doc.kind.toUpperCase())}</span>
+            </div>
+            <div class="nav-desc">${escapeHtml(doc.description || "无附加说明")}</div>
+          `;
+          button.addEventListener("click", () => {
+            void activateDoc(doc.id);
+          });
+          wrapper.appendChild(button);
+        });
+
+        elements.docList.appendChild(wrapper);
+      });
+    }
+
+    async function apiFetch(path, options = {}) {
+      const { token = "", signal } = options;
+      const url = `https://api.github.com${path}`;
+      const headers = {
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
+      const response = await fetch(url, { headers, signal });
+      if (!response.ok) {
+        let message = `HTTP ${response.status}`;
+        try {
+          const errorData = await response.json();
+          if (errorData?.message) message = errorData.message;
+        } catch (_error) {
+          // 保持默认错误信息。
+        }
+        throw new Error(message);
+      }
+      return response.json();
+    }
+
+    function normalizeLoadError(error) {
+      const message = String(error?.message || "未知错误");
+      if (message === "Failed to fetch") {
+        return "网络请求失败。请检查本机网络/代理，或先启动本地 Web Server 再打开页面。";
+      }
+      return message;
+    }
+
+    function buildOverviewMarkdown(meta, readmeState) {
+      const topics = (meta.topics || []).length > 0 ? meta.topics.map((topic) => `\`${topic}\``).join(" ") : "无";
+      return [
+        `# ${meta.full_name}`,
+        "",
+        meta.description || "暂无描述。",
+        "",
+        "## 仓库概览",
+        "",
+        "| 字段 | 值 |",
+        "| --- | --- |",
+        `| 可见性 | ${meta.private ? "Private" : "Public"} |`,
+        `| 默认分支 | \`${meta.default_branch}\` |`,
+        `| Stars | ${meta.stargazers_count} |`,
+        `| Forks | ${meta.forks_count} |`,
+        `| Open Issues | ${meta.open_issues_count} |`,
+        `| License | ${meta.license?.name || "未声明"} |`,
+        `| 更新时间 | ${formatTime(meta.updated_at)} |`,
+        `| 最近推送 | ${formatTime(meta.pushed_at)} |`,
+        "",
+        "## Topics",
+        "",
+        topics,
+        "",
+        "## 链接",
+        "",
+        `- GitHub: ${meta.html_url}`,
+        `- Clone (HTTPS): \`${meta.clone_url}\``,
+        `- Clone (SSH): \`${meta.ssh_url}\``,
+        "",
+        "## README 状态",
+        "",
+        readmeState.available ? "已加载 README，可在导航中查看。" : "未发现 README（或仓库未公开该文件）。",
+      ].join("\n");
+    }
+
+    function buildLanguagesMarkdown(languages = {}) {
+      const entries = Object.entries(languages).sort((a, b) => b[1] - a[1]);
+      if (entries.length === 0) return "# Languages\n\n仓库暂未返回语言统计。";
+      const total = entries.reduce((sum, [, bytes]) => sum + bytes, 0);
+      const rows = entries.map(([name, bytes]) => `| ${name} | ${bytes} | ${((bytes / total) * 100).toFixed(2)}% |`);
+      return ["# Languages", "", "| 语言 | 字节数 | 占比 |", "| --- | ---: | ---: |", ...rows].join("\n");
+    }
+
+    function buildCommitsMarkdown(commits = []) {
+      if (commits.length === 0) return "# Recent Commits\n\n没有可展示的提交记录。";
+      const rows = commits.map((item) => {
+        const date = formatTime(item.commit?.author?.date || "");
+        const sha = item.sha?.slice(0, 7) || "-";
+        const msg = item.commit?.message?.split("\n")[0] || "";
+        const author = item.commit?.author?.name || item.author?.login || "Unknown";
+        return `| \`${sha}\` | ${msg} | ${author} | ${date} |`;
+      });
+      return ["# Recent Commits", "", "| SHA | Message | Author | Time |", "| --- | --- | --- | --- |", ...rows].join("\n");
+    }
+
+    function buildTreeMarkdown(treeItems = []) {
+      if (treeItems.length === 0) return "# Root Tree\n\n仓库根目录为空。";
+      const rows = treeItems.map((item) => `| ${item.type === "dir" ? "DIR" : "FILE"} | \`${item.name}\` | ${item.type === "file" ? item.size || 0 : "-"} |`);
+      return ["# Root Tree", "", "| Type | Name | Size(bytes) |", "| --- | --- | ---: |", ...rows].join("\n");
+    }
+
+    async function loadFileContent(owner, repo, path, token, signal) {
+      const data = await apiFetch(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, { token, signal });
+      if (data.type !== "file") return `路径 ${path} 不是文件。`;
+      if (data.encoding === "base64") return decodeBase64Utf8(data.content || "");
+      if (typeof data.content === "string") return data.content;
+      return `文件 ${path} 无法直接解码，可能是二进制内容。`;
+    }
+
+    async function loadDirectoryContent(owner, repo, path, token, signal) {
+      const data = await apiFetch(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, { token, signal });
+      if (!Array.isArray(data)) return `目录 ${path} 无可展示内容。`;
+      const rows = data.map((item) => `| ${item.type === "dir" ? "DIR" : "FILE"} | \`${item.name}\` | ${item.type === "file" ? item.size || 0 : "-"} |`);
+      return [`# Directory · ${path}`, "", "| Type | Name | Size(bytes) |", "| --- | --- | ---: |", ...rows].join("\n");
+    }
+
+    function createCoreDocs({ meta, readme, languages, commits, tree }) {
+      const docs = [];
+
+      docs.push({
+        id: "overview",
+        group: "Core",
+        title: "Overview",
+        kind: "markdown",
+        description: "仓库元数据与链接汇总",
+        content: buildOverviewMarkdown(meta, { available: !!readme }),
+        loaded: true,
+      });
+
+      if (readme) {
+        docs.push({
+          id: "readme",
+          group: "Core",
+          title: "README.md",
+          kind: "markdown",
+          description: "仓库 README 内容",
+          content: readme,
+          loaded: true,
+        });
+      }
+
+      docs.push({
+        id: "root-tree",
+        group: "Core",
+        title: "Root Tree",
+        kind: "markdown",
+        description: "根目录文件清单",
+        content: buildTreeMarkdown(tree),
+        loaded: true,
+      });
+
+      docs.push({
+        id: "commits",
+        group: "Core",
+        title: "Recent Commits",
+        kind: "markdown",
+        description: "最近提交记录（最多 20 条）",
+        content: buildCommitsMarkdown(commits),
+        loaded: true,
+      });
+
+      docs.push({
+        id: "languages",
+        group: "Core",
+        title: "Languages",
+        kind: "markdown",
+        description: "语言占比统计",
+        content: buildLanguagesMarkdown(languages),
+        loaded: true,
+      });
+
+      tree.filter((item) => item.type === "file").slice(0, 40).forEach((item) => {
+        docs.push({
+          id: `file:${item.path}`,
+          group: "Files",
+          title: item.name,
+          kind: item.name.endsWith(".md") ? "markdown" : "text",
+          description: `文件 · ${item.path}`,
+          content: "",
+          loaded: false,
+          load: ({ owner, repo, token, signal }) => loadFileContent(owner, repo, item.path, token, signal),
+        });
+      });
+
+      tree.filter((item) => item.type === "dir").slice(0, 30).forEach((item) => {
+        docs.push({
+          id: `dir:${item.path}`,
+          group: "Directories",
+          title: `${item.name}/`,
+          kind: "markdown",
+          description: `目录 · ${item.path}`,
+          content: "",
+          loaded: false,
+          load: ({ owner, repo, token, signal }) => loadDirectoryContent(owner, repo, item.path, token, signal),
+        });
+      });
+
+      return docs;
+    }
+
+    async function activateDoc(docId) {
+      const doc = state.docs.find((item) => item.id === docId);
+      if (!doc) return;
+      state.activeDocId = docId;
+      renderDocList();
+
+      if (!doc.loaded && doc.load) {
+        setStatus(`正在读取 ${doc.title}…`);
+        try {
+          const loadedContent = await doc.load({
+            owner: state.owner,
+            repo: state.repo,
+            token: state.token,
+            signal: new AbortController().signal,
+          });
+          doc.content = loadedContent;
+          doc.loaded = true;
+          setStatus(`${doc.title} 已加载。`, "success");
+        } catch (error) {
+          doc.content = `读取失败：${error.message || "未知错误"}`;
+          doc.loaded = true;
+          setStatus(`读取 ${doc.title} 失败。`, "error");
+        }
+      }
+
+      renderContent(doc);
+    }
+
+    async function loadRepository(preferDocId = "") {
+      state.owner = elements.ownerInput.value.trim() || DEFAULT_OWNER;
+      state.repo = elements.repoInput.value.trim() || DEFAULT_REPO;
+      state.token = elements.tokenInput.value.trim();
+      state.docs = [];
+      state.activeDocId = "";
+      renderDocList();
+      renderContent({ title: "加载中", kind: "text", content: "" });
+      setStatus(`正在加载 ${state.owner}/${state.repo}…`);
+      updateStats(0);
+      updateUrlParams();
+
+      const currentToken = ++state.requestToken;
+      elements.loadBtn.disabled = true;
+      elements.loadBtn.textContent = "加载中…";
+
+      try {
+        const signal = new AbortController().signal;
+        const [meta, languages, commits, tree, readmeData] = await Promise.all([
+          apiFetch(`/repos/${state.owner}/${state.repo}`, { token: state.token, signal }),
+          apiFetch(`/repos/${state.owner}/${state.repo}/languages`, { token: state.token, signal }),
+          apiFetch(`/repos/${state.owner}/${state.repo}/commits?per_page=20`, { token: state.token, signal }),
+          apiFetch(`/repos/${state.owner}/${state.repo}/contents`, { token: state.token, signal }),
+          apiFetch(`/repos/${state.owner}/${state.repo}/readme`, { token: state.token, signal }).catch(() => null),
+        ]);
+
+        if (currentToken !== state.requestToken) return;
+
+        const readme = readmeData && readmeData.encoding === "base64"
+          ? decodeBase64Utf8(readmeData.content || "")
+          : "";
+
+        state.docs = createCoreDocs({
+          meta,
+          readme,
+          languages,
+          commits: Array.isArray(commits) ? commits : [],
+          tree: Array.isArray(tree) ? tree : [],
+        });
+
+        renderDocList();
+        const initialDoc = state.docs.some((item) => item.id === preferDocId)
+          ? preferDocId
+          : (state.docs.some((item) => item.id === "readme") ? "readme" : "overview");
+        await activateDoc(initialDoc);
+        setStatus(`加载完成：${state.owner}/${state.repo}（${state.docs.length} 项）`, "success");
+      } catch (error) {
+        if (currentToken !== state.requestToken) return;
+        const message = normalizeLoadError(error);
+        state.docs = [];
+        renderDocList();
+        renderContent({
+          title: "加载失败",
+          kind: "text",
+          content: `仓库 ${state.owner}/${state.repo} 读取失败：${message}`,
+        });
+        setStatus(`加载失败：${message}`, "error");
+      } finally {
+        elements.loadBtn.disabled = false;
+        elements.loadBtn.textContent = "重新加载仓库";
+      }
+    }
+
+    function initViewButtons() {
+      document.querySelectorAll("#viewMode [data-view]").forEach((button) => {
+        button.addEventListener("click", () => setViewMode(button.dataset.view));
+      });
+      setViewMode(state.viewMode);
+    }
+
+    function initEvents() {
+      elements.repoForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        await loadRepository();
+      });
+
+      elements.docSearchInput.addEventListener("input", (event) => {
+        state.filterText = String(event.target.value || "").toLowerCase();
+        renderDocList();
+        updateUrlParams();
+      });
+
+      elements.themeBtn.addEventListener("click", () => {
+        document.documentElement.classList.toggle("dark");
+        setThemeLabel();
+      });
+    }
+
+    async function init() {
+      const preferDocId = parseQueryDefaults();
+      if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+        document.documentElement.classList.add("dark");
+      }
+      setThemeLabel();
+      initViewButtons();
+      initEvents();
+      await loadRepository(preferDocId);
+    }
+
+    init().catch((error) => {
+      setStatus(`初始化失败：${error.message || "未知错误"}`, "error");
+    });
+  </script>
+</body>
+</html>

@@ -205,7 +205,10 @@ args = ["code-index-mcp"]
 
 # mcp_servers.codebase-retrieval ace mcp代码检索
 ## 说明
-地址 https://app.augmentcode.com/mcp/configuration
+地址 
+https://app.augmentcode.com/mcp/configuration
+
+https://docs.augmentcode.com/context-services/mcp/quickstart-codex
 
 1. Install Auggie CLI
 npm install -g @augmentcode/auggie@latest
@@ -219,7 +222,17 @@ The --mcp-auto-workspace flag automatically detects your workspace when using Co
 4. Test the integration
 Run Codex and prompt it with:
 "What is this project? Please use the codebase-retrieval tool to get the answer."
-Codex should confirm it has access to the codebase-retrieval tool.
+Codex should confirm it has access to the codebase-retrieval tool.、、
+
+For non-interactive environments like CI/CD pipelines, GitHub Actions, or automated scripts where you cannot run auggie login interactively, you can configure authentication using environment variables.
+​
+1. Get your authentication session details
+auggie token print
+This will output your session JSON.
+​
+2. Configure with environment variables
+codex mcp add codebase-retrieval --env AUGMENT_SESSION_AUTH='<session-json>' -- a
+
 ## 安装命令
 ```toml
 [mcp_servers.codebase-retrieval]

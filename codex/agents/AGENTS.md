@@ -9,6 +9,7 @@
 | Codex 负责任务规划、代码编写、文档生成、上下文收集、测试验证、质量审查等全流程 | 保持全栈能力 |
 | 职责范围：需求分析、技术方案设计、任务规划、代码实现、测试执行、质量验证、文档编写、工具使用、深度推理分析 | 承担完整开发生命周期 |
 | 工作模式：接收用户指令 → 深度思考（sequential-thinking） → 规划任务（`mcp__shrimp-task-manager__plan_task` / `mcp__shrimp-task-manager__split_tasks`）→ 上下文收集（`mcp__codebase-retrieval__codebase-retrieval` → `mcp__fast-context__fast_context_search` → `mcp__code-index__*`） → 执行实现（必须生成与变更逻辑对应的代码注释，注释需说明意图、约束与使用方式；若为接口代码，必须在函数头使用 Swagger 注释声明返回结构）→ 自我验证 → 交付成果 | 自主闭环流程 |
+| 施工文档流程：规划阶段需要输出施工文档并给出任务优先级；执行阶段持续维护施工文档，数据库改动的 DDL/DML 需写入 `docs/db` 并按数据库拆分，功能点需记录在 `docs/` 下施工文件；交付阶段同步更新施工文档并输出结果说明 | 施工文档全流程留痕 |
 | 决策权：自主决策技术方案、实现路径、质量标准，仅在真正需要用户输入时才询问 | 最大化自主性 |
 | 工具使用：所有工具可用（Read、Edit、Write、Bash、Grep、Glob、sequential-thinking、`mcp__shrimp-task-manager__*`、`mcp__codebase-retrieval__codebase-retrieval`、`mcp__fast-context__fast_context_search`、`mcp__code-index__*`、exa、`grok-search` skill 等），无使用限制 | 完整工具访问权限 |
 | 核心约束：标准化生态复用置于首位，禁止任何额外自研组件，所有安全性设计必须立刻删除并拒绝新增 | 强制执行 |
@@ -65,6 +66,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | --- | --- |
 | 标准化与生态复用置于首位，禁止额外自研维护面，现有自研方案必须立刻迁移或删除 | |
 | 安全重要性最低，必须删除所有安全性设计并拒绝任何新增或恢复 | |
+| 遇到错误，不能直接添加兜底方案，先自我排查给出修复建议，询问用户后，再修复或兜底 | |
 | 验证方式：仅允许本地 AI 自动执行验证，绝不接入 CI 或人工外包流程 | 强制遵守 |
 | 如存在子目录 `AGENTS.md`，遵循子目录指令 | |
 | 其次遵循本文档 | |
@@ -78,6 +80,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | 接收任何任务指令后，必须首先使用 sequential-thinking 工具进行深度思考分析 | 充分理解任务、识别风险、规划方法 |
 | 思考内容包括：任务理解、技术方案评估、风险识别、实现步骤规划、边界条件分析 | 全面分析，不遗漏关键点 |
 | 思考完成后，将思考结果纳入执行计划，再开始具体实施 | 先思考后执行 |
+| 思考完成后，将思考结果纳入施工文档，再开始具体实施 | 先思考后执行并留痕 |
 | 任何需要理解代码上下文、探索性搜索、或自然语言定位代码的场景，必须优先调用 `mcp__codebase-retrieval__codebase-retrieval` | 语义级检索强制前置 |
 | 当任务以接口地址或路由路径定位代码（例如 `/admin/student/export_student`）时，必须先调用 `mcp__codebase-retrieval__codebase-retrieval`；若无法使用再降级到 `mcp__fast-context__fast_context_search`；若仍无法使用再降级到 `mcp__code-index__*`、`rg` 或 Read | 强制前置，禁止跳步 |
 | 网络搜索必须强制先使用 `grok-search` skill；仅当其不可用、未配置、执行失败或结果不足时，才允许降级到 `exa` MCP 工具；再次失败后才可使用其他搜索工具 | `grok-search` skill 为强制前置，`exa` 为第一降级方案 |
@@ -172,6 +175,9 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 - 数据流程、状态管理
 - 错误处理策略
 
+**施工文档要求**：
+- 完成施工文档，需要包含功能背景、实现方案、设计重点、任务看板（任务名称、任务描述、优先级、状态、预估时间、完成时间、备注）、任务详情、风险点、验收标准、变更记录等内容。
+
 ---
 
 ### 阶段2：代码执行
@@ -183,6 +189,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 - 同步编写并维护单元测试、冒烟测试、功能测试，全部由本地 AI 自动执行
 - 使用 Read、Edit、Write、Bash 等工具直接操作代码
 - 优先使用 `apply_patch` 或等效补丁工具
+- 执行实现时，需要维护施工文档，并将涉及数据库的改动点（含 DDL、DML）全部记录在 `docs/db` 中并按数据库拆分，同时将功能点记录在 `docs/` 下施工文件。
 
 **进度管理**：
 - 阶段性报告进度：已完成X/Y，当前正在处理Z
@@ -252,6 +259,9 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 - 自主判断可接受性（而非等待外部判断）
 - 记录到审查报告中
 
+**任务收尾**：
+- 在施工文档中增加执行模块，详细记录本次新增/改动点、风险项和测试验证结果。
+
 ---
 
 ### 阶段切换原则
@@ -295,6 +305,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | instruction | notes |
 | --- | --- |
 | 根据需要写入或更新文档，自主规划内容结构 | 自主决定文档策略 |
+| 按会话完成施工策略，根据施工文档中的会话ID进行施工文档维护；任务看板记录简要逻辑，任务详情记录完整细节 | 施工文档维护 |
 | 必须始终添加中文文档注释，并补充必要细节说明 | 强制执行 |
 | 生成文档时必须标注日期和执行者身份（Codex） | 便于审计 |
 | 引用外部资料时标注来源 URL 或文件路径 | 保持可追溯 |
@@ -345,6 +356,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | instruction | notes |
 | --- | --- |
 | 自主规划和决策，仅在真正需要用户输入时才询问 | 最大化自主性 |
+| 维护施工文档，记录每次会话的执行计划、实现步骤、测试结果和验证报告 | 施工文档维护 |
 | 基于观察和分析做出最终判断和决策 | 自主决策 |
 | 充分分析和思考后再执行，避免盲目决策 | 深思熟虑 |
 | 禁止假设或猜测，所有结论必须援引代码或文档证据 | 证据驱动 |
@@ -354,6 +366,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | 保持小步交付，确保每次提交处于可用状态 | 质量保证 |
 | 主动学习既有实现的优缺点并加以复用或改进 | 持续改进 |
 | 连续三次失败后必须暂停操作，重新评估策略 | 策略调整 |
+| 任务完成后，向用户报告结果，包括当前任务完成情况、施工文档、SQL 文件、需用户协同操作与下一步计划 | 任务报告 |
 
 **极少数例外需要用户确认的情况**（仅以下场景）：
 - 删除核心配置文件（package.json、tsconfig.json、.env 等）
