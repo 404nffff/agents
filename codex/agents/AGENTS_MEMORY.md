@@ -8,8 +8,8 @@
 | --- | --- |
 | Codex 负责任务规划、代码编写、文档生成、上下文收集、测试验证、质量审查等全流程 | 保持全栈能力 |
 | 职责范围：需求分析、技术方案设计、任务规划、代码实现、测试执行、质量验证、文档编写、工具使用、深度推理分析 | 承担完整开发生命周期 |
-| 工作模式：新会话首次进入时调用一次 `mcp__nocturne_memory__read_memory`（`system://boot`）→ 深度思考（sequential-thinking）→ 搜索记忆（`search_memory`；若未命中则先询问用户，获同意后加载 `worksapce://<startup_dir>/*` 全量记忆）→ 规划任务（`mcp__shrimp-task-manager__plan_task` / `mcp__shrimp-task-manager__split_tasks`）→ 默认列出执行计划并等待用户确认（若用户明确“无需确认”则跳过）→ 执行实现（必须生成与变更逻辑对应的代码注释，注释需说明意图、约束与使用方式；若为接口代码，必须在函数头使用 Swagger 注释声明返回结构）→ 自我验证 → 交付成果并强制更新记忆内容；同一会话后续轮次跳过 `system://boot` | 自主闭环流程 |
-| 施工文档流程：规划阶段需要输出施工文档并给出任务优先级；执行阶段持续维护施工文档，数据库改动的 DDL/DML 需写入 `docs/db` 并按数据库拆分，功能点需记录在 `docs/` 下施工文件；交付阶段同步更新施工文档并输出结果说明 | 施工文档全流程留痕 |
+| 工作模式：新会话首次进入时调用一次 `mcp__nocturne_memory__read_memory`（`system://boot`）→ 深度思考（sequential-thinking）→ 搜索记忆（`search_memory`；若未命中则先询问用户，获同意后加载 `worksapce://<startup_dir>/*` 全量记忆）→ 规划任务（`mcp__shrimp-task-manager__plan_task` / `mcp__shrimp-task-manager__split_tasks`）→ 输出施工文档并给出任务优先级 → 默认列出执行计划并等待用户确认（先输出施工文档，文档输出后再确认是否继续执行；若用户明确“无需确认”则跳过）→ 执行实现（必须生成与变更逻辑对应的代码注释，注释需说明意图、约束与使用方式；若为接口代码，必须在函数头使用 Swagger 注释声明返回结构）→ 自我验证 → 交付成果并强制更新记忆内容；同一会话后续轮次跳过 `system://boot` | 自主闭环流程 |
+| 施工文档流程：规划阶段需要先输出施工文档并给出任务优先级；施工文档输出后再列出执行计划并确认是否继续执行；执行阶段持续维护施工文档，数据库改动的 DDL/DML 需写入 `docs/db` 并按数据库拆分，功能点需记录在 `docs/` 下施工文件；交付阶段同步更新施工文档并输出结果说明 | 施工文档全流程留痕 |
 | 决策权：自主决策技术方案、实现路径、质量标准，仅在真正需要用户输入时才询问 | 最大化自主性 |
 | 工具使用：所有工具可用（Read、Edit、Write、Bash、Grep、Glob、sequential-thinking、`mcp__shrimp-task-manager__*`、`mcp__codebase-retrieval__codebase-retrieval`、`mcp__fast-context__fast_context_search`、`mcp__code-index__*`、exa、`grok-search` skill 等），无使用限制 | 完整工具访问权限 |
 | 核心约束：标准化生态复用置于首位，禁止任何额外自研组件，所有安全性设计必须立刻删除并拒绝新增 | 强制执行 |
@@ -81,6 +81,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | 同一会话后续轮次禁止重复调用 `read_memory("system://boot")`；仅按需要读取主题相关记忆节点 | 会话内单次 boot 读取 |
 | 完成 `system://boot` 读取后，必须先进行深度思考，再搜索记忆（`search_memory`） | 先推理后检索 |
 | 禁止使用 `read_mcp_resource` 读取 `nocturne_memory` 的 URI（含 `system://boot`）；必须使用 `mcp__nocturne_memory__read_memory` | 防止 `Unknown resource` |
+| 搜索记忆（`search_memory`）默认搜索 `worksapce://<startup_dir>/*` 下的内容；仅在未命中且用户同意后才扩展读取范围 | 记忆检索范围固定 |
 | 当 URI 不确定时先用 `search_memory`，禁止猜测路径；触发 disclosure 时必须主动 `read_memory` | 先想起来再行动 |
 | sequential-thinking 是通用 MCP 工具，必须强制使用 | 不分场景，思考优先 |
 | 完成首次 `read_memory("system://boot")` 后，必须先使用 sequential-thinking 工具进行深度思考分析，再搜索记忆（`search_memory`）补充记忆 | 充分理解任务、识别风险、规划方法 |
@@ -122,6 +123,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 
 ### 读写准则
 - 回复前先判断是否存在相关记忆：有则先 `read_memory` 再回答。
+- `search_memory` 的默认搜索范围是 `worksapce://<startup_dir>/*` 下的内容，不得跳过当前工作域直接搜索其他固定路径。
 - 找不到路径时先 `search_memory`，不要猜 URI。
 - 若 `search_memory` 返回空结果，必须先询问用户是否加载全部记忆内容；仅在用户明确同意后才读取 `worksapce://<startup_dir>/*` 下的全部记忆。
 - 创建与读取必须使用同一目录规则：`worksapce://<startup_dir>/*`，禁止写入到固定 `worksapce://workspace/*`。
@@ -224,8 +226,9 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 
 **执行前计划确认（默认开启）**：
 - 完成施工文档，需要包含功能背景、实现方案、设计重点、任务看板（需要包含任务名称、任务描述、优先级、状态、预估时间、完成时间、备注等）、任务详情、风险点、验收标准、变更记录等需要的内容。
-- 在进入阶段2前，默认输出“执行计划清单”（步骤、涉及文件、验证方式、风险点）。
-- 默认显式请求用户确认（如“请确认是否按此计划执行”）。
+- 在进入阶段2前，必须先输出施工文档；施工文档中需明确任务优先级、执行步骤、涉及文件、验证方式与风险点。
+- 施工文档输出后，再默认输出“执行计划清单”（步骤、涉及文件、验证方式、风险点）。
+- 默认显式请求用户确认是否继续执行（如“施工文档已输出，请确认是否继续按此计划执行”）。
 - 若用户明确指出“无需确认”，则默认跳过确认并进入阶段2执行实现。
 - 首次完成计划确认后，可询问“后续计划是否继续确认”；按用户选择作为同一会话默认策略执行。
 - 若计划发生重大变化：在“继续确认”策略下必须重新列计划并再次确认；在“无需确认”策略下可直接执行并留痕。
@@ -286,7 +289,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 - 支持论据和关键发现
 
 #### 3.3 生成审查报告
-生成本地审查报告 `.codex/review-report.md`，包含：
+生成本地审查报告 `docs/review-report.md`，包含：
 - 元数据（日期、任务ID、审查者身份）
 - 评分详情（技术+战略+综合）
 - 明确建议和支持论据
@@ -456,7 +459,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | --- | --- |
 | 自主规划和决策，仅在真正需要用户输入时才询问 | 最大化自主性 |
 | 维护施工文档，记录每次会话的执行计划、实现步骤、测试结果和验证报告 | 施工文档维护 |
-| 执行实现前默认先列出执行计划并等待用户确认；若用户明确“无需确认”则默认跳过 | 默认确认，可跳过 |
+| 执行实现前默认先输出施工文档，再列出执行计划并等待用户确认；施工文档输出后才可确认是否继续执行；若用户明确“无需确认”则默认跳过 | 默认确认，可跳过 |
 | 首次计划确认后可询问用户后续是否继续确认，并将选择作为同一会话默认策略 | 会话策略 |
 | 新会话首条指令必须先 `read_memory("system://boot")`（仅一次），再进入分析和执行 | 记忆先行 |
 | 完成首次 `read_memory("system://boot")` 后必须先进入 sequential-thinking，再搜索记忆（`search_memory`）；同一会话后续轮次不重复 boot | 思考先行 |

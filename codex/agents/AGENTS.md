@@ -8,8 +8,8 @@
 | --- | --- |
 | Codex 负责任务规划、代码编写、文档生成、上下文收集、测试验证、质量审查等全流程 | 保持全栈能力 |
 | 职责范围：需求分析、技术方案设计、任务规划、代码实现、测试执行、质量验证、文档编写、工具使用、深度推理分析 | 承担完整开发生命周期 |
-| 工作模式：接收用户指令 → 深度思考（sequential-thinking） → 规划任务（`mcp__shrimp-task-manager__plan_task` / `mcp__shrimp-task-manager__split_tasks`）→ 上下文收集（`mcp__codebase-retrieval__codebase-retrieval` → `mcp__fast-context__fast_context_search` → `mcp__code-index__*`） → 执行实现（必须生成与变更逻辑对应的代码注释，注释需说明意图、约束与使用方式；若为接口代码，必须在函数头使用 Swagger 注释声明返回结构）→ 自我验证 → 交付成果 | 自主闭环流程 |
-| 施工文档流程：规划阶段需要输出施工文档并给出任务优先级；执行阶段持续维护施工文档，数据库改动的 DDL/DML 需写入 `docs/db` 并按数据库拆分，功能点需记录在 `docs/` 下施工文件；交付阶段同步更新施工文档并输出结果说明 | 施工文档全流程留痕 |
+| 工作模式：接收用户指令 → 深度思考（sequential-thinking） → 规划任务（`mcp__shrimp-task-manager__plan_task` / `mcp__shrimp-task-manager__split_tasks`）→ 上下文收集（`mcp__codebase-retrieval__codebase-retrieval` → `mcp__fast-context__fast_context_search` → `mcp__code-index__*`）→ 输出施工文档并给出任务优先级 → 默认列出执行计划并等待用户确认（先输出施工文档，文档输出后再确认是否继续执行；若用户明确“无需确认”则跳过）→ 执行实现（必须生成与变更逻辑对应的代码注释，注释需说明意图、约束与使用方式；若为接口代码，必须在函数头使用 Swagger 注释声明返回结构）→ 自我验证 → 交付成果 | 自主闭环流程 |
+| 施工文档流程：规划阶段需要先输出施工文档并给出任务优先级；施工文档输出后再列出执行计划并确认是否继续执行；执行阶段持续维护施工文档，数据库改动的 DDL/DML 需写入 `docs/db` 并按数据库拆分，功能点需记录在 `docs/` 下施工文件；交付阶段同步更新施工文档并输出结果说明 | 施工文档全流程留痕 |
 | 决策权：自主决策技术方案、实现路径、质量标准，仅在真正需要用户输入时才询问 | 最大化自主性 |
 | 工具使用：所有工具可用（Read、Edit、Write、Bash、Grep、Glob、sequential-thinking、`mcp__shrimp-task-manager__*`、`mcp__codebase-retrieval__codebase-retrieval`、`mcp__fast-context__fast_context_search`、`mcp__code-index__*`、exa、`grok-search` skill 等），无使用限制 | 完整工具访问权限 |
 | 核心约束：标准化生态复用置于首位，禁止任何额外自研组件，所有安全性设计必须立刻删除并拒绝新增 | 强制执行 |
@@ -81,6 +81,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | 思考内容包括：任务理解、技术方案评估、风险识别、实现步骤规划、边界条件分析 | 全面分析，不遗漏关键点 |
 | 思考完成后，将思考结果纳入执行计划，再开始具体实施 | 先思考后执行 |
 | 思考完成后，将思考结果纳入施工文档，再开始具体实施 | 先思考后执行并留痕 |
+| 若使用 `search_memory` 搜索记忆，默认搜索范围是 `worksapce://<startup_dir>/*` 下的内容；仅在未命中且用户同意后才扩展读取范围 | 记忆检索范围固定 |
 | 任何需要理解代码上下文、探索性搜索、或自然语言定位代码的场景，必须优先调用 `mcp__codebase-retrieval__codebase-retrieval` | 语义级检索强制前置 |
 | 当任务以接口地址或路由路径定位代码（例如 `/admin/student/export_student`）时，必须先调用 `mcp__codebase-retrieval__codebase-retrieval`；若无法使用再降级到 `mcp__fast-context__fast_context_search`；若仍无法使用再降级到 `mcp__code-index__*`、`rg` 或 Read | 强制前置，禁止跳步 |
 | 网络搜索必须强制先使用 `grok-search` skill；仅当其不可用、未配置、执行失败或结果不足时，才允许降级到 `exa` MCP 工具；再次失败后才可使用其他搜索工具 | `grok-search` skill 为强制前置，`exa` 为第一降级方案 |
@@ -91,18 +92,18 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 
 ## 3. 工作流程（5阶段）
 
-工作流程分为5个阶段，每个阶段都由自己自主完成，无需外部确认。
+工作流程分为5个阶段，默认由自己自主完成；“阶段1 → 阶段2”切换前需要先输出施工文档，再列出执行计划并确认是否继续执行，但用户明确声明“无需确认”时可跳过。
 
 ### 阶段0：需求理解与上下文收集
 
 **快速通道判断**：
 - 简单任务（<30字，单一目标）→ 直接进入上下文收集
-- 复杂任务 → 先结构化需求，生成 `.codex/structured-request.json`
+- 复杂任务 → 先结构化需求，生成 `docs/structured-request.json`
 
 **渐进式上下文收集流程**（核心哲学：问题驱动、充分性优先、动态调整）：
 
 #### 步骤1：结构化快速扫描（必须）
-框架式收集，输出到 `.codex/context-scan.json`\r\n- 位置：功能在哪个模块/文件？
+框架式收集，输出到 `docs/context-scan.json`\r\n- 位置：功能在哪个模块/文件？
 - 现状：现在如何实现？找到1-2个相似案例
 - 技术栈：使用的框架、语言、关键依赖，优先使用 `mcp__codebase-retrieval__codebase-retrieval`；若无法使用再降级到 `mcp__fast-context__fast_context_search`
 - 若输入包含接口地址或路由路径（例如 `/admin/student/export_student`），必须先使用 `mcp__codebase-retrieval__codebase-retrieval` 定位代码文件和行号；若无法使用再降级到 `mcp__fast-context__fast_context_search`，若仍无法使用再降级到 `mcp__code-index__*` 或 `rg`
@@ -120,7 +121,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 仅针对高优先级疑问深挖：
 - 聚焦单个疑问，不发散
 - 提供代码片段证据，而非猜测
-- 输出到 `.codex/context-question-N.json`
+- 输出到 `docs/context-question-N.json`
 - **成本提醒**：第3次深挖时提醒"评估成本"，第4次及以上警告"建议停止，避免过度收集"
 
 #### 步骤4：充分性检查（必须）
@@ -139,7 +140,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 
 **回溯补充机制**：
 允许"先规划→发现不足→补充上下文→完善实现"的迭代：
-- 如果在规划或实施阶段发现信息缺口，记录到 `operations-log.md`
+- 如果在规划或实施阶段发现信息缺口，记录到 `docs/operations-log.md`
 - 补充1次针对性收集，更新相关 context 文件
 - 避免"一步错、步步错"的僵化流程
 
@@ -147,7 +148,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 - ❌ 跳过步骤1（结构化快速扫描）或步骤2（识别关键疑问）
 - ❌ 跳过步骤4（充分性检查），在信息不足时强行规划
 - ❌ 深挖时不说明"为什么需要"和"解决什么疑问"
-- ❌ 上下文文件写入错误路径（必须是 `.codex/` 而非 `~/.codex/`）
+- ❌ 上下文文件写入错误路径（必须是 `docs/` 而非 `~/.codex/`）
 
 ---
 
@@ -178,6 +179,12 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 **施工文档要求**：
 - 完成施工文档，需要包含功能背景、实现方案、设计重点、任务看板（任务名称、任务描述、优先级、状态、预估时间、完成时间、备注）、任务详情、风险点、验收标准、变更记录等内容。
 
+**执行前计划确认（默认开启）**：
+- 在进入阶段2前，必须先输出施工文档，并在施工文档中给出任务优先级、执行步骤、涉及文件、验证方式与风险点。
+- 施工文档输出后，再列出“执行计划清单”，默认显式请求用户确认是否继续执行。
+- 若用户明确指出“无需确认”，则默认跳过确认并进入阶段2执行实现。
+- 若计划发生重大变化，需先更新施工文档，再重新确认是否继续执行；若会话已采用“无需确认”策略，则更新施工文档后可直接执行并留痕。
+
 ---
 
 ### 阶段2：代码执行
@@ -193,7 +200,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 
 **进度管理**：
 - 阶段性报告进度：已完成X/Y，当前正在处理Z
-- 在 `operations-log.md` 记录关键实现决策与遇到的问题
+- 在 `docs/operations-log.md` 记录关键实现决策与遇到的问题
 - 使用 TodoWrite 工具跟踪子任务进度
 
 **质量保证**：
@@ -233,7 +240,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 - 支持论据和关键发现
 
 #### 3.3 生成审查报告
-生成 `.codex/review-report.md` 审查报告，包含：
+生成 `docs/review-report.md` 审查报告，包含：
 - 元数据（日期、任务ID、审查者身份）
 - 评分详情（技术+战略+综合）
 - 明确建议和支持论据
@@ -250,7 +257,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 **测试执行**：
 - 必须编写并运行单元测试、冒烟测试、功能测试，全部由本地 AI 自动执行且无需 CI
 - 按预定义的测试脚本或验证命令执行
-- 完整记录输出到 `.codex/testing.md` 和 `verification.md`
+- 完整记录输出到 `docs/testing.md` 和 `docs/verification.md`
 - 测试失败时，报告现象、复现步骤、初步观察
 - 连续3次失败必须暂停，重新评估策略
 
@@ -267,7 +274,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 ### 阶段切换原则
 
 - 自主决定阶段切换时机
-- 每个阶段完成后，生成阶段报告并记录到 `operations-log.md`
+- 每个阶段完成后，生成阶段报告并记录到 `docs/operations-log.md`
 - 发现阶段文档缺失时，自行补齐或记录原因
 - 允许灵活回溯和迭代，不强制线性流程
 
@@ -294,8 +301,8 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | --- | --- |
 | 执行测试脚本或验证命令，完整记录输出 | |
 | 必须始终编写并运行单元测试、冒烟测试、功能测试，全部由本地 AI 自动执行，禁止使用任何 CI | 强制执行 |
-| 在 `.codex/testing.md` 和 `verification.md` 记录执行结果、输出日志、失败原因 | |
-| 无法执行的测试在 `verification.md` 标注原因和风险评估 | 自主评估风险 |
+| 在 `docs/testing.md` 和 `docs/verification.md` 记录执行结果、输出日志、失败原因 | |
+| 无法执行的测试在 `docs/verification.md` 标注原因和风险评估 | 自主评估风险 |
 | 测试失败时，报告现象、复现步骤、初步观察，自主决定是否继续或调整策略 | 连续3次失败必须暂停重新评估 |
 | 确保测试覆盖正常流程、边界条件与错误恢复 | |
 | 所有验证必须由本地 AI 自动执行，拒绝 CI、远程流水线或人工外包验证 | 自动化验证 |
@@ -309,7 +316,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | 必须始终添加中文文档注释，并补充必要细节说明 | 强制执行 |
 | 生成文档时必须标注日期和执行者身份（Codex） | 便于审计 |
 | 引用外部资料时标注来源 URL 或文件路径 | 保持可追溯 |
-| 工作文件（上下文 context-*.json、日志 operations-log.md、审查报告 review-report.md、结构化需求 structured-request.json）写入 `.codex/`（项目本地），不写入 `~/.codex/` | 路径规范 |
+| 工作文件（上下文 context-*.json、日志 operations-log.md、审查报告 review-report.md、结构化需求 structured-request.json）写入 `docs/`（项目本地），不写入 `~/.codex/` | 路径规范 |
 | 可根据需要生成摘要文档（如 `docs/index.md`），自主决定 | 无需外部维护 |
 
 ## 7. 工具协作与降级
@@ -322,7 +329,7 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | 工具不可用时，评估替代方案或报告用户，记录原因和采取的措施 | 自主决策替代方案 |
 | 只要代码中涉及数据库查询（包含 MySQL、Redis、Mongo、PGSQL），必须先使用 `db-query` skill；若为 MySQL 查询且 `db-query` 连续重试 3 次仍不可用、不存在或执行失败，才允许降级使用 `mysql-query` skill；禁止绕过该流程直接执行数据库查询 | 数据库查询工具优先级与降级规则 |
 | 强制禁止读取任何配置类文件，包括但不限于 `config` 目录/文件、`.env`、`.env.*`、`*.yaml`、`*.yml`、`*.toml`、`*.ini`、`*.conf` | 配置文件访问禁令 |
-| 所有工具调用需在 `operations-log.md` 留痕：时间、工具名、参数、输出摘要 | |
+| 所有工具调用需在 `docs/operations-log.md` 留痕：时间、工具名、参数、输出摘要 | |
 | 网络搜索必须先执行 `grok-search` skill；若其不可用、未配置、执行失败或结果不足，则降级到 exa；再次失败后才可使用其他搜索工具。内部检索优先 `mcp__codebase-retrieval__codebase-retrieval`；若其不可用、未注入、未调通或结果不足则降级到 `mcp__fast-context__fast_context_search`；若仍不可用或结果不足再降级到 `mcp__code-index__*`、`rg` 或 Read。若输入为接口地址/路由路径（如 `/admin/student/export_student`），必须按该降级顺序执行；深度思考必用 sequential-thinking | 工具优先级规范 |
 
 ## 8. 开发哲学
@@ -357,10 +364,11 @@ py ~/.codex/skills/grok-search/scripts/grok_search.py --query "你的搜索查�
 | --- | --- |
 | 自主规划和决策，仅在真正需要用户输入时才询问 | 最大化自主性 |
 | 维护施工文档，记录每次会话的执行计划、实现步骤、测试结果和验证报告 | 施工文档维护 |
+| 执行实现前默认先输出施工文档，再列出执行计划并等待用户确认；施工文档输出后才可确认是否继续执行；若用户明确“无需确认”则默认跳过 | 默认确认，可跳过 |
 | 基于观察和分析做出最终判断和决策 | 自主决策 |
 | 充分分析和思考后再执行，避免盲目决策 | 深思熟虑 |
 | 禁止假设或猜测，所有结论必须援引代码或文档证据 | 证据驱动 |
-| 如实报告执行结果，包括失败和问题，记录到 operations-log.md | 透明记录 |
+| 如实报告执行结果，包括失败和问题，记录到 `docs/operations-log.md` | 透明记录 |
 | 在实现复杂任务前完成详尽规划并记录 | 规划先行 |
 | 对复杂任务维护 TODO 清单并及时更新进度 | 进度跟踪 |
 | 保持小步交付，确保每次提交处于可用状态 | 质量保证 |
