@@ -223,6 +223,75 @@ install_file_with_prompt() {
   fi
 }
 
+is_agents_v2_file() {
+  local file_name="$1"
+  [[ "${file_name}" == "AGENTS_v2.md" || "${file_name}" == "AGENTS_MEMORY_v2.md" ]]
+}
+
+prepare_agents_v2_template_payload() {
+  local agent_file_name="$1"
+  local source_mode="$2"
+  local source_value="$3"
+  local repo="$4"
+  local ref="$5"
+  local agents_path="$6"
+  local local_root="$7"
+  local output_file="$8"
+  local template_path=""
+  local template_url=""
+
+  if ! is_agents_v2_file "${agent_file_name}"; then
+    return 1
+  fi
+
+  case "${source_mode}" in
+    source)
+      if [[ "${source_value}" =~ ^https?:// ]]; then
+        template_url="${source_value%/*}/construction_doc_template.md"
+        copy_local_or_url_to_file "${template_url}" "${output_file}"
+      else
+        template_path="$(dirname "${source_value}")/construction_doc_template.md"
+        [[ -f "${template_path}" ]] || return 1
+        cp "${template_path}" "${output_file}"
+      fi
+      ;;
+    github_file)
+      template_path="$(dirname "${source_value}")/construction_doc_template.md"
+      fetch_raw_from_github "${repo}" "${ref}" "${template_path}" "${output_file}"
+      ;;
+    catalog_remote)
+      fetch_raw_from_github "${repo}" "${ref}" "${agents_path}/construction_doc_template.md" "${output_file}"
+      ;;
+    catalog_local)
+      template_path="${local_root}/construction_doc_template.md"
+      [[ -f "${template_path}" ]] || return 1
+      cp "${template_path}" "${output_file}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  [[ -s "${output_file}" ]]
+}
+
+install_agents_v2_template_for_project() {
+  local agent_file_name="$1"
+  local template_payload="$2"
+  local project_template_file="$(pwd)/docs/construction_doc_template.md"
+
+  if ! is_agents_v2_file "${agent_file_name}"; then
+    return 0
+  fi
+
+  if [[ ! -s "${template_payload}" ]]; then
+    echo "警告: 未找到 v2 agent 配套的 construction_doc_template.md，已跳过同步到当前项目 docs/。" >&2
+    return 0
+  fi
+
+  install_file_with_prompt "${project_template_file}" "${template_payload}" "当前项目 docs/construction_doc_template.md"
+}
+
 add_agent_entry() {
   local name="$1"
   local rel_path="$2"
@@ -449,6 +518,7 @@ fi
 
 if [[ "${SOURCE_MODE}" == "source" ]]; then
   tmp_source="$(new_tmp_file)"
+  tmp_template="$(new_tmp_file)"
   copy_local_or_url_to_file "${SOURCE_INPUT}" "${tmp_source}"
 
   if [[ ! -s "${tmp_source}" ]]; then
@@ -460,6 +530,9 @@ if [[ "${SOURCE_MODE}" == "source" ]]; then
   [[ -z "${file_name}" ]] && file_name="AGENTS.md"
   install_file_with_prompt "${TARGET_ROOT}/${TARGET_AGENT_FILE}" "${tmp_source}" "~/.codex/${TARGET_AGENT_FILE}"
   install_file_with_prompt "${PROJECT_TARGET_FILE}" "${tmp_source}" "当前项目 AGENTS.md"
+  if prepare_agents_v2_template_payload "${file_name}" "source" "${SOURCE_INPUT}" "" "" "" "" "${tmp_template}"; then
+    install_agents_v2_template_for_project "${file_name}" "${tmp_template}"
+  fi
   echo "完成。"
   exit 0
 fi
@@ -467,6 +540,7 @@ fi
 if [[ "${SOURCE_MODE}" == "github" && -n "${GITHUB_FILE}" ]]; then
   REMOTE_REPO="$(normalize_github_repo "${GITHUB_REPO}")"
   tmp_source="$(new_tmp_file)"
+  tmp_template="$(new_tmp_file)"
   fetch_raw_from_github "${REMOTE_REPO}" "${GITHUB_REF}" "${GITHUB_FILE}" "${tmp_source}"
 
   if [[ ! -s "${tmp_source}" ]]; then
@@ -477,6 +551,9 @@ if [[ "${SOURCE_MODE}" == "github" && -n "${GITHUB_FILE}" ]]; then
   file_name="$(basename "${GITHUB_FILE}")"
   install_file_with_prompt "${TARGET_ROOT}/${TARGET_AGENT_FILE}" "${tmp_source}" "~/.codex/${TARGET_AGENT_FILE}"
   install_file_with_prompt "${PROJECT_TARGET_FILE}" "${tmp_source}" "当前项目 AGENTS.md"
+  if prepare_agents_v2_template_payload "${file_name}" "github_file" "${GITHUB_FILE}" "${REMOTE_REPO}" "${GITHUB_REF}" "" "" "${tmp_template}"; then
+    install_agents_v2_template_for_project "${file_name}" "${tmp_template}"
+  fi
   echo "完成。"
   exit 0
 fi
@@ -539,6 +616,7 @@ for idx in "${!AGENT_NAMES[@]}"; do
   rel_path="${AGENT_PATHS[idx]}"
   file_name="$(basename "${rel_path}")"
   dest_file="${TARGET_ROOT}/${TARGET_AGENT_FILE}"
+  tmp_template="$(new_tmp_file)"
 
   if [[ -n "${REMOTE_REPO}" ]]; then
     tmp_source="$(new_tmp_file)"
@@ -548,6 +626,9 @@ for idx in "${!AGENT_NAMES[@]}"; do
     fi
     install_file_with_prompt "${dest_file}" "${tmp_source}" "~/.codex/${TARGET_AGENT_FILE}"
     install_file_with_prompt "${PROJECT_TARGET_FILE}" "${tmp_source}" "当前项目 AGENTS.md"
+    if prepare_agents_v2_template_payload "${file_name}" "catalog_remote" "" "${REMOTE_REPO}" "${GITHUB_REF}" "${REMOTE_PATH}" "" "${tmp_template}"; then
+      install_agents_v2_template_for_project "${file_name}" "${tmp_template}"
+    fi
   else
     src_file="${LOCAL_SOURCE_ROOT}/${rel_path}"
     if [[ ! -f "${src_file}" ]]; then
@@ -556,6 +637,9 @@ for idx in "${!AGENT_NAMES[@]}"; do
     fi
     install_file_with_prompt "${dest_file}" "${src_file}" "~/.codex/${TARGET_AGENT_FILE}"
     install_file_with_prompt "${PROJECT_TARGET_FILE}" "${src_file}" "当前项目 AGENTS.md"
+    if prepare_agents_v2_template_payload "${file_name}" "catalog_local" "" "" "" "" "${LOCAL_SOURCE_ROOT}" "${tmp_template}"; then
+      install_agents_v2_template_for_project "${file_name}" "${tmp_template}"
+    fi
   fi
 done
 
