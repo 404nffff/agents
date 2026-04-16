@@ -44,6 +44,7 @@ allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*)/
 2. 再用本 skill 的脚本导入飞书 Cookie 或加载飞书状态
 3. 页面可读后，继续沿用 `$agent-browser` 的标准命令做正文提取、截图和补充交互
 4. 抓取结束后，必须按本 skill 的模板约束在按链接区分的 `docs/feishu_url_xxx/` 目录下生成施工文档
+5. 正式文档产出完成后，必须执行 `agent-browser close` 关闭当前浏览器会话
 
 浏览器执行时默认沿用 `$agent-browser` 的核心节奏：
 
@@ -75,6 +76,8 @@ allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*)/
   - 用途：当前飞书登录态保存到 `codex/skills/feishu-agent-browser/feishu-agent-browser-state.json`
 - `agent-browser --session "$SESSION" state load "$STATE_FILE"`
   - 用途：复用已保存的飞书状态重新打开页面
+- `agent-browser --session "$SESSION" close`
+  - 用途：在正式施工文档、`testing.md`、`verification.md` 等结果文件写入完成后关闭当前飞书浏览会话，避免残留后台 session
 
 如果需要手工补 Cookie，上层脚本本质调用的是这些 `$agent-browser` 方式：
 
@@ -94,6 +97,7 @@ allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*)/
 9. 需要结构判断时再 `snapshot -i`
 10. 需要留图时再 `screenshot`
 11. 需要复用登录态时执行 `state save`
+12. 正式文档与验证文件写入 `docs/feishu_url_<slug>/` 后，执行 `close`
 
 ### 施工文档输出目录规则
 
@@ -176,6 +180,16 @@ agent-browser --session "${FEISHU_AGENT_BROWSER_SESSION:-feishu_cookie}" get tex
 - 不允许自行改名、删减、重排或自由发挥额外结构
 - 正式生成结果必须写入按链接区分的 `docs/feishu_url_<slug>/` 目录
 
+5. 正式文档生成完成后，必须执行收尾关闭命令：
+
+```bash
+XDG_RUNTIME_DIR=/tmp/agent-browser-runtime \
+agent-browser --session "${FEISHU_AGENT_BROWSER_SESSION:-feishu_cookie}" close
+```
+
+- 关闭动作必须发生在 `construction.md`、`testing.md`、`verification.md` 等正式结果已经写入之后
+- 禁止在正文还没提取完、截图还没取证完、文档还没落盘前提前关闭
+
 ### 施工文档内容映射规则
 
 - `1. 需求背景与目标`：只写页面中的需求背景、目标、痛点、收益、适用范围
@@ -238,6 +252,12 @@ agent-browser --session "${FEISHU_AGENT_BROWSER_SESSION:-feishu_cookie}" get tex
 - 自动等待 `networkidle`
 - 输出当前页面标题和 URL，便于快速确认是否进入目标页
 
+### 会话收尾
+
+- `feishu-agent-browser` 的脚本只负责打开页面、保存状态和复用状态，不负责自动关闭会话
+- 当正文提取、截图取证、正式文档生成全部完成后，调用方必须自行执行 `agent-browser --session "$SESSION_NAME" close`
+- 若本次还额外生成了 `testing.md`、`verification.md`、`review-report.md`，也必须在这些文件落盘后再关闭
+
 ## 注意点
 
 - 运行前先检查 `agent-browser` 命令是否存在；若不存在，先自动执行 `npm i -g agent-browser`，安装后仍不存在再报错终止
@@ -250,6 +270,7 @@ agent-browser --session "${FEISHU_AGENT_BROWSER_SESSION:-feishu_cookie}" get tex
 - 施工文档是页面业务内容的结构化重写，不是浏览器执行报告；任何抓取动作、命令结果、截图路径、状态保存记录都不得充当文档主内容
 - 施工文档输出必须严格遵循同目录下的 `本 Skill 末尾的「施工文档模板」`；生成结果必须使用该模板的章节、字段名和顺序，禁止自定义结构
 - 正式生成的计划/施工文档必须写到按链接区分的 `docs/feishu_url_<slug>/` 目录下；`codex/skills/feishu-agent-browser/` 目录只保留模板、样例和脚本，不作为正式结果输出目录
+- 正式结果文件全部写入后，必须执行 `agent-browser --session "$SESSION_NAME" close` 关闭当前会话；不要把飞书浏览 session 长时间挂在后台
 
 ## 施工文档模板
 

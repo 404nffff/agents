@@ -36,10 +36,11 @@ func Query(ctx context.Context, cfg core.RedisConnConfig, queryRaw string, maxRo
 	if err := json.Unmarshal([]byte(queryRaw), &req); err != nil {
 		return nil, nil, core.WrapAppError(core.CodeInvalidQuery, "redis --query must be valid json", err)
 	}
-	cmd := strings.ToUpper(strings.TrimSpace(req.Command))
-	if cmd == "" {
-		return nil, nil, core.NewAppError(core.CodeInvalidQuery, "redis query.command is required")
+	req, err := buildStructuredQuery(req)
+	if err != nil {
+		return nil, nil, err
 	}
+	cmd := req.Command
 	if !slices.Contains(cfg.AllowedCommands, cmd) {
 		return nil, nil, core.NewAppError(
 			core.CodeInvalidQuery,
@@ -90,6 +91,40 @@ func Query(ctx context.Context, cfg core.RedisConnConfig, queryRaw string, maxRo
 			"redis command is configured as allowed but not implemented: "+cmd,
 		)
 	}
+}
+
+func buildStructuredQuery(req queryRequest) (queryRequest, error) {
+	req.Command = strings.ToUpper(strings.TrimSpace(req.Command))
+	if req.Command == "" {
+		return queryRequest{}, core.NewAppError(core.CodeInvalidQuery, "redis query.command is required")
+	}
+
+	switch req.Command {
+	case "GET", "HGETALL", "SMEMBERS", "ZRANGE", "LRANGE":
+		if strings.TrimSpace(req.Key) == "" {
+			return queryRequest{}, core.NewAppError(core.CodeInvalidQuery, fmt.Sprintf("redis %s requires query.key", req.Command))
+		}
+	case "MGET":
+		if len(req.Keys) == 0 && strings.TrimSpace(req.Key) == "" {
+			return queryRequest{}, core.NewAppError(core.CodeInvalidQuery, "redis MGET requires query.keys or comma-separated query.key")
+		}
+	case "HGET":
+		if strings.TrimSpace(req.Key) == "" || strings.TrimSpace(req.Field) == "" {
+			return queryRequest{}, core.NewAppError(core.CodeInvalidQuery, "redis HGET requires query.key and query.field")
+		}
+	case "SCAN":
+		req.Pattern = strings.TrimSpace(req.Pattern)
+		if req.Pattern == "" {
+			req.Pattern = "*"
+		}
+		if req.Count < 0 {
+			return queryRequest{}, core.NewAppError(core.CodeInvalidQuery, "redis SCAN query.count must be greater than or equal to 0")
+		}
+	default:
+		// 其他命令的允许范围继续由配置控制，这里只做已实现命令的必填校验。
+	}
+
+	return req, nil
 }
 
 func runGet(ctx context.Context, client *redis.Client, req queryRequest) ([]string, []map[string]any, error) {

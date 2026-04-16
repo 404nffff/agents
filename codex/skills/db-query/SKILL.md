@@ -17,39 +17,61 @@ description: 使用 Go 打包二进制查询 Redis/MySQL/MongoDB/PostgreSQL。�
 
 ## 快速开始
 
-### 1) MySQL / PostgreSQL（SQL）
+### 1) MySQL / PostgreSQL（统一结构化参数）
 
 ```bash
 ~/.codex/skills/db-query/bin/db-query-linux-amd64 \
   --driver mysql \
   --profile main \
-  --query "SELECT id, name FROM users LIMIT 20"
+  --target users \
+  --fields id,name \
+  --where "status = 'active'" \
+  --sort "id desc" \
+  --limit 20
 ```
 
 ```bash
 ~/.codex/skills/db-query/bin/db-query-linux-amd64 \
   --driver pgsql \
   --profile main \
-  --query "SELECT id, name FROM users LIMIT 20"
+  --target users \
+  --fields id,name \
+  --where "status = 'active'" \
+  --sort "id desc" \
+  --limit 20
 ```
 
-### 2) MongoDB（JSON 查询表达式）
+### 2) MongoDB（推荐结构化参数）
 
 ```bash
 ~/.codex/skills/db-query/bin/db-query-linux-amd64 \
   --driver mongo \
   --profile main \
   --database app_db \
-  --query '{"operation":"find","collection":"users","filter":{"status":"active"},"limit":20}'
+  --target users \
+  --where status:=:active \
+  --where age:>=:18 \
+  --where tag:in:vip,gold \
+  --limit 20
 ```
 
-### 3) Redis（JSON 命令表达式）
+### 3) Redis（统一外层参数）
 
 ```bash
 ~/.codex/skills/db-query/bin/db-query-linux-amd64 \
   --driver redis \
   --profile cache \
-  --query '{"command":"GET","key":"session:123"}'
+  --command GET \
+  --target session:123
+```
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --driver redis \
+  --profile cache \
+  --command SCAN \
+  --target session:* \
+  --limit 50
 ```
 
 ## 平台与 bin 规则（强制）
@@ -68,6 +90,34 @@ description: 使用 Go 打包二进制查询 Redis/MySQL/MongoDB/PostgreSQL。�
 1. 命令行参数（如 `--host/--port/--user/--password/--database/--uri/--addr`）
 2. `--profile` 对应的 profile 变量（例如 `MYSQL_HOST_<profile>`）
 3. `DB_PROFILE` 或 `<DRIVER>_PROFILE`
+
+## 统一参数约定
+
+优先使用以下统一参数名：
+
+- `--target`：SQL 的表名、Mongo 的 collection、Redis 的 key 或 pattern
+- `--fields`：SQL 字段列表、Mongo 投影字段列表
+- `--where`：SQL 条件表达式，或 Mongo 条件 `字段:操作符:值`
+- `--sort`：SQL 排序表达式，或 Mongo 排序（使用 `字段:asc|desc`）
+- `--limit`：结果上限
+- `--query`：原始查询兜底入口
+
+兼容说明：
+
+- SQL 旧参数 `--table`、`--columns`、`--order-by` 仍可用
+- Mongo/Redis 旧 `--query` JSON 仍可用
+- 一旦传入 `--query`，不得再混用结构化参数
+
+### Mongo `--where` 语法
+
+可重复传入，固定格式为 `字段:操作符:值`，首批支持：
+
+- `=`：等值
+- `>`：`$gt`
+- `>=`：`$gte`
+- `<`：`$lt`
+- `<=`：`$lte`
+- `in`：`$in`，值使用逗号分隔
 
 ## 只读限制
 
@@ -107,11 +157,13 @@ description: 使用 Go 打包二进制查询 Redis/MySQL/MongoDB/PostgreSQL。�
 1. 所有调用必须返回 JSON。
 2. 仅允许 `--format json`。
 3. 不支持表格文本输出。
+4. 每次成功输出必须包含 `raw_sql` 字段，用于打印当前驱动对应的原生可读语句；其中 `query` 保留内部统一请求体。
 
 成功输出字段：
 - `driver`
 - `profile`
 - `query`
+- `raw_sql`
 - `row_count`
 - `columns`
 - `rows`

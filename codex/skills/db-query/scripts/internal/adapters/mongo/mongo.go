@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,6 +84,11 @@ func Query(ctx context.Context, cfg core.MongoConnConfig, queryRaw string, maxRo
 	default:
 		return nil, nil, core.NewAppError(core.CodeInvalidQuery, "mongo operation must be find or aggregate")
 	}
+}
+
+// BuildFilterFromWhereClauses 提供给 CLI builder 复用统一的 where 解析逻辑。
+func BuildFilterFromWhereClauses(clauses []string) (map[string]any, error) {
+	return parseWhereClauses(clauses)
 }
 
 func runFind(ctx context.Context, coll *mongo.Collection, req queryRequest, maxRows int) ([]string, []map[string]any, error) {
@@ -195,4 +201,98 @@ func wrapMongoError(code, message string, err error) error {
 	default:
 		return core.WrapAppError(code, message, err)
 	}
+}
+
+func parseWhereClauses(clauses []string) (map[string]any, error) {
+	filter := make(map[string]any)
+	for _, clause := range clauses {
+		field, operator, value, err := parseWhereClause(clause)
+		if err != nil {
+			return nil, err
+		}
+
+		switch operator {
+		case "=":
+			if existing, ok := filter[field]; ok {
+				if _, ok := existing.(map[string]any); ok {
+					return nil, core.NewAppError(core.CodeInvalidArgument, fmt.Sprintf("mongo --where field %s already has operator conditions", field))
+				}
+			}
+			filter[field] = value
+		default:
+			opMap, ok := filter[field].(map[string]any)
+			if !ok {
+				if existing, exists := filter[field]; exists && existing != nil {
+					return nil, core.NewAppError(core.CodeInvalidArgument, fmt.Sprintf("mongo --where field %s already has equality condition", field))
+				}
+				opMap = make(map[string]any)
+			}
+			opMap[operator] = value
+			filter[field] = opMap
+		}
+	}
+	return filter, nil
+}
+
+func parseWhereClause(clause string) (string, string, any, error) {
+	parts := strings.SplitN(strings.TrimSpace(clause), ":", 3)
+	if len(parts) != 3 {
+		return "", "", nil, core.NewAppError(core.CodeInvalidArgument, "mongo --where must use field:operator:value")
+	}
+	field := strings.TrimSpace(parts[0])
+	operator := strings.TrimSpace(parts[1])
+	rawValue := strings.TrimSpace(parts[2])
+	if field == "" || operator == "" {
+		return "", "", nil, core.NewAppError(core.CodeInvalidArgument, "mongo --where must contain non-empty field and operator")
+	}
+
+	switch operator {
+	case "=":
+		return field, operator, parseScalarValue(rawValue), nil
+	case ">":
+		return field, "$gt", parseScalarValue(rawValue), nil
+	case ">=":
+		return field, "$gte", parseScalarValue(rawValue), nil
+	case "<":
+		return field, "$lt", parseScalarValue(rawValue), nil
+	case "<=":
+		return field, "$lte", parseScalarValue(rawValue), nil
+	case "in":
+		items := strings.Split(rawValue, ",")
+		values := make([]any, 0, len(items))
+		for _, item := range items {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			values = append(values, parseScalarValue(item))
+		}
+		if len(values) == 0 {
+			return "", "", nil, core.NewAppError(core.CodeInvalidArgument, "mongo --where in requires at least one value")
+		}
+		return field, "$in", values, nil
+	default:
+		return "", "", nil, core.NewAppError(core.CodeInvalidArgument, fmt.Sprintf("mongo --where operator %s is not supported", operator))
+	}
+}
+
+func parseScalarValue(raw string) any {
+	raw = strings.TrimSpace(raw)
+	lower := strings.ToLower(raw)
+	switch lower {
+	case "true":
+		return true
+	case "false":
+		return false
+	case "null":
+		return nil
+	}
+
+	if i, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		return i
+	}
+	if f, err := strconv.ParseFloat(raw, 64); err == nil {
+		return f
+	}
+	return raw
 }

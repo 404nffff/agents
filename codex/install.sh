@@ -111,7 +111,7 @@ agents_usage() {
 说明:
   1) 本地执行优先扫描本地 codex/agents 目录
   2) 网络请求执行时，先读取远程 codex/agents/README.md 展示可选 agent 文件列表
-  3) 只能单选一个 agent 文件，安装时同时覆盖 ~/.codex/AGENTS.md 与当前项目目录 AGENTS.md
+  3) 只能单选一个 agent 文件，安装时仅覆盖 ~/.codex/AGENTS.md
   4) 可通过 --github / --ref / --agents-path 指定远程来源
   5) 若本地存在同名文件，提示是否覆盖（--yes 自动覆盖）
   6) 兼容单文件安装：可使用 --source 或 --file 直接安装单个文件
@@ -761,7 +761,6 @@ install_agents_main() {
   local local_agents_root="${SCRIPT_DIR}/agents"
   local target_root="${HOME}/.codex"
   local target_agent_file="AGENTS.md"
-  local project_agent_file="$(pwd)/AGENTS.md"
   local tmp_template=""
   local agents_root=""
   local source_label=""
@@ -850,7 +849,6 @@ install_agents_main() {
     dest="${target_root}/${target_agent_file}"
     echo "准备安装 ${file_name} -> ${target_agent_file} ..."
     install_file_with_prompt "${dest}" "${tmp_source}" "~/.codex/${target_agent_file}"
-    install_file_with_prompt "${project_agent_file}" "${tmp_source}" "当前项目 AGENTS.md"
     tmp_template="$(new_tmp_file)"
     if prepare_agents_v2_template_payload "${file_name}" "source" "${source_input}" "" "" "" "" "${tmp_template}"; then
       install_agents_v2_template_for_project "${file_name}" "${tmp_template}"
@@ -872,7 +870,6 @@ install_agents_main() {
     dest="${target_root}/${target_agent_file}"
     echo "准备安装 ${file_name} -> ${target_agent_file} ..."
     install_file_with_prompt "${dest}" "${tmp_source}" "~/.codex/${target_agent_file}"
-    install_file_with_prompt "${project_agent_file}" "${tmp_source}" "当前项目 AGENTS.md"
     tmp_template="$(new_tmp_file)"
     if prepare_agents_v2_template_payload "${file_name}" "github_file" "${github_file}" "${remote_repo}" "${github_ref}" "" "" "${tmp_template}"; then
       install_agents_v2_template_for_project "${file_name}" "${tmp_template}"
@@ -1157,7 +1154,6 @@ install_agents_main() {
     fi
 
     install_file_with_prompt "${dest}" "${src}" "~/.codex/${target_agent_file}"
-    install_file_with_prompt "${project_agent_file}" "${src}" "当前项目 AGENTS.md"
     tmp_template="$(new_tmp_file)"
     if [[ -n "${remote_repo}" ]]; then
       if prepare_agents_v2_template_payload "${file_name}" "catalog_remote" "" "${remote_repo}" "${github_ref}" "${remote_path}" "" "${tmp_template}"; then

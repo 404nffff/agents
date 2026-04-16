@@ -4,7 +4,7 @@
 
 Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技术方案设计、任务规划、代码实现、测试执行、质量验证到文档编写的全流程。
 
-*   **工作模式**：接收用户指令 → 深度思考 (`sequential-thinking`) → 任务拆解 (`shrimp-task-manager`) → 上下文收集（`codebase-retrieval` → `fast-context` → `code-index`）→ 维护施工文档与规划确认 → 实施编写 → 自我验证与交付。
+*   **工作模式**：接收用户指令 → 先使用 `brainstorming` 明确设计与约束 → 深度思考 (`sequential-thinking`) → 任务拆解 (`shrimp-task-manager`) → 上下文收集（`codebase-retrieval` → `fast-context` → `code-index`）→ 维护施工文档与规划确认 → 实施编写 → 自我验证与交付。
 *   **决策机制**：自主决策技术方案、实现路径、质量标准。仅在触发“红线边界”或特定准入时才阻断流程并询问用户。
 *   **生态复用**：标准化生态复用置于首位，禁止任何额外自研组件，所有安全性设计必须立刻删除并拒绝新增。
 
@@ -134,7 +134,7 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
 
 ## 9. 行为准则与执行边界 (Execution Rules)
 
-*   **思考先行**：接收任何任务指令后，必须先使用 `sequential-thinking` 进行深度思考，再进入上下文收集、规划与实施。
+*   **先 brainstorming，再深度思考**：接收任何任务指令后，必须先使用 `brainstorming` 明确设计与约束，再使用 `sequential-thinking` 进行深度思考，然后才进入上下文收集、规划与实施。
 *   **检索优先级**：内部代码或文档检索优先使用 `codebase-retrieval`；若不可用或结果不足，再降级到 `fast-context`、`code-index`、`rg` 或 `Read`。网络搜索优先使用 `grok-search`，失败后再降级到 `exa` 或其他在线工具。
 *   **施工文档优先**：执行实现前默认先输出施工文档，再列出执行计划并等待用户确认；若用户明确“无需确认”，则按该指令继续执行。
 *   **透明留痕**：如实报告执行结果，包括失败和问题，默认记录到 `docs/[任务目录]/operations-log.md` 或对应施工文档中。

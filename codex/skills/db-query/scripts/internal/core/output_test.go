@@ -48,3 +48,26 @@ func TestEncodeJSON_InvalidValue(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestEncodeJSON_SuccessPayloadIncludesRawSQL(t *testing.T) {
+	payload := SuccessPayload{
+		Driver:   "mysql",
+		Profile:  "main",
+		Query:    "SELECT id FROM users LIMIT 1",
+		RawSQL:   "SELECT id FROM users LIMIT 1",
+		RowCount: 1,
+		Rows: []map[string]any{
+			{"id": 1},
+		},
+	}
+
+	data, err := encodeJSON(payload)
+	if err != nil {
+		t.Fatalf("encodeJSON failed: %v", err)
+	}
+
+	got := string(data)
+	if !strings.Contains(got, "\"raw_sql\": \"SELECT id FROM users LIMIT 1\"") {
+		t.Fatalf("expected raw_sql in payload, got: %s", got)
+	}
+}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -91,6 +92,7 @@ func runSQLDriver(startedAt time.Time, driver string, opts cli.Options, envVars 
 			FilePath: filePath,
 			Message:  "检测到 DDL/DML 请求，已生成 SQL 文件，请执行该文件中的 DDL/DML 操作。",
 			Query:    validation.NormalizedSQL,
+			RawSQL:   validation.NormalizedSQL,
 		}
 		if err := core.PrintJSON(payload); err != nil {
 			printErrorAndExit(driver, core.WrapAppError(core.CodeInternalError, "failed to write output", err))
@@ -139,6 +141,7 @@ func runSQLDriver(startedAt time.Time, driver string, opts cli.Options, envVars 
 		Driver:   driver,
 		Profile:  profile,
 		Query:    validation.NormalizedSQL,
+		RawSQL:   validation.NormalizedSQL,
 		RowCount: len(rows),
 		Columns:  columns,
 		Rows:     rows,
@@ -164,7 +167,12 @@ func runMongoDriver(startedAt time.Time, profile string, opts cli.Options, envVa
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	columns, rows, err := mongo.Query(ctx, connCfg, opts.Query, opts.MaxRows)
+	queryRaw, err := buildMongoQuery(opts)
+	if err != nil {
+		printErrorAndExit("mongo", err)
+	}
+
+	columns, rows, err := mongo.Query(ctx, connCfg, queryRaw, opts.MaxRows)
 	if err != nil {
 		printErrorAndExit("mongo", err)
 	}
@@ -172,10 +180,16 @@ func runMongoDriver(startedAt time.Time, profile string, opts cli.Options, envVa
 		printErrorAndExit("mongo", core.NewAppError(core.CodeExecutionError, fmt.Sprintf("query returned %d rows, exceeding --max-rows=%d", len(rows), opts.MaxRows)))
 	}
 
+	rawSQL, err := buildMongoRawSQL(connCfg.Database, queryRaw)
+	if err != nil {
+		rawSQL = queryRaw
+	}
+
 	payload := core.SuccessPayload{
 		Driver:   "mongo",
 		Profile:  profile,
-		Query:    strings.TrimSpace(opts.Query),
+		Query:    queryRaw,
+		RawSQL:   rawSQL,
 		RowCount: len(rows),
 		Columns:  columns,
 		Rows:     rows,
@@ -201,7 +215,12 @@ func runRedisDriver(startedAt time.Time, profile string, opts cli.Options, envVa
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	columns, rows, err := redis.Query(ctx, connCfg, opts.Query, opts.MaxRows)
+	queryRaw, err := buildRedisQuery(opts)
+	if err != nil {
+		printErrorAndExit("redis", err)
+	}
+
+	columns, rows, err := redis.Query(ctx, connCfg, queryRaw, opts.MaxRows)
 	if err != nil {
 		printErrorAndExit("redis", err)
 	}
@@ -209,10 +228,16 @@ func runRedisDriver(startedAt time.Time, profile string, opts cli.Options, envVa
 		printErrorAndExit("redis", core.NewAppError(core.CodeExecutionError, fmt.Sprintf("query returned %d rows, exceeding --max-rows=%d", len(rows), opts.MaxRows)))
 	}
 
+	rawSQL, err := buildRedisRawSQL(queryRaw)
+	if err != nil {
+		rawSQL = queryRaw
+	}
+
 	payload := core.SuccessPayload{
 		Driver:   "redis",
 		Profile:  profile,
-		Query:    strings.TrimSpace(opts.Query),
+		Query:    queryRaw,
+		RawSQL:   rawSQL,
 		RowCount: len(rows),
 		Columns:  columns,
 		Rows:     rows,
@@ -226,10 +251,129 @@ func runRedisDriver(startedAt time.Time, profile string, opts cli.Options, envVa
 }
 
 func resolveSQLQuery(opts cli.Options) (string, error) {
+	if err := validateStructuredQueryConflict("sql", opts); err != nil {
+		return "", err
+	}
 	if strings.TrimSpace(opts.Query) != "" {
 		return strings.TrimSpace(opts.Query), nil
 	}
-	return core.BuildStructuredSQL(opts.Table, opts.Columns, opts.Where, opts.OrderBy, opts.Limit)
+	table := firstNonEmpty(opts.Target, opts.Table)
+	columns := firstNonEmpty(opts.Fields, opts.Columns)
+	whereExpr := firstNonEmpty(strings.TrimSpace(opts.Where), strings.Join(opts.WhereClauses, " AND "))
+	orderBy := firstNonEmpty(opts.Sort, opts.OrderBy)
+	return core.BuildStructuredSQL(table, columns, whereExpr, orderBy, opts.Limit)
+}
+
+func buildMongoQuery(opts cli.Options) (string, error) {
+	if err := validateStructuredQueryConflict("mongo", opts); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(opts.Query) != "" {
+		return strings.TrimSpace(opts.Query), nil
+	}
+
+	collection := firstNonEmpty(opts.Target, opts.Table)
+	if collection == "" {
+		return "", core.NewAppError(core.CodeInvalidArgument, "mongo requires --target or --query")
+	}
+	if strings.TrimSpace(opts.Pipeline) != "" && (len(opts.WhereClauses) > 0 || strings.TrimSpace(opts.Fields) != "" || strings.TrimSpace(opts.Sort) != "") {
+		return "", core.NewAppError(core.CodeInvalidArgument, "mongo --pipeline cannot be used with --where, --fields or --sort")
+	}
+
+	payload := map[string]any{
+		"collection": collection,
+		"limit":      opts.Limit,
+	}
+
+	if strings.TrimSpace(opts.Pipeline) != "" {
+		var pipeline []map[string]any
+		if err := json.Unmarshal([]byte(opts.Pipeline), &pipeline); err != nil {
+			return "", core.WrapAppError(core.CodeInvalidArgument, "mongo --pipeline must be valid json array", err)
+		}
+		payload["operation"] = "aggregate"
+		payload["pipeline"] = pipeline
+		return marshalStructuredQuery(payload)
+	}
+
+	filter, err := mongo.BuildFilterFromWhereClauses(opts.WhereClauses)
+	if err != nil {
+		return "", err
+	}
+	projection, err := parseMongoProjection(firstNonEmpty(opts.Fields, opts.Columns))
+	if err != nil {
+		return "", err
+	}
+	sortExpr, err := parseMongoSort(firstNonEmpty(opts.Sort, opts.OrderBy))
+	if err != nil {
+		return "", err
+	}
+
+	payload["operation"] = "find"
+	payload["filter"] = filter
+	if len(projection) > 0 {
+		payload["projection"] = projection
+	}
+	if len(sortExpr) > 0 {
+		payload["sort"] = sortExpr
+	}
+	return marshalStructuredQuery(payload)
+}
+
+func buildRedisQuery(opts cli.Options) (string, error) {
+	if err := validateStructuredQueryConflict("redis", opts); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(opts.Query) != "" {
+		return strings.TrimSpace(opts.Query), nil
+	}
+
+	command := strings.ToUpper(strings.TrimSpace(opts.Command))
+	if command == "" {
+		return "", core.NewAppError(core.CodeInvalidArgument, "redis requires --command or --query")
+	}
+
+	payload := map[string]any{
+		"command": command,
+	}
+	target := firstNonEmpty(opts.Target, opts.Key)
+
+	switch command {
+	case "SCAN":
+		if strings.TrimSpace(target) != "" {
+			payload["pattern"] = target
+		} else if strings.TrimSpace(opts.Pattern) != "" {
+			payload["pattern"] = opts.Pattern
+		}
+		if opts.Count > 0 {
+			payload["count"] = opts.Count
+		} else if opts.Limit > 0 {
+			payload["count"] = opts.Limit
+		}
+	case "MGET":
+		keys := splitAndTrim(firstNonEmpty(opts.Keys, target))
+		if len(keys) == 0 {
+			return "", core.NewAppError(core.CodeInvalidArgument, "redis MGET requires --target, --keys or --query")
+		}
+		payload["keys"] = keys
+	default:
+		if target != "" {
+			payload["key"] = target
+		}
+		if opts.Field != "" {
+			payload["field"] = opts.Field
+		}
+		if opts.Start != 0 {
+			payload["start"] = opts.Start
+		}
+		if opts.Stop != 0 {
+			payload["stop"] = opts.Stop
+		}
+		if opts.Count > 0 {
+			payload["count"] = opts.Count
+		}
+	}
+
+	return marshalStructuredQuery(payload)
 }
 
 func resolveSQLConnConfig(driver, profile string, opts cli.Options, envVars map[string]string) (core.SQLConnConfig, error) {
@@ -479,4 +623,230 @@ func normalizeMongoStages(items []string) []string {
 		out = append(out, v)
 	}
 	return out
+}
+
+func validateStructuredQueryConflict(driver string, opts cli.Options) error {
+	if strings.TrimSpace(opts.Query) == "" {
+		return nil
+	}
+
+	conflicts := make([]string, 0)
+	addConflict := func(flagName string, enabled bool) {
+		if enabled && !contains(conflicts, flagName) {
+			conflicts = append(conflicts, flagName)
+		}
+	}
+
+	addConflict("--target", strings.TrimSpace(firstNonEmpty(opts.Target, opts.Table)) != "")
+	addConflict("--fields", strings.TrimSpace(firstNonEmpty(opts.Fields, opts.Columns)) != "")
+	addConflict("--where", len(opts.WhereClauses) > 0 || strings.TrimSpace(opts.Where) != "")
+	addConflict("--sort", strings.TrimSpace(firstNonEmpty(opts.Sort, opts.OrderBy)) != "")
+
+	switch driver {
+	case "mongo":
+		addConflict("--pipeline", strings.TrimSpace(opts.Pipeline) != "")
+	case "redis":
+		addConflict("--command", strings.TrimSpace(opts.Command) != "")
+		addConflict("--key", strings.TrimSpace(opts.Key) != "")
+		addConflict("--keys", strings.TrimSpace(opts.Keys) != "")
+		addConflict("--field", strings.TrimSpace(opts.Field) != "")
+		addConflict("--pattern", strings.TrimSpace(opts.Pattern) != "")
+		addConflict("--count", opts.Count != 0)
+		addConflict("--start", opts.Start != 0)
+		addConflict("--stop", opts.Stop != 0)
+	}
+
+	if len(conflicts) == 0 {
+		return nil
+	}
+	return core.NewAppError(core.CodeInvalidArgument, "--query cannot be used with "+strings.Join(conflicts, ", "))
+}
+
+func parseMongoProjection(fields string) (map[string]int, error) {
+	fields = strings.TrimSpace(fields)
+	if fields == "" {
+		return map[string]int{}, nil
+	}
+
+	items := splitAndTrim(fields)
+	if len(items) == 0 {
+		return map[string]int{}, nil
+	}
+
+	projection := make(map[string]int, len(items))
+	for _, item := range items {
+		if !core.IsIdentifier(item) {
+			return nil, core.NewAppError(core.CodeInvalidArgument, fmt.Sprintf("mongo --fields contains invalid field: %s", item))
+		}
+		projection[item] = 1
+	}
+	return projection, nil
+}
+
+func parseMongoSort(sortRaw string) (map[string]int, error) {
+	sortRaw = strings.TrimSpace(sortRaw)
+	if sortRaw == "" {
+		return map[string]int{}, nil
+	}
+	if strings.HasPrefix(sortRaw, "{") || strings.HasPrefix(sortRaw, "[") {
+		return nil, core.NewAppError(core.CodeInvalidArgument, "mongo --sort must use field:asc or field:desc")
+	}
+
+	sortMap := make(map[string]int)
+	for _, item := range splitAndTrim(sortRaw) {
+		parts := strings.SplitN(item, ":", 2)
+		if len(parts) != 2 {
+			return nil, core.NewAppError(core.CodeInvalidArgument, "mongo --sort must use field:asc or field:desc")
+		}
+		field := strings.TrimSpace(parts[0])
+		direction := strings.ToLower(strings.TrimSpace(parts[1]))
+		if !core.IsIdentifier(field) {
+			return nil, core.NewAppError(core.CodeInvalidArgument, fmt.Sprintf("mongo --sort contains invalid field: %s", field))
+		}
+		switch direction {
+		case "asc", "1":
+			sortMap[field] = 1
+		case "desc", "-1":
+			sortMap[field] = -1
+		default:
+			return nil, core.NewAppError(core.CodeInvalidArgument, fmt.Sprintf("mongo --sort direction %s is not supported", direction))
+		}
+	}
+	return sortMap, nil
+}
+
+func marshalStructuredQuery(payload map[string]any) (string, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", core.WrapAppError(core.CodeInternalError, "failed to encode structured query", err)
+	}
+	return string(data), nil
+}
+
+func splitAndTrim(raw string) []string {
+	items := strings.Split(raw, ",")
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+type mongoRawSQLRequest struct {
+	Operation  string           `json:"operation"`
+	Collection string           `json:"collection"`
+	Filter     map[string]any   `json:"filter"`
+	Projection map[string]any   `json:"projection"`
+	Sort       map[string]any   `json:"sort"`
+	Limit      int              `json:"limit"`
+	Pipeline   []map[string]any `json:"pipeline"`
+}
+
+type redisRawSQLRequest struct {
+	Command string   `json:"command"`
+	Key     string   `json:"key"`
+	Keys    []string `json:"keys"`
+	Field   string   `json:"field"`
+	Start   int64    `json:"start"`
+	Stop    int64    `json:"stop"`
+	Pattern string   `json:"pattern"`
+	Count   int64    `json:"count"`
+}
+
+func buildMongoRawSQL(database, queryRaw string) (string, error) {
+	req := mongoRawSQLRequest{}
+	if err := json.Unmarshal([]byte(queryRaw), &req); err != nil {
+		return "", core.WrapAppError(core.CodeInvalidArgument, "mongo raw_sql requires valid query json", err)
+	}
+
+	req.Operation = strings.ToLower(strings.TrimSpace(req.Operation))
+	if req.Operation == "" {
+		req.Operation = "find"
+	}
+	if strings.TrimSpace(req.Collection) == "" {
+		return "", core.NewAppError(core.CodeInvalidArgument, "mongo raw_sql requires collection")
+	}
+
+	base := fmt.Sprintf(`db.getSiblingDB(%q).getCollection(%q)`, database, req.Collection)
+	switch req.Operation {
+	case "find":
+		filterText := renderRawJSON(req.Filter)
+		if filterText == "" {
+			filterText = "{}"
+		}
+		findExpr := base + ".find(" + filterText
+		if len(req.Projection) > 0 {
+			findExpr += ", " + renderRawJSON(req.Projection)
+		}
+		findExpr += ")"
+		if len(req.Sort) > 0 {
+			findExpr += ".sort(" + renderRawJSON(req.Sort) + ")"
+		}
+		if req.Limit > 0 {
+			findExpr += fmt.Sprintf(".limit(%d)", req.Limit)
+		}
+		return findExpr, nil
+	case "aggregate":
+		pipelineText := renderRawJSON(req.Pipeline)
+		if pipelineText == "" {
+			pipelineText = "[]"
+		}
+		return base + ".aggregate(" + pipelineText + ")", nil
+	default:
+		return "", core.NewAppError(core.CodeInvalidArgument, "mongo raw_sql only supports find or aggregate")
+	}
+}
+
+func buildRedisRawSQL(queryRaw string) (string, error) {
+	req := redisRawSQLRequest{}
+	if err := json.Unmarshal([]byte(queryRaw), &req); err != nil {
+		return "", core.WrapAppError(core.CodeInvalidArgument, "redis raw_sql requires valid query json", err)
+	}
+
+	command := strings.ToUpper(strings.TrimSpace(req.Command))
+	if command == "" {
+		return "", core.NewAppError(core.CodeInvalidArgument, "redis raw_sql requires command")
+	}
+
+	switch command {
+	case "GET":
+		return fmt.Sprintf("GET %s", req.Key), nil
+	case "MGET":
+		return "MGET " + strings.Join(req.Keys, " "), nil
+	case "HGET":
+		return fmt.Sprintf("HGET %s %s", req.Key, req.Field), nil
+	case "HGETALL":
+		return fmt.Sprintf("HGETALL %s", req.Key), nil
+	case "SMEMBERS":
+		return fmt.Sprintf("SMEMBERS %s", req.Key), nil
+	case "ZRANGE":
+		return fmt.Sprintf("ZRANGE %s %d %d", req.Key, req.Start, req.Stop), nil
+	case "LRANGE":
+		return fmt.Sprintf("LRANGE %s %d %d", req.Key, req.Start, req.Stop), nil
+	case "SCAN":
+		pattern := req.Pattern
+		if strings.TrimSpace(pattern) == "" {
+			pattern = "*"
+		}
+		if req.Count > 0 {
+			return fmt.Sprintf("SCAN 0 MATCH %s COUNT %d", pattern, req.Count), nil
+		}
+		return fmt.Sprintf("SCAN 0 MATCH %s", pattern), nil
+	default:
+		return "", core.NewAppError(core.CodeInvalidArgument, fmt.Sprintf("redis raw_sql does not support command %s", command))
+	}
+}
+
+func renderRawJSON(value any) string {
+	if value == nil {
+		return ""
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }

@@ -4,6 +4,7 @@ type SuccessPayload struct {
 	Driver   string                 `json:"driver"`
 	Profile  string                 `json:"profile,omitempty"`
 	Query    string                 `json:"query,omitempty"`
+	RawSQL   string                 `json:"raw_sql,omitempty"`
 	RowCount int                    `json:"row_count"`
 	Columns  []string               `json:"columns,omitempty"`
 	Rows     []map[string]any       `json:"rows"`
@@ -26,6 +27,7 @@ type SQLFilePayload struct {
 	FilePath string `json:"file_path"`
 	Message  string `json:"message"`
 	Query    string `json:"query"`
+	RawSQL   string `json:"raw_sql,omitempty"`
 }
 
 type SQLRules struct {
