@@ -11,6 +11,7 @@
 - PostgreSQL
 - MongoDB
 - Redis
+- Elasticsearch
 
 核心目标：
 
@@ -54,6 +55,7 @@
 - PostgreSQL：`PGSQL_*_<profile>`
 - MongoDB：`MONGO_*_<profile>`
 - Redis：`REDIS_*_<profile>`
+- Elasticsearch：`ES_*_<profile>`
 
 ## 快速开始
 
@@ -117,6 +119,27 @@
   --limit 50
 ```
 
+### Elasticsearch
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --driver es \
+  --profile main \
+  --target student_index \
+  --fields name,age \
+  --where status:=:active \
+  --where age:>=:18 \
+  --sort created_at:desc \
+  --limit 20
+```
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --driver es \
+  --profile main \
+  --query '{"query":{"match":{"name":"alice"}},"size":5}'
+```
+
 ### Windows 示例
 
 ```powershell
@@ -134,17 +157,17 @@
 
 优先使用以下统一参数：
 
-- `--target`：SQL 的表名、Mongo 的 collection、Redis 的 key 或 pattern
-- `--fields`：SQL 字段列表、Mongo 投影字段列表
-- `--where`：SQL 条件表达式，或 Mongo 条件 `字段:操作符:值`
-- `--sort`：SQL 排序表达式，或 Mongo 排序 `字段:asc|desc`
+- `--target`：SQL 的表名、Mongo 的 collection、Redis 的 key 或 pattern、ES 的 index
+- `--fields`：SQL 字段列表、Mongo 投影字段列表、ES `_source` 字段列表
+- `--where`：SQL 条件表达式，或 Mongo / ES 条件 `字段:操作符:值`
+- `--sort`：SQL 排序表达式，或 Mongo / ES 排序 `字段:asc|desc`
 - `--limit`：结果上限
 - `--query`：原始查询兜底入口
 
 兼容说明：
 
 - SQL 旧参数 `--table`、`--columns`、`--order-by` 仍可用
-- Mongo / Redis 旧 `--query` JSON 仍可用
+- Mongo / Redis / ES 旧 `--query` JSON 仍可用
 - 只要传入 `--query`，就不能再混用结构化参数
 
 ### Mongo `--where` 语法
@@ -157,6 +180,17 @@ Mongo 结构化条件支持重复传入，固定格式为 `字段:操作符:值`
 - `<`：`$lt`
 - `<=`：`$lte`
 - `in`：`$in`，值用逗号分隔
+
+### Elasticsearch `--where` 语法
+
+Elasticsearch 结构化条件支持重复传入，固定格式为 `字段:操作符:值`，当前支持：
+
+- `=`：`term`
+- `>`：`range.gt`
+- `>=`：`range.gte`
+- `<`：`range.lt`
+- `<=`：`range.lte`
+- `in`：`terms`
 
 ## 输出契约
 
@@ -239,6 +273,31 @@ Mongo 结构化条件支持重复传入，固定格式为 `字段:操作符:值`
 }
 ```
 
+### Elasticsearch 返回示例
+
+```json
+{
+  "driver": "es",
+  "profile": "main",
+  "query": "{\"index\":\"student_index\",\"body\":{\"size\":3}}",
+  "raw_sql": "curl -X POST 'http://127.0.0.1:9200/student_index/_search' -H 'Content-Type: application/json' -d '{\"size\":3}'",
+  "row_count": 1,
+  "columns": ["_id", "_index", "_score", "age", "name"],
+  "rows": [
+    {
+      "_id": "1",
+      "_index": "student_index",
+      "_score": 1,
+      "name": "alice",
+      "age": 18
+    }
+  ],
+  "meta": {
+    "elapsed_ms": 8
+  }
+}
+```
+
 ## 只读边界
 
 ### MySQL / PostgreSQL
@@ -258,6 +317,13 @@ Mongo 结构化条件支持重复传入，固定格式为 `字段:操作符:值`
 
 - 白名单命令：`GET`、`MGET`、`HGET`、`HGETALL`、`SMEMBERS`、`ZRANGE`、`LRANGE`、`SCAN`
 - 禁止写入和高风险命令，例如 `SET`、`DEL`、`EXPIRE`、`EVAL`
+
+### Elasticsearch
+
+- 固定只允许 `POST /<index>/_search`
+- 结构化参数只生成 `_search` body
+- 原始 `--query` 仅允许 JSON body，最终仍会走 `_search`
+- 不支持 index / bulk / update / delete / script 等写操作入口
 
 ## DDL / DML 处理规则
 

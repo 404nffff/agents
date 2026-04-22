@@ -56,3 +56,35 @@ func TestParseKeepsLegacySQLFlags(t *testing.T) {
 		t.Fatalf("expected order by id desc, got %q", opts.OrderBy)
 	}
 }
+
+func TestParseAcceptsESDriverWithUnifiedFlags(t *testing.T) {
+	opts, err := Parse([]string{
+		"--driver", "es",
+		"--target", "student_index",
+		"--fields", "name,age",
+		"--where", "status:=:active",
+		"--sort", "created_at:desc",
+		"--limit", "15",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if opts.Driver != "es" {
+		t.Fatalf("expected driver es, got %q", opts.Driver)
+	}
+	if opts.Target != "student_index" {
+		t.Fatalf("expected target student_index, got %q", opts.Target)
+	}
+	if opts.Fields != "name,age" {
+		t.Fatalf("expected fields name,age, got %q", opts.Fields)
+	}
+	if len(opts.WhereClauses) != 1 || opts.WhereClauses[0] != "status:=:active" {
+		t.Fatalf("expected one where clause, got %#v", opts.WhereClauses)
+	}
+	if opts.Sort != "created_at:desc" {
+		t.Fatalf("expected sort created_at:desc, got %q", opts.Sort)
+	}
+	if opts.Limit != 15 {
+		t.Fatalf("expected limit 15, got %d", opts.Limit)
+	}
+}

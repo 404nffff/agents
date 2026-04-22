@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -87,5 +88,71 @@ func TestBuildRedisRawSQLUsesCommandSyntax(t *testing.T) {
 	want := "SCAN 0 MATCH session:* COUNT 50"
 	if rawSQL != want {
 		t.Fatalf("expected %q, got %q", want, rawSQL)
+	}
+}
+
+func TestBuildESQueryUsesUnifiedFlags(t *testing.T) {
+	query, err := buildESQuery(cli.Options{
+		Target:       "student_index",
+		Fields:       "name,age",
+		WhereClauses: []string{"status:=:active", "age:>=:18"},
+		Sort:         "created_at:desc",
+		Limit:        20,
+	})
+	if err != nil {
+		t.Fatalf("buildESQuery returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(query), &payload); err != nil {
+		t.Fatalf("query must be valid json: %v", err)
+	}
+
+	if payload["index"] != "student_index" {
+		t.Fatalf("expected index student_index, got %#v", payload["index"])
+	}
+
+	body, ok := payload["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected body object, got %#v", payload["body"])
+	}
+	if body["size"] != float64(20) {
+		t.Fatalf("expected size 20, got %#v", body["size"])
+	}
+
+	source, ok := body["_source"].([]any)
+	if !ok || len(source) != 2 || source[0] != "name" || source[1] != "age" {
+		t.Fatalf("expected _source [name age], got %#v", body["_source"])
+	}
+
+	queryExpr, ok := body["query"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected query object, got %#v", body["query"])
+	}
+	boolExpr, ok := queryExpr["bool"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected bool query, got %#v", queryExpr["bool"])
+	}
+	filters, ok := boolExpr["filter"].([]any)
+	if !ok || len(filters) != 2 {
+		t.Fatalf("expected 2 filters, got %#v", boolExpr["filter"])
+	}
+
+	sortExpr, ok := body["sort"].([]any)
+	if !ok || len(sortExpr) != 1 {
+		t.Fatalf("expected one sort expression, got %#v", body["sort"])
+	}
+}
+
+func TestBuildESRawSQLUsesCurlSyntax(t *testing.T) {
+	rawSQL, err := buildESRawSQL("http://127.0.0.1:9200", `{"index":"student_index","body":{"size":3}}`)
+	if err != nil {
+		t.Fatalf("buildESRawSQL returned error: %v", err)
+	}
+	if !strings.Contains(rawSQL, "curl -X POST 'http://127.0.0.1:9200/student_index/_search'") {
+		t.Fatalf("expected curl search command, got %q", rawSQL)
+	}
+	if !strings.Contains(rawSQL, `-d '{"size":3}'`) {
+		t.Fatalf("expected curl body payload, got %q", rawSQL)
 	}
 }

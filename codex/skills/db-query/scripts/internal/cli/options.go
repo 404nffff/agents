@@ -50,7 +50,7 @@ func Parse(args []string) (Options, error) {
 	var whereValues stringSliceFlag
 
 	fs := flag.NewFlagSet("db-query", flag.ContinueOnError)
-	fs.StringVar(&opts.Driver, "driver", "", "database driver: mysql|pgsql|mongo|redis")
+	fs.StringVar(&opts.Driver, "driver", "", "database driver: mysql|pgsql|mongo|redis|es")
 	fs.StringVar(&opts.Profile, "profile", "", "connection profile name")
 	fs.StringVar(&opts.ConfigPath, "config", "", "config.env absolute path")
 	fs.StringVar(&opts.Host, "host", "", "database host")
@@ -117,9 +117,9 @@ func Parse(args []string) (Options, error) {
 	}
 
 	switch opts.Driver {
-	case "mysql", "pgsql", "mongo", "redis":
+	case "mysql", "pgsql", "mongo", "redis", "es":
 	default:
-		return Options{}, core.NewAppError(core.CodeInvalidArgument, "--driver must be one of mysql|pgsql|mongo|redis")
+		return Options{}, core.NewAppError(core.CodeInvalidArgument, "--driver must be one of mysql|pgsql|mongo|redis|es")
 	}
 
 	if opts.Limit <= 0 {

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"db_query/internal/adapters/es"
 	"db_query/internal/adapters/mongo"
 	"db_query/internal/adapters/mysql"
 	"db_query/internal/adapters/pgsql"
@@ -63,6 +64,15 @@ func main() {
 			printErrorAndExit(opts.Driver, core.WrapAppError(core.CodeInvalidConfig, pErr.Error(), pErr))
 		}
 		runRedisDriver(startedAt, profile, opts, envVars)
+	case "es":
+		if configErr != nil {
+			printErrorAndExit(opts.Driver, core.WrapAppError(core.CodeInvalidConfig, configErr.Error(), configErr))
+		}
+		profile, pErr := config.ResolveProfile(opts.Driver, opts.Profile, envVars)
+		if pErr != nil {
+			printErrorAndExit(opts.Driver, core.WrapAppError(core.CodeInvalidConfig, pErr.Error(), pErr))
+		}
+		runESDriver(startedAt, profile, opts, envVars)
 	default:
 		printErrorAndExit(opts.Driver, core.NewAppError(core.CodeInvalidArgument, "unsupported driver"))
 	}
@@ -250,6 +260,58 @@ func runRedisDriver(startedAt time.Time, profile string, opts cli.Options, envVa
 	}
 }
 
+func runESDriver(startedAt time.Time, profile string, opts cli.Options, envVars map[string]string) {
+	connCfg, err := resolveESConnConfig(profile, opts, envVars)
+	if err != nil {
+		printErrorAndExit("es", err)
+	}
+
+	timeout := connCfg.TimeoutSeconds
+	if timeout <= 0 {
+		timeout = core.DefaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	queryRaw, err := buildESQuery(opts)
+	if err != nil {
+		printErrorAndExit("es", err)
+	}
+	canonicalQuery, err := canonicalizeESQuery(connCfg.DefaultIndex, queryRaw)
+	if err != nil {
+		printErrorAndExit("es", err)
+	}
+
+	columns, rows, err := es.Query(ctx, connCfg, canonicalQuery, opts.MaxRows)
+	if err != nil {
+		printErrorAndExit("es", err)
+	}
+	if len(rows) > opts.MaxRows {
+		printErrorAndExit("es", core.NewAppError(core.CodeExecutionError, fmt.Sprintf("query returned %d rows, exceeding --max-rows=%d", len(rows), opts.MaxRows)))
+	}
+
+	rawSQL, err := buildESRawSQL(connCfg.URL, canonicalQuery)
+	if err != nil {
+		rawSQL = canonicalQuery
+	}
+
+	payload := core.SuccessPayload{
+		Driver:   "es",
+		Profile:  profile,
+		Query:    canonicalQuery,
+		RawSQL:   rawSQL,
+		RowCount: len(rows),
+		Columns:  columns,
+		Rows:     rows,
+		Meta: map[string]any{
+			"elapsed_ms": time.Since(startedAt).Milliseconds(),
+		},
+	}
+	if err := core.PrintJSON(payload); err != nil {
+		printErrorAndExit("es", core.WrapAppError(core.CodeInternalError, "failed to write output", err))
+	}
+}
+
 func resolveSQLQuery(opts cli.Options) (string, error) {
 	if err := validateStructuredQueryConflict("sql", opts); err != nil {
 		return "", err
@@ -376,6 +438,55 @@ func buildRedisQuery(opts cli.Options) (string, error) {
 	return marshalStructuredQuery(payload)
 }
 
+func buildESQuery(opts cli.Options) (string, error) {
+	if err := validateStructuredQueryConflict("es", opts); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(opts.Query) != "" {
+		return strings.TrimSpace(opts.Query), nil
+	}
+
+	index := firstNonEmpty(opts.Target, opts.Table)
+	if !isESIndexTarget(index) {
+		return "", core.NewAppError(core.CodeInvalidArgument, "es requires valid --target or configured default index")
+	}
+
+	filterClauses, err := es.BuildFilterFromWhereClauses(opts.WhereClauses)
+	if err != nil {
+		return "", err
+	}
+	sourceFields, err := parseESFields(firstNonEmpty(opts.Fields, opts.Columns))
+	if err != nil {
+		return "", err
+	}
+	sortExpr, err := parseESSort(firstNonEmpty(opts.Sort, opts.OrderBy))
+	if err != nil {
+		return "", err
+	}
+
+	body := map[string]any{
+		"size": opts.Limit,
+	}
+	if len(sourceFields) > 0 {
+		body["_source"] = sourceFields
+	}
+	if len(filterClauses) > 0 {
+		body["query"] = map[string]any{
+			"bool": map[string]any{
+				"filter": filterClauses,
+			},
+		}
+	}
+	if len(sortExpr) > 0 {
+		body["sort"] = sortExpr
+	}
+
+	return marshalStructuredQuery(map[string]any{
+		"index": index,
+		"body":  body,
+	})
+}
+
 func resolveSQLConnConfig(driver, profile string, opts cli.Options, envVars map[string]string) (core.SQLConnConfig, error) {
 	prefix := strings.ToUpper(driver)
 
@@ -491,6 +602,25 @@ func resolveRedisConnConfig(profile string, opts cli.Options, envVars map[string
 		DB:              db,
 		TimeoutSeconds:  timeout,
 		AllowedCommands: allowedCommands,
+	}, nil
+}
+
+func resolveESConnConfig(profile string, opts cli.Options, envVars map[string]string) (core.ESConnConfig, error) {
+	baseURL := firstNonEmpty(opts.URI, config.GetProfileValue(envVars, "ES_URL", profile))
+	user := firstNonEmpty(opts.User, config.GetProfileValue(envVars, "ES_USERNAME", profile))
+	password := firstNonEmpty(opts.Password, config.GetProfileValue(envVars, "ES_PASSWORD", profile))
+	defaultIndex := firstNonEmpty(config.GetProfileValue(envVars, "ES_INDEX", profile))
+	timeout := firstNonZero(opts.Timeout, parseIntDefault(config.GetProfileValue(envVars, "ES_TIMEOUT", profile), 0))
+
+	if strings.TrimSpace(baseURL) == "" {
+		return core.ESConnConfig{}, core.NewAppError(core.CodeInvalidConfig, fmt.Sprintf("es url is required (use --uri or ES_URL_%s)", profile))
+	}
+	return core.ESConnConfig{
+		URL:            strings.TrimRight(baseURL, "/"),
+		User:           user,
+		Password:       password,
+		DefaultIndex:   defaultIndex,
+		TimeoutSeconds: timeout,
 	}, nil
 }
 
@@ -715,6 +845,57 @@ func parseMongoSort(sortRaw string) (map[string]int, error) {
 	return sortMap, nil
 }
 
+func parseESFields(fields string) ([]string, error) {
+	fields = strings.TrimSpace(fields)
+	if fields == "" {
+		return nil, nil
+	}
+
+	items := splitAndTrim(fields)
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if !isESFieldName(item) {
+			return nil, core.NewAppError(core.CodeInvalidArgument, fmt.Sprintf("es --fields contains invalid field: %s", item))
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func parseESSort(sortRaw string) ([]map[string]any, error) {
+	sortRaw = strings.TrimSpace(sortRaw)
+	if sortRaw == "" {
+		return nil, nil
+	}
+	if strings.HasPrefix(sortRaw, "{") || strings.HasPrefix(sortRaw, "[") {
+		return nil, core.NewAppError(core.CodeInvalidArgument, "es --sort must use field:asc or field:desc")
+	}
+
+	out := make([]map[string]any, 0)
+	for _, item := range splitAndTrim(sortRaw) {
+		parts := strings.SplitN(item, ":", 2)
+		if len(parts) != 2 {
+			return nil, core.NewAppError(core.CodeInvalidArgument, "es --sort must use field:asc or field:desc")
+		}
+		field := strings.TrimSpace(parts[0])
+		direction := strings.ToLower(strings.TrimSpace(parts[1]))
+		if !isESFieldName(field) {
+			return nil, core.NewAppError(core.CodeInvalidArgument, fmt.Sprintf("es --sort contains invalid field: %s", field))
+		}
+		switch direction {
+		case "asc", "desc":
+		default:
+			return nil, core.NewAppError(core.CodeInvalidArgument, fmt.Sprintf("es --sort direction %s is not supported", direction))
+		}
+		out = append(out, map[string]any{
+			field: map[string]any{
+				"order": direction,
+			},
+		})
+	}
+	return out, nil
+}
+
 func marshalStructuredQuery(payload map[string]any) (string, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -754,6 +935,11 @@ type redisRawSQLRequest struct {
 	Stop    int64    `json:"stop"`
 	Pattern string   `json:"pattern"`
 	Count   int64    `json:"count"`
+}
+
+type esRawSQLRequest struct {
+	Index string         `json:"index"`
+	Body  map[string]any `json:"body"`
 }
 
 func buildMongoRawSQL(database, queryRaw string) (string, error) {
@@ -840,6 +1026,61 @@ func buildRedisRawSQL(queryRaw string) (string, error) {
 	}
 }
 
+func canonicalizeESQuery(defaultIndex, queryRaw string) (string, error) {
+	queryRaw = strings.TrimSpace(queryRaw)
+	if queryRaw == "" {
+		return "", core.NewAppError(core.CodeInvalidQuery, "es --query is required")
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(queryRaw), &raw); err != nil {
+		return "", core.WrapAppError(core.CodeInvalidQuery, "es --query must be valid json object", err)
+	}
+
+	req := esRawSQLRequest{}
+	hasBody := false
+	if body, ok := raw["body"].(map[string]any); ok {
+		req.Body = body
+		hasBody = true
+	}
+	if index, ok := raw["index"].(string); ok {
+		req.Index = strings.TrimSpace(index)
+	}
+	if !hasBody {
+		req.Body = raw
+	}
+	req.Index = firstNonEmpty(req.Index, defaultIndex)
+
+	if !isESIndexTarget(req.Index) {
+		return "", core.NewAppError(core.CodeInvalidArgument, "es query index is required; use --target for structured query or configure ES_INDEX_<profile>")
+	}
+	if len(req.Body) == 0 {
+		return "", core.NewAppError(core.CodeInvalidQuery, "es query body cannot be empty")
+	}
+	return marshalStructuredQuery(map[string]any{
+		"index": req.Index,
+		"body":  req.Body,
+	})
+}
+
+func buildESRawSQL(baseURL, queryRaw string) (string, error) {
+	req := esRawSQLRequest{}
+	if err := json.Unmarshal([]byte(queryRaw), &req); err != nil {
+		return "", core.WrapAppError(core.CodeInvalidArgument, "es raw_sql requires valid query json", err)
+	}
+	if !isESIndexTarget(req.Index) {
+		return "", core.NewAppError(core.CodeInvalidArgument, "es raw_sql requires index")
+	}
+	if len(req.Body) == 0 {
+		return "", core.NewAppError(core.CodeInvalidArgument, "es raw_sql requires body")
+	}
+	bodyText := renderRawJSON(req.Body)
+	if bodyText == "" {
+		return "", core.NewAppError(core.CodeInvalidArgument, "es raw_sql failed to encode body")
+	}
+	return fmt.Sprintf("curl -X POST '%s/%s/_search' -H 'Content-Type: application/json' -d '%s'", strings.TrimRight(baseURL, "/"), req.Index, bodyText), nil
+}
+
 func renderRawJSON(value any) string {
 	if value == nil {
 		return ""
@@ -849,4 +1090,14 @@ func renderRawJSON(value any) string {
 		return ""
 	}
 	return string(data)
+}
+
+func isESIndexTarget(value string) bool {
+	value = strings.TrimSpace(value)
+	return value != "" && !strings.ContainsAny(value, " /")
+}
+
+func isESFieldName(value string) bool {
+	value = strings.TrimSpace(value)
+	return value != "" && !strings.ContainsAny(value, " ,:/")
 }

@@ -1,6 +1,6 @@
 ---
 name: db-query
-description: 使用 Go 打包二进制查询 Redis/MySQL/MongoDB/PostgreSQL。配置采用 `<DRIVER>_*_<profile>` 多库模式（例如 `MYSQL_HOST_main`、`REDIS_ADDR_cache`），通过 `--profile` 或 `DB_PROFILE` 选择。默认只允许只读查询，并强制输出 JSON。
+description: 使用 Go 打包二进制查询 Redis/MySQL/MongoDB/PostgreSQL/Elasticsearch。配置采用 `<DRIVER>_*_<profile>` 多库模式（例如 `MYSQL_HOST_main`、`REDIS_ADDR_cache`、`ES_URL_main`），通过 `--profile` 或 `DB_PROFILE` 选择。默认只允许只读查询，并强制输出 JSON。
 ---
 
 # DB Query
@@ -74,6 +74,27 @@ description: 使用 Go 打包二进制查询 Redis/MySQL/MongoDB/PostgreSQL。�
   --limit 50
 ```
 
+### 4) Elasticsearch（结构化参数或原始 DSL）
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --driver es \
+  --profile main \
+  --target student_index \
+  --fields name,age \
+  --where status:=:active \
+  --where age:>=:18 \
+  --sort created_at:desc \
+  --limit 20
+```
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --driver es \
+  --profile main \
+  --query '{"query":{"match":{"name":"alice"}},"size":5}'
+```
+
 ## 平台与 bin 规则（强制）
 
 `bin` 目录需要保留两个版本：
@@ -95,17 +116,17 @@ description: 使用 Go 打包二进制查询 Redis/MySQL/MongoDB/PostgreSQL。�
 
 优先使用以下统一参数名：
 
-- `--target`：SQL 的表名、Mongo 的 collection、Redis 的 key 或 pattern
-- `--fields`：SQL 字段列表、Mongo 投影字段列表
-- `--where`：SQL 条件表达式，或 Mongo 条件 `字段:操作符:值`
-- `--sort`：SQL 排序表达式，或 Mongo 排序（使用 `字段:asc|desc`）
+- `--target`：SQL 的表名、Mongo 的 collection、Redis 的 key 或 pattern、ES 的 index
+- `--fields`：SQL 字段列表、Mongo 投影字段列表、ES `_source` 字段列表
+- `--where`：SQL 条件表达式，或 Mongo / ES 条件 `字段:操作符:值`
+- `--sort`：SQL 排序表达式，或 Mongo / ES 排序（使用 `字段:asc|desc`）
 - `--limit`：结果上限
 - `--query`：原始查询兜底入口
 
 兼容说明：
 
 - SQL 旧参数 `--table`、`--columns`、`--order-by` 仍可用
-- Mongo/Redis 旧 `--query` JSON 仍可用
+- Mongo / Redis / ES 旧 `--query` JSON 仍可用
 - 一旦传入 `--query`，不得再混用结构化参数
 
 ### Mongo `--where` 语法
@@ -118,6 +139,17 @@ description: 使用 Go 打包二进制查询 Redis/MySQL/MongoDB/PostgreSQL。�
 - `<`：`$lt`
 - `<=`：`$lte`
 - `in`：`$in`，值使用逗号分隔
+
+### Elasticsearch `--where` 语法
+
+可重复传入，固定格式为 `字段:操作符:值`，首批支持：
+
+- `=`：`term`
+- `>`：`range.gt`
+- `>=`：`range.gte`
+- `<`：`range.lt`
+- `<=`：`range.lte`
+- `in`：`terms`
 
 ## 只读限制
 
@@ -136,6 +168,13 @@ description: 使用 Go 打包二进制查询 Redis/MySQL/MongoDB/PostgreSQL。�
 
 1. 白名单命令：`GET`、`MGET`、`HGET`、`HGETALL`、`SMEMBERS`、`ZRANGE`、`LRANGE`、`SCAN`
 2. 禁止写入和高风险命令（例如 `SET`、`DEL`、`EXPIRE`、`EVAL`）
+
+### Elasticsearch
+
+1. 固定只允许 `POST /<index>/_search`
+2. 结构化参数只生成 `_search` body
+3. 原始 `--query` 仅允许 JSON body，最终仍会走 `_search`
+4. 禁止 index / bulk / update / delete / script 等写操作入口
 
 ### 6) DDL/DML 请求处理规则（强制）
 

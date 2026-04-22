@@ -70,3 +70,11 @@ type RedisConnConfig struct {
 	TimeoutSeconds  int
 	AllowedCommands []string
 }
+
+type ESConnConfig struct {
+	URL            string
+	User           string
+	Password       string
+	DefaultIndex   string
+	TimeoutSeconds int
+}
