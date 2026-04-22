@@ -28,6 +28,7 @@
 | finishing-a-development-branch | superpowers/finishing-a-development-branch | 当实现已完成、测试全通过，且需要决定如何集成这项工作时使用；通过结构化选项指导合并、提 PR 或清理收尾。 |
 | receiving-code-review | superpowers/receiving-code-review | 在收到代码评审反馈、尤其反馈不清晰或技术上可疑时，在落实建议前使用；强调技术严谨与验证，而非形式化认同或盲目照做。 |
 | requesting-code-review | superpowers/requesting-code-review | 在任务完成、实现重大功能或合并前，为确认工作满足需求时使用。 |
+| software-dev-process | software-dev-process | 管理完整的软件开发生命周期（需求理解、概要设计、详细设计、施工实现、测试与排查）。用于通过 `sdlc-design-1`、`sdlc-design-2`、`sdlc-implement`、`sdlc-test`、`sdlc-debug` 分阶段驱动任务，或通过 `sdlc-solo` 全自动执行剩余流程。 |
 | subagent-driven-development | superpowers/subagent-driven-development | 当在当前会话中执行包含独立任务的实现计划时使用。 |
 | systematic-debugging | superpowers/systematic-debugging | 在遇到任何 bug、测试失败或异常行为时，在提出修复方案前使用。 |
 | test-driven-development | superpowers/test-driven-development | 在实现任何功能或修复 bug 时、在编写实现代码前使用。 |
