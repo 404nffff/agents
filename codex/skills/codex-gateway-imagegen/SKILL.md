@@ -1,95 +1,114 @@
 ---
 name: codex-gateway-imagegen
-description: Generate raster images through the Responses-compatible gateway already configured for Codex, then save the result into the current workspace. Use when a user asks for image generation in Codex CLI, wants the output as a local file, or when the built-in image path is unavailable and the session must call the configured gateway directly.
+description: 当用户在 Codex CLI 中要求生成图片、希望把图片保存为本地文件，或内置图像链路不可用而需要改走 Responses 兼容网关时使用。
 ---
 
 # Codex Gateway Imagegen
 
-Use this skill to turn a prompt into an image file through the gateway defined in the skill-local `.env` file.
+这个 skill 用于把提示词通过 skill 本地 `.env` 中定义的网关配置，生成或编辑为图片文件。
 
-It supports both:
+它同时支持：
 
-- text-to-image generation
-- image editing with one or more reference images
+- 文生图
+- 基于一张或多张参考图的图片编辑
 
-## Quick Start
+## 快速开始
 
-1. Before writing the final prompt, optionally check `references/prompt.md` as a style reference library when the user needs help choosing a visual style.
-2. Confirm whether the user wants generation or editing, then confirm the output path.
-3. Choose a size that matches the target:
-   - Square image: `1024x1024`
-   - Portrait / phone screenshot: `1024x1536`
-   - Landscape: `1536x1024`
-4. Copy `codex/skills/codex-gateway-imagegen/.env.example` to `codex/skills/codex-gateway-imagegen/.env` and fill in the real gateway values.
-5. Run `scripts/generate_gateway_image.py`.
-6. If the request fails inside the sandbox with TLS, schannel, or read-timeout errors, rerun the same command with escalated host-network access.
-7. Report the saved file path.
+1. 先确认用户要的是文生图还是改图，并确认输出路径。
+2. 先让用户用自己的话描述主体、场景和画面方向。
+3. 只有当用户需要灵感、对比或候选风格时，才按需使用 `references/prompt.md` 作为风格参考库。
+4. 选择合适尺寸：
+   - 方图：`1024x1024`
+   - 竖图 / 手机截图：`1024x1536`
+   - 横图：`1536x1024`
+5. 把 `codex/skills/codex-gateway-imagegen/.env.example` 复制为 `codex/skills/codex-gateway-imagegen/.env`，并填入真实网关配置。
+6. 执行 `scripts/generate_gateway_image.py`。
+7. 如果沙箱内请求因 TLS、schannel 或 read-timeout 失败，用同样参数在更高网络权限下重试。
+8. 向用户回报最终图片保存路径。
 
-## Workflow
+## 工作流
 
-### 1. Use the style reference when helpful
+### 1. 先接收用户自然语言里的风格描述
 
-`references/prompt.md` is a style reference library, not a mandatory gate.
+默认流程：
 
-Use it in these cases:
+- 先问清用户要生成什么或修改什么
+- 如果主体、场景、情绪还不清楚，就继续补问
+- 直接接受用户给出的风格描述，例如 `动漫风`、`电影感`、`极简海报`、`高级科技感`
+- 当用户的风格方向已经足够清晰时，直接开始写 prompt
 
-- the user says they are unsure about the visual style
-- the user wants you to recommend a few visual directions
-- the user gives a broad request such as `做得高级一点`、`偏二次元一点`、`来几个风格方案`
-- you want a stable numbered list so the user can pick quickly
+风格编号不是强制要求。
 
-You do not need to force style-number confirmation when:
+用户可以通过以下任一种方式提供风格信息：
 
-- the user has already given a clear style direction
-- the task is simple and the style is already obvious from the request
-- the user wants you to proceed directly without extra back-and-forth
+- 直接给关键词或自然语言风格描述
+- 从 `references/prompt.md` 里选择编号
 
-Recommended interaction pattern when you decide to use the reference:
+### 2. 需要时再使用风格参考库
+
+`references/prompt.md` 是风格参考库，不是强制门槛。
+
+适合使用它的场景：
+
+- 用户明确说自己没想好画风
+- 用户希望你推荐几个方向
+- 用户给的是宽泛要求，例如 `做得高级一点`、`偏二次元一点`、`来几个风格方案`
+- 你希望给出一组稳定的编号候选，方便用户快速选择
+
+以下情况不要主动要求编号：
+
+- 用户已经给了明确风格
+- 任务很简单，风格从需求里已经很明显
+- 用户希望你直接继续，不想来回确认太多轮
+
+当你决定使用参考库时，建议这样和用户交互：
 
 ```markdown
-如果你还没想好画风，我可以按 `codex/skills/codex-gateway-imagegen/references/prompt.md` 里的风格库先给你推荐几个编号，你选一个就行，例如：`03`、`19`、`25`。
+如果你还没想好画风，我可以先给你推荐几种方向，也可以按 `codex/skills/codex-gateway-imagegen/references/prompt.md` 里的风格库给你几个编号做参考。
 
-如果你已经有明确风格，也可以直接告诉我关键词，我可以跳过编号直接出 prompt。
+如果你已经有明确风格，也可以直接告诉我关键词，我就按你的描述直接写 prompt。
 ```
 
-If the user gives multiple numbers, combine those styles in the final prompt with a clear primary style and secondary accents.
+如果用户给了多个编号，在最终 prompt 里要明确主风格和辅助风格。
 
-### 2. Shape the prompt
+### 3. 组织 prompt
 
-Write the prompt as a production spec, not a fragment. Include:
+写 prompt 时，不要写成零散碎片，要写成接近成片制作说明的形式。至少包含：
 
-- Subject
-- Scene
-- Visual style
-- Composition
-- Lighting
-- Output cues such as `livestream screenshot`, `poster`, `photorealistic`, `9:16 vertical`
-- UI overlays or exact on-screen elements when needed
+- 主体
+- 场景
+- 视觉风格
+- 构图
+- 光线
+- 输出特征，例如 `livestream screenshot`、`poster`、`photorealistic`、`9:16 vertical`
+- 如果需要，也要写清楚 UI 覆盖层或屏幕元素
 
-If the user wants a live-app screenshot feel, say so explicitly and describe the overlays.
+如果用户想要“真实 App 截图感”，必须明确写出截图感，并描述画面里的覆盖元素。
 
-If the user wants editing, also describe:
+如果用户要的是改图，还要额外描述：
 
-- what should stay close to the reference image
-- what should change
-- whether the edit is loose restyling or high-fidelity preservation
+- 哪些部分要尽量贴近参考图
+- 哪些部分需要修改
+- 是偏自由改风格，还是偏高保真保留原图结构
 
-If a style number is selected from `references/prompt.md`, map it back to the style keywords and include both the Chinese style intent and the English keywords in the final prompt.
+如果用户是从 `references/prompt.md` 里选了编号，要把对应的风格关键词映射回 prompt，并同时写入中文风格意图和英文关键词。
 
-### 3. Pick a legal size
+如果用户直接给的是风格关键词而不是编号，就直接使用用户原始表述，并把它扩写成可执行的 prompt。
 
-Default to `1024x1024` unless the composition clearly needs another aspect ratio.
+### 4. 选择合法尺寸
 
-Known-good sizes from this workflow:
+默认使用 `1024x1024`，除非构图明显更适合其他比例。
+
+这个流程里已经验证过的常用尺寸：
 
 - `1024x1024`
 - `1024x1536`
 
-If the gateway returns an error like `Invalid size ... below the current minimum pixel budget`, increase the requested size instead of retrying the same one.
+如果网关返回类似 `Invalid size ... below the current minimum pixel budget` 的错误，不要重复原尺寸重试，直接增大尺寸。
 
-### 4. Generate with the helper script
+### 5. 用脚本发起请求
 
-Create `codex/skills/codex-gateway-imagegen/.env` first. The fastest path is copying `.env.example`:
+先准备 `codex/skills/codex-gateway-imagegen/.env`。最快的方式是从 `.env.example` 复制：
 
 ```dotenv
 OPENAI_BASE_URL=https://your-gateway.example.com/v1
@@ -100,94 +119,94 @@ GATEWAY_IMAGEGEN_SIZE=1024x1024
 GATEWAY_IMAGEGEN_ACTION=auto
 ```
 
-Variable notes:
+变量说明：
 
-- `OPENAI_BASE_URL`: required, the gateway base URL without the trailing `/responses`
-- `OPENAI_API_KEY`: required
-- `GATEWAY_IMAGEGEN_MODEL`: optional default model
-- `GATEWAY_IMAGEGEN_TIMEOUT`: optional default timeout in seconds
-- `GATEWAY_IMAGEGEN_SIZE`: optional default size
-- `GATEWAY_IMAGEGEN_ACTION`: optional default action, one of `auto|generate|edit`
+- `OPENAI_BASE_URL`：必填，网关基础地址，不要带 `/responses`
+- `OPENAI_API_KEY`：必填
+- `GATEWAY_IMAGEGEN_MODEL`：可选，默认模型
+- `GATEWAY_IMAGEGEN_TIMEOUT`：可选，请求超时秒数
+- `GATEWAY_IMAGEGEN_SIZE`：可选，默认尺寸
+- `GATEWAY_IMAGEGEN_ACTION`：可选，默认动作，可选 `auto|generate|edit`
 
-Priority:
+优先级：
 
-- CLI arguments override environment variables and `.env`
-- Process environment variables override values from `.env`
-- `.env` provides the default local configuration for this skill
+- 命令行参数覆盖环境变量和 `.env`
+- 进程环境变量覆盖 `.env`
+- `.env` 作为这个 skill 的默认本地配置
 
-For text-to-image:
+文生图示例：
 
 ```powershell
 python scripts/generate_gateway_image.py --prompt "<prompt>" --out "<output-path>" --size 1024x1024
 ```
 
-For image editing with a local reference image:
+本地参考图改图示例：
 
 ```powershell
 python scripts/generate_gateway_image.py --prompt "<prompt>" --image "<reference-image>" --action edit --out "<output-path>" --size 1024x1536
 ```
 
-For image editing with multiple references:
+多参考图改图示例：
 
 ```powershell
 python scripts/generate_gateway_image.py --prompt "<prompt>" --image "<reference-1>" --image "<reference-2>" --action edit --out "<output-path>" --size 1024x1536
 ```
 
-Optional inputs:
+可选参数：
 
-- `--image <path>`: local reference image, repeatable
-- `--image-url <url>`: remote reference image, repeatable
-- `--mask <path>`: local mask image for targeted edit regions
-- `--action auto|generate|edit`: defaults to `auto`
-- `--env-file <path>`: optional custom env file path, useful if you want to point to a file such as `.evn` or a task-specific config
+- `--image <path>`：本地参考图，可重复传入
+- `--image-url <url>`：远程参考图，可重复传入
+- `--mask <path>`：局部编辑的蒙版图
+- `--action auto|generate|edit`：默认 `auto`
+- `--env-file <path>`：自定义 env 文件路径，可用于任务级配置
 
-The script:
+脚本行为：
 
-- Reads `.env` from the skill root by default
-- Resolves `OPENAI_BASE_URL` and `OPENAI_API_KEY` from `.env` or process environment
-- Calls `/responses`
-- Uses `model="gpt-5.4"` by default, or the value from `GATEWAY_IMAGEGEN_MODEL`
-- Requests the `image_generation` tool with `action=auto|generate|edit`
-- Sends prompt text as `input_text`
-- Sends reference images as `input_image`
-- Sends an optional mask as `input_image_mask`
-- Decodes the returned base64 image and writes the output file
+- 默认从 skill 根目录读取 `.env`
+- 从 `.env` 或进程环境变量解析 `OPENAI_BASE_URL` 和 `OPENAI_API_KEY`
+- 调用 `/responses`
+- 默认使用 `model="gpt-5.4"`，也可以从 `GATEWAY_IMAGEGEN_MODEL` 覆盖
+- 通过 `image_generation` 工具发起 `action=auto|generate|edit`
+- 把 prompt 文本作为 `input_text`
+- 把参考图作为 `input_image`
+- 把可选蒙版作为 `input_image_mask`
+- 把返回的 base64 图片解码并写入输出文件
 
-Important:
+重要说明：
 
-- The Responses `model` remains the main model such as `gpt-5.4`
-- Image generation and editing are performed through the `image_generation` tool
-- For editing, prefer `--action edit` and include at least one `--image`
+- Responses 的主模型仍然是 `gpt-5.4` 这类文本模型
+- 真正的出图和改图由 `image_generation` 工具完成
+- 做编辑时，优先使用 `--action edit` 并至少提供一张 `--image`
 
-### 5. Handle the common failure modes
+### 6. 处理常见失败场景
 
-If the call fails inside the sandbox with networking or TLS symptoms such as:
+如果请求在沙箱里出现这类网络或 TLS 症状：
 
 - `Authentication failed, see inner exception`
 - `schannel: AcquireCredentialsHandle failed`
 - `The read operation timed out`
 
-then treat that as an environment-path problem first, not necessarily a gateway problem. Rerun the same script outside the sandbox with escalated host-network access.
+优先判断为环境链路问题，不要先怀疑网关本身。用同样参数在更高网络权限下重新执行脚本。
 
-If the call reaches the gateway and returns an HTTP error body, inspect the body before changing the prompt.
+如果请求已经到达网关并返回了 HTTP 错误体，先看错误体，再决定要不要改 prompt。
 
-If the result ignores the reference image too loosely:
+如果结果对参考图的遵循太弱：
 
-- strengthen the prompt with explicit preservation instructions
-- switch from `auto` to `edit`
-- use a mask when only part of the image should change
+- 增强 prompt 里的“保留原图”约束
+- 从 `auto` 改成 `edit`
+- 如果只是局部改动，使用 mask
 
-### 6. Save outputs deliberately
+### 7. 明确保存输出文件
 
-If the user asked for an image for the current task, save it directly into the current workspace with a descriptive name such as:
+如果这是当前任务要交付的图片，直接保存到当前工作区，并使用有语义的文件名，例如：
 
 - `hero_poster.png`
 - `livestream_vertical_v2.png`
 - `product_mockup_square.png`
 
-Do not leave the final asset only in a temp location.
+不要把最终产物只留在临时目录里。
 
-## References
+## 参考资料
 
-- `references/prompt.md` is an optional style reference library. Use it when the user needs inspiration, comparison, or a numbered style shortlist.
-- Read `references/troubleshooting.md` when the request fails and you need the quick decision tree.
+- `references/prompt.md` 是可选风格参考库，适合在用户需要灵感、比较或编号候选时使用。
+- 当请求失败、需要快速判断问题类型时，读取 `references/troubleshooting.md`。
