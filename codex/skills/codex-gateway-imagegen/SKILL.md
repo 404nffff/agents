@@ -14,7 +14,7 @@ It supports both:
 
 ## Quick Start
 
-1. Before writing any prompt, read `references/prompt.md`, show the style list to the user, and ask the user to reply with the desired style number.
+1. Before writing the final prompt, optionally check `references/prompt.md` as a style reference library when the user needs help choosing a visual style.
 2. Confirm whether the user wants generation or editing, then confirm the output path.
 3. Choose a size that matches the target:
    - Square image: `1024x1024`
@@ -27,32 +27,32 @@ It supports both:
 
 ## Workflow
 
-### 1. Ask for the style number first
+### 1. Use the style reference when helpful
 
-This step is mandatory for every image request.
+`references/prompt.md` is a style reference library, not a mandatory gate.
 
-Before you draft the final prompt, you must:
+Use it in these cases:
 
-- read `references/prompt.md`
-- show the numbered style list to the user
-- ask the user to reply with one or more style numbers
-- wait for the user's answer before generating the final prompt
+- the user says they are unsure about the visual style
+- the user wants you to recommend a few visual directions
+- the user gives a broad request such as `做得高级一点`、`偏二次元一点`、`来几个风格方案`
+- you want a stable numbered list so the user can pick quickly
 
-Required interaction rules:
+You do not need to force style-number confirmation when:
 
-- Even if the user already says something like `动漫风` or `赛博朋克`, still show the style list and ask for the number to confirm
-- If the user gives multiple numbers, combine those styles in the final prompt with a clear primary style and secondary accents
-- If the user says `不确定`, recommend 3 suitable numbers based on the task, then ask the user to pick one
+- the user has already given a clear style direction
+- the task is simple and the style is already obvious from the request
+- the user wants you to proceed directly without extra back-and-forth
 
-Use this reply pattern:
+Recommended interaction pattern when you decide to use the reference:
 
 ```markdown
-先选画风编号。请从 `codex/skills/codex-gateway-imagegen/references/prompt.md` 的风格列表里回复编号，例如：`03`、`19`、`25`。
+如果你还没想好画风，我可以按 `codex/skills/codex-gateway-imagegen/references/prompt.md` 里的风格库先给你推荐几个编号，你选一个就行，例如：`03`、`19`、`25`。
 
-如果你不确定，我可以先根据你的用途推荐 3 个编号给你选。
+如果你已经有明确风格，也可以直接告诉我关键词，我可以跳过编号直接出 prompt。
 ```
 
-When presenting the style list, tell the user the list comes from `references/prompt.md`, and ask them to input the number directly.
+If the user gives multiple numbers, combine those styles in the final prompt with a clear primary style and secondary accents.
 
 ### 2. Shape the prompt
 
@@ -74,7 +74,7 @@ If the user wants editing, also describe:
 - what should change
 - whether the edit is loose restyling or high-fidelity preservation
 
-When a style number is selected, map it back to the style keywords in `references/prompt.md` and include both the Chinese style intent and the English keywords in the final prompt.
+If a style number is selected from `references/prompt.md`, map it back to the style keywords and include both the Chinese style intent and the English keywords in the final prompt.
 
 ### 3. Pick a legal size
 
@@ -189,5 +189,5 @@ Do not leave the final asset only in a temp location.
 
 ## References
 
-- Read `references/prompt.md` before every image generation request and use it as the canonical style-number list shown to the user.
+- `references/prompt.md` is an optional style reference library. Use it when the user needs inspiration, comparison, or a numbered style shortlist.
 - Read `references/troubleshooting.md` when the request fails and you need the quick decision tree.

@@ -1,7 +1,29 @@
-请用表格/宫格的方式（每行 5 格）整齐排版下面的的全部风格，并且每个格子都生成一个最具风格代表的案例，然后将「01 像素艺术 Pixel Art」小字放到左上（直接写在案例图上）、简述的「Retro game aesthetic」则在案例图下单开一列白色作为注解（排版与宫格的小标题左对齐）、所有注解的小栅格高度都一样，字体大小也一样，若有字数多到溢出的则用「…」截断即可，视觉整齐比完整的文本注释更重要。全幅的宫格大小都是相同整齐的。
+# 画风参考库
+
+这个文件是 `codex-gateway-imagegen` 的可选画风参考清单。
+
+用途：
+
+- 当用户还没想好画风时，可以把这份清单展示给用户
+- 当你想快速给用户几个方向时，可以直接推荐编号
+- 当用户已经明确说了风格时，可以跳过编号，直接写 prompt
+
+推荐对用户的说明方式：
+
+```markdown
+如果你还没想好画风，可以直接从下面选编号，或者直接告诉我你想要的风格关键词。
+例如：`03`、`19`、`25`。
+```
+
+使用建议：
+
+- 优先推荐 2 到 3 个编号，不要一次把 50 个全甩给用户
+- 如果用户只给一个宽泛目标，例如“高级一点”“梦幻一点”，先从表里挑 3 个最接近的编号给他选
+- 如果用户选择多个编号，最终 prompt 里要明确主风格和辅助风格
+- 最终生成 prompt 时，优先带上英文关键词
 
 | # | 风格名 | 英文关键词 | 简述 |
-|---|--------|-----------|------|
+| --- | --- | --- | --- |
 | 01 | 像素艺术 | Pixel Art | Retro game aesthetic |
 | 02 | 8位风 | 8-Bit | Classic console vibes |
 | 03 | 动漫风 | Anime | Clean lines, vibrant |
@@ -45,7 +67,7 @@
 | 41 | 体素风 | Voxel | 3D pixel blocks |
 | 42 | 水粉画 | Gouache | Opaque, matte painterly |
 | 43 | 孔版印刷 | Risograph | Grainy, limited-color print |
-| 44 | 中国水墨 | Chinese Ink Wash | Flowing ink, poetic空灵 |
+| 44 | 中国水墨 | Chinese Ink Wash | Flowing ink, poetic |
 | 45 | 彩色玻璃 | Stained Glass | Leaded outlines, luminous |
 | 46 | 木刻版画 | Woodcut | Carved lines, high contrast |
 | 47 | 黑色电影 | Film Noir | High contrast B&W, moody |
