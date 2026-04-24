@@ -1,15 +1,36 @@
 # Skills Catalog
 
-本文件用于 `codex/install.sh` 在远程模式下先展示 skills 列表。
-新增或调整 skill 时，请同步更新下方目录清单。
-`Directory` 字段支持二级目录路径（例如 `superpowers/using-superpowers`）。
+本文件是 `codex/skills` 的总目录清单，主要提供给以下两个场景：
+
+- `codex/install.sh skills` 在远程模式下先读取本文件，再展示可安装的 skill 列表
+- 维护者快速核对本地 skill 目录、相对路径与对外展示名称
+
+## 维护说明
+
+- 目录表只能维护在 `<!-- SKILL_CATALOG_START -->` 与 `<!-- SKILL_CATALOG_END -->` 之间，避免影响 `install.sh` 的远程解析逻辑
+- 每个 skill 至少应有一个 `SKILL.md`，并在 frontmatter 中声明 `name` 与 `description`
+- 新增、删除、重命名或移动 skill 目录后，必须同步更新下方目录表
+- `Directory` 字段填写相对于 `codex/skills/` 的目录路径，可与 `name` 不同，例如：
+  - `grok-search` 的目录是 `grok-skill`
+  - `vercel-react-best-practices` 的目录是 `react-best-practices`
+  - `using-superpowers` 的目录是 `superpowers/using-superpowers`
+- 目录表描述优先写“何时使用”和“核心能力”，保持简洁，避免写过长的实施细节
+
+## 字段说明
+
+| 字段 | 说明 |
+| --- | --- |
+| `Name` | 对外展示名称，通常取自 `SKILL.md` frontmatter 的 `name` |
+| `Directory` | skill 在 `codex/skills/` 下的相对目录 |
+| `Description` | skill 的触发场景或用途摘要 |
 
 <!-- SKILL_CATALOG_START -->
 | Name | Directory | Description |
 | --- | --- | --- |
 | 代理浏览器 | agent-browser | 面向 AI Agent 的浏览器自动化 CLI。当用户需要与网站交互时使用，包括页面导航、表单填写、按钮点击、截图、数据提取、Web 应用测试或任意浏览器自动化任务。触发场景包括“打开网站”“填写表单”“点击按钮”“截图”“抓取页面数据”“测试这个 Web 应用”“登录网站”“自动化浏览器操作”等所有需要程序化网页交互的请求。 |
+| codex-gateway-imagegen | codex-gateway-imagegen | 通过 Responses 兼容网关生成或编辑位图图像，默认从 skill 根目录 `.env` 读取网关地址与 API Key，适用于本地出图、参考图编辑或内置图像链路不可用时。 |
 | day-log | day-log | 根据当前会话内容生成日报 markdown，样式对齐 day_log 模板，并写入当前启动目录。 |
-| db-query | db-query | 使用 Go 打包二进制查询 Redis/MySQL/MongoDB/PostgreSQL。配置采用 `<DRIVER>_*_<profile>` 多库模式（例如 `MYSQL_HOST_main`、`REDIS_ADDR_cache`），通过 `--profile` 或 `DB_PROFILE` 选择。默认只允许只读查询，并强制输出 JSON。 |
+| db-query | db-query | 使用 Go 打包二进制查询 Redis/MySQL/MongoDB/PostgreSQL/Elasticsearch。配置采用 `<DRIVER>_*_<profile>` 多库模式（例如 `MYSQL_HOST_main`、`REDIS_ADDR_cache`、`ES_URL_main`），通过 `--profile` 或 `DB_PROFILE` 选择。默认只允许只读查询，并强制输出 JSON。 |
 | docx | docx | Use this skill whenever the user wants to create, read, edit, or manipulate Word documents (.docx files). Triggers include: any mention of 'Word doc', 'word document', '.docx', or requests to produce professional documents with formatting like tables of contents, headings, page numbers, or letterheads. Also use when extracting or reorganizing content from .docx files, inserting or replacing images in documents, performing find-and-replace in Word files, working with tracked changes or comments, or converting content into a polished Word document. If the user asks for a 'report', 'memo', 'letter', 'template', or similar deliverable as a Word or .docx file, use this skill. Do NOT use for PDFs, spreadsheets, Google Docs, or general coding tasks unrelated to document generation. |
 | exa-search | exa-search | 面向“来源优先”研究场景的语义 Web 搜索能力，尤其适用于官方文档、API 参考、价格页面、产品规格、公司官网，以及任何需要低噪声结果和直接提取正文的任务。当你需要高精度、高质量、非 SEO 噪声导向的搜索结果，或需要获取页面正文/高亮内容时优先使用。相比通用搜索，它更适合官方文档与结构化资料检索；对于突发新闻、X/Twitter 动态、实时舆情或多来源实时综合分析，应优先使用 grok-search。 |
 | feishu-agent-browser | feishu-agent-browser | 当需要直接提供飞书 cookie 和 URL 打开飞书页面，或复用 agent-browser 保存的飞书登录态来打开飞书文档、知识库页面、提取正文与截图时使用。 |
@@ -28,6 +49,7 @@
 | finishing-a-development-branch | superpowers/finishing-a-development-branch | 当实现已完成、测试全通过，且需要决定如何集成这项工作时使用；通过结构化选项指导合并、提 PR 或清理收尾。 |
 | receiving-code-review | superpowers/receiving-code-review | 在收到代码评审反馈、尤其反馈不清晰或技术上可疑时，在落实建议前使用；强调技术严谨与验证，而非形式化认同或盲目照做。 |
 | requesting-code-review | superpowers/requesting-code-review | 在任务完成、实现重大功能或合并前，为确认工作满足需求时使用。 |
+| sdlc-doc-implementation | sdlc-doc-implementation | 当用户明确给出 `docs/[任务目录]/` 或一组 `software-dev-process` 文档，并要求严格按这些文档继续施工、测试、调试或交付时使用。 |
 | software-dev-process | software-dev-process | 管理完整的软件开发生命周期（需求理解、概要设计、详细设计、施工实现、测试与排查）。用于通过 `sdlc-design-1`、`sdlc-design-2`、`sdlc-implement`、`sdlc-test`、`sdlc-debug` 分阶段驱动任务，或通过 `sdlc-solo` 全自动执行剩余流程。 |
 | subagent-driven-development | superpowers/subagent-driven-development | 当在当前会话中执行包含独立任务的实现计划时使用。 |
 | systematic-debugging | superpowers/systematic-debugging | 在遇到任何 bug、测试失败或异常行为时，在提出修复方案前使用。 |

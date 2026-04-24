@@ -1,0 +1,4 @@
+interface:
+  display_name: "SDLC文档施工"
+  short_description: "基于 docs 任务目录文档执行 software-dev-process 实现与收尾"
+  default_prompt: "Use $sdlc-doc-implementation with the provided docs task directory or document set to execute the approved software-dev-process scope and keep the task documents in sync."
