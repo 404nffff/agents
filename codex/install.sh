@@ -111,7 +111,7 @@ agents_usage() {
 说明:
   1) 本地执行优先扫描本地 codex/agents 目录
   2) 网络请求执行时，先读取远程 codex/agents/README.md 展示可选 agent 文件列表
-  3) 只能单选一个 agent 文件，安装时仅覆盖 ~/.codex/AGENTS.md
+  3) 只能单选一个 agent 文件；选择 README 入口或 *GLOBAL*.md 时写入 ~/.codex/AGENTS.md，选择其他 agent 文件时写入当前项目 AGENTS.md
   4) 可通过 --github / --ref / --agents-path 指定远程来源
   5) 若本地存在同名文件，提示是否覆盖（--yes 自动覆盖）
   6) 兼容单文件安装：可使用 --source 或 --file 直接安装单个文件
@@ -674,6 +674,76 @@ install_agents_v2_template_for_project() {
   install_file_with_prompt "${project_template_file}" "${template_payload}" "当前项目 docs/construction_doc_template.md"
 }
 
+is_agents_readme_entry() {
+  local selected_path="$1"
+  [[ "$(basename "${selected_path%%\?*}")" == "README.md" ]]
+}
+
+is_agents_global_install_entry() {
+  local selected_path="$1"
+  local base_name
+  base_name="$(basename "${selected_path%%\?*}")"
+  [[ "${base_name}" == "README.md" || "${base_name}" == *GLOBAL*.md ]]
+}
+
+find_local_global_agent_file() {
+  local base_dir="$1"
+  find "${base_dir}" -mindepth 1 -maxdepth 1 -type f -name '*GLOBAL*.md' | sort | head -n 1
+}
+
+resolve_github_global_agent_path() {
+  local repo="$1"
+  local ref="$2"
+  local readme_path="$3"
+  local base_dir api_url json global_path
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "错误: 解析 README 对应的 GLOBAL agent 需要 curl。" >&2
+    return 1
+  fi
+
+  base_dir="$(dirname "${readme_path}")"
+  api_url="https://api.github.com/repos/${repo}/contents/${base_dir}?ref=${ref}"
+  json="$(curl -fsSL "${api_url}" 2>/dev/null || true)"
+  global_path="$(
+    printf "%s\n" "${json}" \
+      | sed -n 's/.*"path"[[:space:]]*:[[:space:]]*"\([^"]*GLOBAL[^"]*\.md\)".*/\1/p' \
+      | sort \
+      | head -n 1
+  )"
+
+  if [[ -z "${global_path}" ]]; then
+    echo "错误: 未在 ${repo}@${ref}:${base_dir} 下找到匹配 *GLOBAL*.md 的 agent 文件。" >&2
+    return 1
+  fi
+
+  printf "%s\n" "${global_path}"
+}
+
+resolve_agents_install_target_path() {
+  local selected_path="$1"
+  local target_root="$2"
+  local target_agent_file="$3"
+  local project_target_file="$4"
+
+  if is_agents_global_install_entry "${selected_path}"; then
+    printf "%s\n" "${target_root}/${target_agent_file}"
+  else
+    printf "%s\n" "${project_target_file}"
+  fi
+}
+
+resolve_agents_install_target_label() {
+  local selected_path="$1"
+  local target_agent_file="$2"
+
+  if is_agents_global_install_entry "${selected_path}"; then
+    printf "~/.codex/%s\n" "${target_agent_file}"
+  else
+    printf "当前项目 AGENTS.md\n"
+  fi
+}
+
 read_frontmatter_field() {
   local file="$1"
   local field="$2"
@@ -761,6 +831,7 @@ install_agents_main() {
   local local_agents_root="${SCRIPT_DIR}/agents"
   local target_root="${HOME}/.codex"
   local target_agent_file="AGENTS.md"
+  local project_target_file="$(pwd)/AGENTS.md"
   local tmp_template=""
   local agents_root=""
   local source_label=""
@@ -779,6 +850,8 @@ install_agents_main() {
   local name=""
   local desc=""
   local rel_path=""
+  local global_source=""
+  local target_label=""
   local -a agent_names=()
   local -a agent_descs=()
   local -a agent_paths=()
@@ -838,7 +911,20 @@ install_agents_main() {
 
   if [[ "${source_mode}" == "source" ]]; then
     tmp_source="$(new_tmp_file)"
-    copy_local_or_url_to_file "${source_input}" "${tmp_source}"
+    if is_agents_readme_entry "${source_input}"; then
+      if [[ "${source_input}" =~ ^https?:// ]]; then
+        echo "错误: 通过 URL 选择 README 时，暂不支持自动定位同目录 *GLOBAL*.md，请改用本地 README 路径或直接指定 GLOBAL 文件。" >&2
+        return 1
+      fi
+      global_source="$(find_local_global_agent_file "$(dirname "${source_input}")")"
+      if [[ -z "${global_source}" ]]; then
+        echo "错误: 未在 $(dirname "${source_input}") 下找到匹配 *GLOBAL*.md 的 agent 文件。" >&2
+        return 1
+      fi
+      cp "${global_source}" "${tmp_source}"
+    else
+      copy_local_or_url_to_file "${source_input}" "${tmp_source}"
+    fi
     if [[ ! -s "${tmp_source}" ]]; then
       echo "错误: 获取到的 agent 文件为空" >&2
       return 1
@@ -846,9 +932,10 @@ install_agents_main() {
 
     file_name="$(basename "${source_input%%\?*}")"
     [[ -z "${file_name}" ]] && file_name="AGENTS.md"
-    dest="${target_root}/${target_agent_file}"
-    echo "准备安装 ${file_name} -> ${target_agent_file} ..."
-    install_file_with_prompt "${dest}" "${tmp_source}" "~/.codex/${target_agent_file}"
+    dest="$(resolve_agents_install_target_path "${source_input}" "${target_root}" "${target_agent_file}" "${project_target_file}")"
+    target_label="$(resolve_agents_install_target_label "${source_input}" "${target_agent_file}")"
+    echo "准备安装 ${file_name} -> ${target_label} ..."
+    install_file_with_prompt "${dest}" "${tmp_source}" "${target_label}"
     tmp_template="$(new_tmp_file)"
     if prepare_agents_v2_template_payload "${file_name}" "source" "${source_input}" "" "" "" "" "${tmp_template}"; then
       install_agents_v2_template_for_project "${file_name}" "${tmp_template}"
@@ -867,9 +954,18 @@ install_agents_main() {
     fi
 
     file_name="$(basename "${github_file}")"
-    dest="${target_root}/${target_agent_file}"
-    echo "准备安装 ${file_name} -> ${target_agent_file} ..."
-    install_file_with_prompt "${dest}" "${tmp_source}" "~/.codex/${target_agent_file}"
+    if is_agents_readme_entry "${github_file}"; then
+      global_source="$(resolve_github_global_agent_path "${remote_repo}" "${github_ref}" "${github_file}")"
+      fetch_raw_from_github "${remote_repo}" "${github_ref}" "${global_source}" "${tmp_source}"
+      if [[ ! -s "${tmp_source}" ]]; then
+        echo "错误: 获取 README 对应的 GLOBAL agent 文件失败: ${global_source}" >&2
+        return 1
+      fi
+    fi
+    dest="$(resolve_agents_install_target_path "${github_file}" "${target_root}" "${target_agent_file}" "${project_target_file}")"
+    target_label="$(resolve_agents_install_target_label "${github_file}" "${target_agent_file}")"
+    echo "准备安装 ${file_name} -> ${target_label} ..."
+    install_file_with_prompt "${dest}" "${tmp_source}" "${target_label}"
     tmp_template="$(new_tmp_file)"
     if prepare_agents_v2_template_payload "${file_name}" "github_file" "${github_file}" "${remote_repo}" "${github_ref}" "" "" "${tmp_template}"; then
       install_agents_v2_template_for_project "${file_name}" "${tmp_template}"
@@ -1131,29 +1227,45 @@ install_agents_main() {
     echo "请选择且仅选择一个 agent 文件，已取消安装。"
     return 0
   fi
-  echo "开始安装到: ${target_root}"
+  echo "开始安装 agents 文件..."
   for idx in "${!agent_names[@]}"; do
     [[ "${selected[idx]}" -ne 1 ]] && continue
     rel_path="${agent_paths[idx]}"
     file_name="$(basename "${rel_path}")"
-    dest="${target_root}/${target_agent_file}"
+    dest="$(resolve_agents_install_target_path "${rel_path}" "${target_root}" "${target_agent_file}" "${project_target_file}")"
+    target_label="$(resolve_agents_install_target_label "${rel_path}" "${target_agent_file}")"
 
     if [[ -n "${remote_repo}" ]]; then
       tmp_source="$(new_tmp_file)"
-      if ! fetch_raw_from_github "${remote_repo}" "${github_ref}" "${remote_path}/${rel_path}" "${tmp_source}" >/dev/null 2>&1; then
-        echo "错误: 无法获取远程 agent 文件: ${remote_path}/${rel_path}" >&2
-        return 1
+      if is_agents_readme_entry "${rel_path}"; then
+        global_source="$(resolve_github_global_agent_path "${remote_repo}" "${github_ref}" "${remote_path}/${rel_path}")"
+        if ! fetch_raw_from_github "${remote_repo}" "${github_ref}" "${global_source}" "${tmp_source}" >/dev/null 2>&1; then
+          echo "错误: 无法获取 README 对应的远程 GLOBAL agent 文件: ${global_source}" >&2
+          return 1
+        fi
+      else
+        if ! fetch_raw_from_github "${remote_repo}" "${github_ref}" "${remote_path}/${rel_path}" "${tmp_source}" >/dev/null 2>&1; then
+          echo "错误: 无法获取远程 agent 文件: ${remote_path}/${rel_path}" >&2
+          return 1
+        fi
       fi
       src="${tmp_source}"
     else
       src="${agents_root}/${rel_path}"
-      if [[ ! -f "${src}" ]]; then
+      if is_agents_readme_entry "${rel_path}"; then
+        global_source="$(find_local_global_agent_file "${agents_root}")"
+        if [[ -z "${global_source}" ]]; then
+          echo "错误: 未在 ${agents_root} 下找到匹配 *GLOBAL*.md 的 agent 文件。" >&2
+          return 1
+        fi
+        src="${global_source}"
+      elif [[ ! -f "${src}" ]]; then
         echo "错误: 本地 agent 文件不存在: ${src}" >&2
         return 1
       fi
     fi
 
-    install_file_with_prompt "${dest}" "${src}" "~/.codex/${target_agent_file}"
+    install_file_with_prompt "${dest}" "${src}" "${target_label}"
     tmp_template="$(new_tmp_file)"
     if [[ -n "${remote_repo}" ]]; then
       if prepare_agents_v2_template_payload "${file_name}" "catalog_remote" "" "${remote_repo}" "${github_ref}" "${remote_path}" "" "${tmp_template}"; then

@@ -1,195 +1,118 @@
-# agents 安装说明（给 AI / Agent 看）
+# Codex Agents & Skills 安装指南
 
-这个仓库的统一安装入口是：
+> **目标读者:** AI Agent & 自动化执行脚本
+> **核心准则:** 绝对不要手动拷贝 `AGENTS.md`、`skills` 或 `mcp` 配置文件。必须始终通过本仓库提供的统一安装脚本进行安装。
 
-```bash
-bash ./codex/install.sh
-```
+## 🚀 快速开始 (默认策略)
 
-不要自己手动拷贝 `AGENTS.md`、`skills` 或 `mcp` 配置。优先走安装脚本。
-
-## 1. 你要安装什么
-
-`codex/install.sh` 支持 4 个目标：
-
-- `mcp`：把 `codex/mcp.md` 中的 `mcp_servers` 配置写入 `~/.codex/config.toml`
-- `agents`：安装一个全局 `AGENTS.md` 到 `~/.codex/AGENTS.md`
-- `skills`：安装 `codex/skills/` 下的 skills 到 `~/.codex/skills/`
-- `all`：按顺序执行 `mcp -> agents -> skills`
-
-如果没有特殊要求，默认安装：
+除非用户有明确的局部安装需求，否则请**默认执行全量、无交互安装**：
 
 ```bash
 bash ./codex/install.sh all --yes
 ```
+*此命令将自动确认，并使用默认路径统一安装 MCP 配置、全局 Agents 以及所有 Skills。*
 
-这条命令适合 AI 直接执行，含义是：
+---
 
-- 自动确认
-- 统一安装 MCP、AGENTS、Skills
-- 使用脚本内置默认来源与默认路径
+## 📦 安装目标说明
 
-## 2. 本地安装
+`codex/install.sh` 脚本支持 4 个特定的安装目标：
 
-如果当前就在本仓库根目录，优先使用本地安装。
+### 1. `all` (推荐)
+按顺序完整执行安装流程：`mcp` -> `agents` -> `skills`。
+- **命令:** `bash ./codex/install.sh all --yes`
+- *注意: `all` 模式必须配合 `--yes` 参数使用。*
 
-交互模式：
+### 2. `mcp`
+将 `codex/mcp.md` 中的 `mcp_servers` 配置写入到目标机器的 `~/.codex/config.toml`。
+- **命令:** `bash ./codex/install.sh mcp --yes`
+- *注意: 此操作仅更新 `mcp_servers` 节点，不会破坏或修改用户的其他配置。*
+
+### 3. `agents`
+将全局代理规则文件安装至 `~/.codex/AGENTS.md`。
+- **命令:** `bash ./codex/install.sh agents --yes`
+- *行为: 本地执行时优先扫描 `codex/agents/`；远程执行时读取远程 `codex/agents/README.md`。*
+
+### 4. `skills`
+将 `codex/skills/` 下的所有可用技能安装至 `~/.codex/skills/`。
+- **命令:** `bash ./codex/install.sh skills --yes`
+- *行为: 如遇同名 skill，覆盖时会保留原有的配置文件。针对 `db-query` 等特殊 skill，会自动处理跨平台二进制下载逻辑。*
+
+---
+
+## 🌍 安装环境与执行方式
+
+### 本地安装 (当前在仓库目录内)
+如果当前工作目录已经是本仓库的根目录，请优先使用本地脚本：
 
 ```bash
+# 交互式选择安装目标
 bash ./codex/install.sh
-```
 
-指定目标：
-
-```bash
+# 指定目标安装
 bash ./codex/install.sh mcp
 bash ./codex/install.sh agents
 bash ./codex/install.sh skills
-bash ./codex/install.sh all
 ```
 
-无交互自动确认：
+### 远程安装 (当前无本地仓库)
+如果本地不存在此仓库文件，可直接执行远程安装脚本：
 
-```bash
-bash ./codex/install.sh all --yes
-```
-
-## 3. 远程安装
-
-如果本地没有仓库，可以直接执行远程安装脚本。
-
-基于 jsDelivr：
-
+**基于 jsDelivr (推荐):**
 ```bash
 INSTALL_URL="https://cdn.jsdelivr.net/gh/404nffff/agents@latest/codex/install.sh"
+
+# 默认交互式安装
 curl -fsSL "${INSTALL_URL}" | bash
-```
 
-仅安装 skills：
-
-```bash
+# 仅安装特定目标 (例如 skills)，并自动确认
 curl -fsSL "${INSTALL_URL}" | bash -s -- skills --yes
-```
 
-固定版本安装：
-
-```bash
+# 安装指定版本 (例如 v1.0.0)
 curl -fsSL "https://cdn.jsdelivr.net/gh/404nffff/agents@v1.0.0/codex/install.sh" | bash
 ```
 
-基于 Raw GitHub：
-
+**基于 Raw GitHub:**
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/codex/install.sh" | bash
 ```
 
-## 4. 各目标实际行为
+---
 
-### `mcp`
+## ✅ 安装后验证步骤
 
-建议命令：
-
-```bash
-bash ./codex/install.sh mcp --yes
-```
-
-行为：
-
-- 默认优先读取 `codex/mcp.md`
-- 把 `mcp_servers` 相关配置写到 `~/.codex/config.toml`
-- 只更新 `mcp_servers` 段，不动其他配置
-
-### `agents`
-
-建议命令：
+**AI 执行强制要求:** 安装完成后，绝对不能仅回复“已完成”。必须立即执行以下命令进行存在性检查，并向用户反馈验证结果：
 
 ```bash
-bash ./codex/install.sh agents --yes
-```
-
-行为：
-
-- 本地执行时优先扫描 `codex/agents/`
-- 远程执行时先读取远程 `codex/agents/README.md`
-- 最终只安装一个全局文件到 `~/.codex/AGENTS.md`
-
-### `skills`
-
-建议命令：
-
-```bash
-bash ./codex/install.sh skills --yes
-```
-
-行为：
-
-- 本地执行时优先扫描 `codex/skills/`
-- 远程执行时先读取远程 `codex/skills/README.md`
-- 安装目标目录是 `~/.codex/skills/`
-- 同名 skill 覆盖时保留已有配置文件
-- `db-query` 会按平台处理二进制下载逻辑
-
-### `all`
-
-建议命令：
-
-```bash
-bash ./codex/install.sh all --yes
-```
-
-行为：
-
-- 顺序执行：`mcp -> agents -> skills`
-- `all` 模式只接受 `--yes`
-
-## 5. 安装后应该看到什么
-
-安装完成后，至少检查这几个位置：
-
-```bash
+# 1. 检查基础目录结构
 ls -la ~/.codex
 ls -la ~/.codex/skills
-test -f ~/.codex/AGENTS.md && echo "AGENTS OK"
-test -f ~/.codex/config.toml && echo "CONFIG OK"
+
+# 2. 验证核心文件与配置状态
+test -f ~/.codex/AGENTS.md && echo "✅ AGENTS OK" || echo "❌ AGENTS MISSING"
+test -f ~/.codex/config.toml && grep -q "mcp_servers" ~/.codex/config.toml && echo "✅ CONFIG OK" || echo "❌ CONFIG MISSING/INVALID"
 ```
 
-如果是完整安装，预期结果是：
+完整的安装预期结果应当是：
+1. `~/.codex/AGENTS.md` 文件已存在。
+2. `~/.codex/config.toml` 文件已存在，且包含有效的 `mcp_servers` 配置段。
+3. `~/.codex/skills/` 目录下出现已安装的各个 skill 文件夹。
 
-- `~/.codex/AGENTS.md` 已存在
-- `~/.codex/config.toml` 已存在，且包含 `mcp_servers`
-- `~/.codex/skills/` 下出现已安装的 skill 目录
+---
 
-## 6. 给 AI 的执行建议
+## 📚 目录结构参考
 
-AI 执行时按这个顺序：
+为了帮助 AI 更好地理解上下文，以下是关键文件的说明：
+- `codex/install.sh`：所有安装逻辑的统一入口。
+- `codex/mcp.md`：MCP (Model Context Protocol) 原始配置来源。
+- `codex/agents/README.md`：可安装的 Agent 规则文件目录索引。
+- `codex/skills/README.md`：可安装的 Skill 扩展包目录索引。
 
-1. 如果在仓库根目录，优先执行：
+---
 
-```bash
-bash ./codex/install.sh all --yes
-```
+## 💡 获取帮助
 
-2. 如果只需要能力包，不需要全量环境，执行：
-
-```bash
-bash ./codex/install.sh skills --yes
-```
-
-3. 如果用户只要求装规则文件，执行：
-
-```bash
-bash ./codex/install.sh agents --yes
-```
-
-4. 如果用户只要求补 MCP，执行：
-
-```bash
-bash ./codex/install.sh mcp --yes
-```
-
-5. 安装后立刻做存在性检查，不要只报告“已完成”而不验证
-
-## 7. 常用帮助命令
+要查看任何命令或目标的详细帮助信息，请执行：
 
 ```bash
 bash ./codex/install.sh --help
@@ -197,19 +120,4 @@ bash ./codex/install.sh mcp --help
 bash ./codex/install.sh agents --help
 bash ./codex/install.sh skills --help
 bash ./codex/install.sh all --help
-```
-
-## 8. 相关文件
-
-- `codex/install.sh`：统一安装入口
-- `codex/mcp.md`：MCP 配置来源
-- `codex/agents/README.md`：可安装 agent 文件目录
-- `codex/skills/README.md`：可安装 skill 目录
-
-## 9. 一句话默认策略
-
-除非用户明确要求局部安装，否则默认执行：
-
-```bash
-bash ./codex/install.sh all --yes
 ```
