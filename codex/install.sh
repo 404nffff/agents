@@ -161,6 +161,7 @@ mcp_usage() {
   3) 交互勾选要安装/更新的 mcp server
   4) 若目标已存在且配置不同，会逐项询问是否覆盖（--yes 自动覆盖）
   5) 仅修改 mcp_servers 段落，不改动 config.toml 其他内容
+  6) 若选中配置包含空 token 或占位 token，会在写入前交互输入；--yes 模式不会交互输入 token
 EOF
 }
 
@@ -2198,6 +2199,124 @@ install_mcp_main() {
     ' "${in_file}" > "${out_file}"
   }
 
+  mcp_is_secret_key() {
+    local key="$1"
+    [[ "${key}" =~ (TOKEN|API_KEY|AUTH|SECRET|PASSWORD|ACCESS_KEY|SESSION) ]]
+  }
+
+  mcp_is_secret_placeholder() {
+    local value="$1"
+    [[ -z "${value}" || "${value}" =~ ^[xX]{4,}$ || "${value}" =~ ^your[-_].* || "${value}" =~ ^YOUR[-_].* || "${value}" =~ ^\<.*\>$ ]]
+  }
+
+  mcp_escape_toml_string_value() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    printf "%s\n" "${value}"
+  }
+
+  mcp_prompt_config_value() {
+    local server="$1"
+    local label="$2"
+    local env_name="${3:-}"
+    local answer=""
+    local env_value=""
+    local tty_opened="false"
+    mcp_prompt_value_result=""
+
+    if [[ -n "${env_name}" ]]; then
+      env_value="${!env_name:-}"
+      if [[ -n "${env_value}" ]]; then
+        mcp_prompt_value_result="${env_value}"
+        echo "已使用环境变量 ${env_name} 填充 ${server} 的 ${label}。"
+        return 0
+      fi
+    fi
+
+    if [[ "${AUTO_YES}" == "true" ]]; then
+      echo "提示: ${server} 的 ${label} 仍是占位值；--yes 模式不会交互输入，已保留原占位。"
+      return 1
+    fi
+
+    if [[ -t 1 && -r /dev/tty ]] && exec 9<>/dev/tty 2>/dev/null; then
+      tty_opened="true"
+    fi
+
+    if [[ "${tty_opened}" == "true" ]]; then
+      printf "请输入 %s 的 %s（留空保留原占位）: " "${server}" "${label}" >&9
+      IFS= read -r -s answer <&9 || true
+      printf "\n" >&9
+      exec 9<&-
+    else
+      printf "请输入 %s 的 %s（留空保留原占位）: " "${server}" "${label}"
+      IFS= read -r answer || true
+    fi
+
+    if [[ -z "${answer}" ]]; then
+      echo "已保留 ${server} 的 ${label} 占位值。"
+      return 1
+    fi
+
+    mcp_prompt_value_result="${answer}"
+    echo "已接收 ${server} 的 ${label}，将写入目标配置。"
+    return 0
+  }
+
+  mcp_prepare_configurable_block() {
+    local server="$1"
+    local block_file="$2"
+    local tmp_block line new_line key current escaped changed prefix assign_suffix line_suffix
+
+    if [[ -z "${block_file}" || ! -s "${block_file}" ]]; then
+      return 0
+    fi
+
+    tmp_block="$(new_tmp_file)"
+    changed="false"
+
+    while IFS= read -r line <&8 || [[ -n "${line}" ]]; do
+      new_line="${line}"
+
+      if [[ "${line}" =~ ^([[:space:]]*)([A-Za-z_][A-Za-z0-9_]*)([[:space:]]*=[[:space:]]*)\"([^\"]*)\"(.*)$ ]]; then
+        # BASH_REMATCH 是全局状态，调用其他正则函数前必须先保存捕获值。
+        prefix="${BASH_REMATCH[1]}"
+        key="${BASH_REMATCH[2]}"
+        assign_suffix="${BASH_REMATCH[3]}"
+        current="${BASH_REMATCH[4]}"
+        line_suffix="${BASH_REMATCH[5]}"
+        if mcp_is_secret_key "${key}" && mcp_is_secret_placeholder "${current}"; then
+          if mcp_prompt_config_value "${server}" "${key}" "${key}"; then
+            escaped="$(mcp_escape_toml_string_value "${mcp_prompt_value_result}")"
+            new_line="${prefix}${key}${assign_suffix}\"${escaped}\"${line_suffix}"
+            changed="true"
+          fi
+        fi
+      elif [[ "${line}" == *"--api-key"* && "${line}" == *'""'* ]]; then
+        if mcp_prompt_config_value "${server}" "--api-key" ""; then
+          escaped="$(mcp_escape_toml_string_value "${mcp_prompt_value_result}")"
+          new_line="${line/\"\"/\"${escaped}\"}"
+          changed="true"
+        fi
+      elif [[ "${line}" =~ Authorization\"[[:space:]]*=[[:space:]]*\"Bearer[[:space:]]+([^\"]*)\" ]]; then
+        current="${BASH_REMATCH[1]}"
+        if mcp_is_secret_placeholder "${current}"; then
+          if mcp_prompt_config_value "${server}" "Authorization Bearer token" ""; then
+            escaped="$(mcp_escape_toml_string_value "${mcp_prompt_value_result}")"
+            new_line="${line/Bearer ${current}/Bearer ${escaped}}"
+            changed="true"
+          fi
+        fi
+      fi
+
+      printf "%s\n" "${new_line}" >> "${tmp_block}"
+    done 8< "${block_file}"
+
+    if [[ "${changed}" == "true" ]]; then
+      cp "${tmp_block}" "${block_file}"
+    fi
+  }
+
   mcp_replace_server_block() {
     local target_file="$1"
     local server="$2"
@@ -2277,6 +2396,11 @@ install_mcp_main() {
       echo "未选择任何 MCP server。"
       exit 0
     fi
+
+    for name in "${selected_names[@]}"; do
+      src_block="${source_block_by_name[$name]:-}"
+      mcp_prepare_configurable_block "${name}" "${src_block}"
+    done
 
     if [[ ! -f "${target_config}" ]]; then
       mkdir -p "$(dirname "${target_config}")"
