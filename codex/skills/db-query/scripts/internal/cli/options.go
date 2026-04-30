@@ -50,7 +50,7 @@ func Parse(args []string) (Options, error) {
 	var whereValues stringSliceFlag
 
 	fs := flag.NewFlagSet("db-query", flag.ContinueOnError)
-	fs.StringVar(&opts.Driver, "driver", "", "database driver: mysql|pgsql|mongo|redis|es")
+	fs.StringVar(&opts.Driver, "driver", "", "database driver: mysql|pgsql|mongo|redis|memcached|es")
 	fs.StringVar(&opts.Profile, "profile", "", "connection profile name")
 	fs.StringVar(&opts.ConfigPath, "config", "", "config.env absolute path")
 	fs.StringVar(&opts.Host, "host", "", "database host")
@@ -72,12 +72,12 @@ func Parse(args []string) (Options, error) {
 	fs.IntVar(&opts.MaxRows, "max-rows", core.DefaultMaxRows, "maximum allowed rows")
 	fs.StringVar(&opts.Format, "format", "json", "output format, only json")
 	fs.StringVar(&opts.URI, "uri", "", "uri for mongo")
-	fs.StringVar(&opts.Addr, "addr", "", "addr for redis")
+	fs.StringVar(&opts.Addr, "addr", "", "addr for redis or memcached")
 	fs.StringVar(&opts.SSLMode, "sslmode", "", "ssl mode for postgresql")
-	fs.StringVar(&opts.Command, "command", "", "structured redis command")
+	fs.StringVar(&opts.Command, "command", "", "structured redis or memcached command")
 	fs.StringVar(&opts.Pipeline, "pipeline", "", "structured mongo aggregate pipeline json")
-	fs.StringVar(&opts.Key, "key", "", "structured redis key")
-	fs.StringVar(&opts.Keys, "keys", "", "structured redis keys, comma separated")
+	fs.StringVar(&opts.Key, "key", "", "structured redis or memcached key")
+	fs.StringVar(&opts.Keys, "keys", "", "structured redis or memcached keys, comma separated")
 	fs.StringVar(&opts.Field, "field", "", "structured redis field")
 	fs.StringVar(&opts.Pattern, "pattern", "", "structured redis pattern")
 	fs.Int64Var(&opts.Start, "start", 0, "structured redis range start")
@@ -117,9 +117,9 @@ func Parse(args []string) (Options, error) {
 	}
 
 	switch opts.Driver {
-	case "mysql", "pgsql", "mongo", "redis", "es":
+	case "mysql", "pgsql", "mongo", "redis", "memcached", "es":
 	default:
-		return Options{}, core.NewAppError(core.CodeInvalidArgument, "--driver must be one of mysql|pgsql|mongo|redis|es")
+		return Options{}, core.NewAppError(core.CodeInvalidArgument, "--driver must be one of mysql|pgsql|mongo|redis|memcached|es")
 	}
 
 	if opts.Limit <= 0 {

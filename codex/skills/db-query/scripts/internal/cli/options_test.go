@@ -88,3 +88,24 @@ func TestParseAcceptsESDriverWithUnifiedFlags(t *testing.T) {
 		t.Fatalf("expected limit 15, got %d", opts.Limit)
 	}
 }
+
+func TestParseAcceptsMemcachedDriverWithUnifiedFlags(t *testing.T) {
+	opts, err := Parse([]string{
+		"--driver", "memcached",
+		"--profile", "cache",
+		"--command", "mget",
+		"--keys", "session:1,session:2",
+	})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if opts.Driver != "memcached" {
+		t.Fatalf("expected driver memcached, got %q", opts.Driver)
+	}
+	if opts.Command != "mget" {
+		t.Fatalf("expected command mget, got %q", opts.Command)
+	}
+	if opts.Keys != "session:1,session:2" {
+		t.Fatalf("expected keys preserved, got %q", opts.Keys)
+	}
+}

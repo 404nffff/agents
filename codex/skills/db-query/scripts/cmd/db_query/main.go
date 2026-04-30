@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"db_query/internal/adapters/es"
+	"db_query/internal/adapters/memcached"
 	"db_query/internal/adapters/mongo"
 	"db_query/internal/adapters/mysql"
 	"db_query/internal/adapters/pgsql"
@@ -64,6 +65,15 @@ func main() {
 			printErrorAndExit(opts.Driver, core.WrapAppError(core.CodeInvalidConfig, pErr.Error(), pErr))
 		}
 		runRedisDriver(startedAt, profile, opts, envVars)
+	case "memcached":
+		if configErr != nil {
+			printErrorAndExit(opts.Driver, core.WrapAppError(core.CodeInvalidConfig, configErr.Error(), configErr))
+		}
+		profile, pErr := config.ResolveProfile(opts.Driver, opts.Profile, envVars)
+		if pErr != nil {
+			printErrorAndExit(opts.Driver, core.WrapAppError(core.CodeInvalidConfig, pErr.Error(), pErr))
+		}
+		runMemcachedDriver(startedAt, profile, opts, envVars)
 	case "es":
 		if configErr != nil {
 			printErrorAndExit(opts.Driver, core.WrapAppError(core.CodeInvalidConfig, configErr.Error(), configErr))
@@ -260,6 +270,54 @@ func runRedisDriver(startedAt time.Time, profile string, opts cli.Options, envVa
 	}
 }
 
+func runMemcachedDriver(startedAt time.Time, profile string, opts cli.Options, envVars map[string]string) {
+	connCfg, err := resolveMemcachedConnConfig(profile, opts, envVars)
+	if err != nil {
+		printErrorAndExit("memcached", err)
+	}
+
+	timeout := connCfg.TimeoutSeconds
+	if timeout <= 0 {
+		timeout = core.DefaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	queryRaw, err := buildMemcachedQuery(opts)
+	if err != nil {
+		printErrorAndExit("memcached", err)
+	}
+
+	columns, rows, err := memcached.Query(ctx, connCfg, queryRaw, opts.MaxRows)
+	if err != nil {
+		printErrorAndExit("memcached", err)
+	}
+	if len(rows) > opts.MaxRows {
+		printErrorAndExit("memcached", core.NewAppError(core.CodeExecutionError, fmt.Sprintf("query returned %d rows, exceeding --max-rows=%d", len(rows), opts.MaxRows)))
+	}
+
+	rawSQL, err := buildMemcachedRawSQL(queryRaw)
+	if err != nil {
+		rawSQL = queryRaw
+	}
+
+	payload := core.SuccessPayload{
+		Driver:   "memcached",
+		Profile:  profile,
+		Query:    queryRaw,
+		RawSQL:   rawSQL,
+		RowCount: len(rows),
+		Columns:  columns,
+		Rows:     rows,
+		Meta: map[string]any{
+			"elapsed_ms": time.Since(startedAt).Milliseconds(),
+		},
+	}
+	if err := core.PrintJSON(payload); err != nil {
+		printErrorAndExit("memcached", core.WrapAppError(core.CodeInternalError, "failed to write output", err))
+	}
+}
+
 func runESDriver(startedAt time.Time, profile string, opts cli.Options, envVars map[string]string) {
 	connCfg, err := resolveESConnConfig(profile, opts, envVars)
 	if err != nil {
@@ -438,6 +496,40 @@ func buildRedisQuery(opts cli.Options) (string, error) {
 	return marshalStructuredQuery(payload)
 }
 
+func buildMemcachedQuery(opts cli.Options) (string, error) {
+	if err := validateStructuredQueryConflict("memcached", opts); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(opts.Query) != "" {
+		return strings.TrimSpace(opts.Query), nil
+	}
+
+	command := strings.ToUpper(strings.TrimSpace(opts.Command))
+	if command == "" {
+		return "", core.NewAppError(core.CodeInvalidArgument, "memcached requires --command or --query")
+	}
+
+	payload := map[string]any{
+		"command": command,
+	}
+	target := firstNonEmpty(opts.Target, opts.Key)
+
+	switch command {
+	case "MGET":
+		keys := splitAndTrim(firstNonEmpty(opts.Keys, target))
+		if len(keys) == 0 {
+			return "", core.NewAppError(core.CodeInvalidArgument, "memcached MGET requires --target, --keys or --query")
+		}
+		payload["keys"] = keys
+	default:
+		if target != "" {
+			payload["key"] = target
+		}
+	}
+
+	return marshalStructuredQuery(payload)
+}
+
 func buildESQuery(opts cli.Options) (string, error) {
 	if err := validateStructuredQueryConflict("es", opts); err != nil {
 		return "", err
@@ -600,6 +692,29 @@ func resolveRedisConnConfig(profile string, opts cli.Options, envVars map[string
 		User:            user,
 		Password:        password,
 		DB:              db,
+		TimeoutSeconds:  timeout,
+		AllowedCommands: allowedCommands,
+	}, nil
+}
+
+func resolveMemcachedConnConfig(profile string, opts cli.Options, envVars map[string]string) (core.MemcachedConnConfig, error) {
+	addrRaw := firstNonEmpty(opts.Addr, config.GetProfileValue(envVars, "MEMCACHED_ADDR", profile))
+	addrs := splitAndTrim(addrRaw)
+	timeout := firstNonZero(opts.Timeout, parseIntDefault(config.GetProfileValue(envVars, "MEMCACHED_TIMEOUT", profile), 0))
+	allowedCommands := normalizeUpperCSV(config.ParseCSV(firstNonEmpty(
+		config.GetProfileValue(envVars, "MEMCACHED_ALLOWED_COMMANDS", profile),
+		envVars["MEMCACHED_ALLOWED_COMMANDS"],
+	)))
+	if len(allowedCommands) == 0 {
+		allowedCommands = []string{"GET", "MGET"}
+	}
+
+	if len(addrs) == 0 {
+		return core.MemcachedConnConfig{}, core.NewAppError(core.CodeInvalidConfig, fmt.Sprintf("memcached addr is required (use --addr or MEMCACHED_ADDR_%s)", profile))
+	}
+
+	return core.MemcachedConnConfig{
+		Addrs:           addrs,
 		TimeoutSeconds:  timeout,
 		AllowedCommands: allowedCommands,
 	}, nil
@@ -784,6 +899,10 @@ func validateStructuredQueryConflict(driver string, opts cli.Options) error {
 		addConflict("--count", opts.Count != 0)
 		addConflict("--start", opts.Start != 0)
 		addConflict("--stop", opts.Stop != 0)
+	case "memcached":
+		addConflict("--command", strings.TrimSpace(opts.Command) != "")
+		addConflict("--key", strings.TrimSpace(opts.Key) != "")
+		addConflict("--keys", strings.TrimSpace(opts.Keys) != "")
 	}
 
 	if len(conflicts) == 0 {
@@ -937,6 +1056,12 @@ type redisRawSQLRequest struct {
 	Count   int64    `json:"count"`
 }
 
+type memcachedRawSQLRequest struct {
+	Command string   `json:"command"`
+	Key     string   `json:"key"`
+	Keys    []string `json:"keys"`
+}
+
 type esRawSQLRequest struct {
 	Index string         `json:"index"`
 	Body  map[string]any `json:"body"`
@@ -1023,6 +1148,27 @@ func buildRedisRawSQL(queryRaw string) (string, error) {
 		return fmt.Sprintf("SCAN 0 MATCH %s", pattern), nil
 	default:
 		return "", core.NewAppError(core.CodeInvalidArgument, fmt.Sprintf("redis raw_sql does not support command %s", command))
+	}
+}
+
+func buildMemcachedRawSQL(queryRaw string) (string, error) {
+	req := memcachedRawSQLRequest{}
+	if err := json.Unmarshal([]byte(queryRaw), &req); err != nil {
+		return "", core.WrapAppError(core.CodeInvalidArgument, "memcached raw_sql requires valid query json", err)
+	}
+
+	command := strings.ToUpper(strings.TrimSpace(req.Command))
+	if command == "" {
+		return "", core.NewAppError(core.CodeInvalidArgument, "memcached raw_sql requires command")
+	}
+
+	switch command {
+	case "GET":
+		return fmt.Sprintf("get %s", req.Key), nil
+	case "MGET":
+		return "get " + strings.Join(req.Keys, " "), nil
+	default:
+		return "", core.NewAppError(core.CodeInvalidArgument, fmt.Sprintf("memcached raw_sql does not support command %s", command))
 	}
 }
 

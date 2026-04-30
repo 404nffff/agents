@@ -745,6 +745,78 @@ resolve_agents_install_target_label() {
   fi
 }
 
+parse_agent_catalog_entries() {
+  local readme_file="$1"
+
+  awk '
+    function trim(s) {
+      gsub(/^[[:space:]]+/, "", s)
+      gsub(/[[:space:]]+$/, "", s)
+      return s
+    }
+
+    function is_separator(s) {
+      return s ~ /^:?-+:?$/
+    }
+
+    BEGIN { in_catalog = 0 }
+
+    /<!--[[:space:]]*AGENT_CATALOG_START[[:space:]]*-->/ { in_catalog = 1; next }
+    /<!--[[:space:]]*AGENT_CATALOG_END[[:space:]]*-->/ { in_catalog = 0; next }
+
+    {
+      if (in_catalog == 0) {
+        next
+      }
+      if ($0 ~ /^##[[:space:]]+/) {
+        group = $0
+        sub(/^##[[:space:]]+/, "", group)
+        group = trim(group)
+        next
+      }
+      if ($0 !~ /^\|/) {
+        next
+      }
+
+      line = $0
+      sub(/^\|/, "", line)
+      sub(/\|[[:space:]]*$/, "", line)
+      count = split(line, cols, "|")
+      if (count < 3) {
+        next
+      }
+
+      first = trim(cols[1])
+      second = trim(cols[2])
+      third = trim(cols[3])
+      fourth = count >= 4 ? trim(cols[4]) : ""
+
+      if (count >= 4 && (tolower(second) == "name" || tolower(third) == "file" || third ~ /\.md([?#].*)?$/)) {
+        name = second
+        path = third
+        desc = fourth
+      } else {
+        name = first
+        path = second
+        desc = third
+      }
+
+      lower_name = tolower(name)
+      lower_path = tolower(path)
+
+      if (lower_name == "name" || lower_path == "file") {
+        next
+      }
+      if (is_separator(name) || is_separator(path)) {
+        next
+      }
+
+      gsub(/\r/, "", desc)
+      print name "\t" path "\t" desc "\t" group
+    }
+  ' "${readme_file}"
+}
+
 read_frontmatter_field() {
   local file="$1"
   local field="$2"
@@ -851,11 +923,14 @@ install_agents_main() {
   local name=""
   local desc=""
   local rel_path=""
+  local group=""
+  local current_group=""
   local global_source=""
   local target_label=""
   local -a agent_names=()
   local -a agent_descs=()
   local -a agent_paths=()
+  local -a agent_groups=()
   local -a selected=()
   declare -A seen_paths=()
 
@@ -988,7 +1063,7 @@ install_agents_main() {
       return 1
     fi
 
-    while IFS=$'\t' read -r name rel_path desc; do
+    while IFS=$'\t' read -r name rel_path desc group; do
       [[ -z "${name}" || -z "${rel_path}" ]] && continue
       [[ -z "${desc}" ]] && desc="(无 description)"
       if [[ -n "${seen_paths[${rel_path}]+x}" ]]; then
@@ -999,54 +1074,9 @@ install_agents_main() {
       agent_names+=("${name}")
       agent_descs+=("${desc}")
       agent_paths+=("${rel_path}")
+      agent_groups+=("${group}")
       selected+=(0)
-    done < <(
-      awk '
-        function trim(s) {
-          gsub(/^[[:space:]]+/, "", s)
-          gsub(/[[:space:]]+$/, "", s)
-          return s
-        }
-
-        BEGIN { in_catalog = 0 }
-
-        /<!--[[:space:]]*AGENT_CATALOG_START[[:space:]]*-->/ { in_catalog = 1; next }
-        /<!--[[:space:]]*AGENT_CATALOG_END[[:space:]]*-->/ { in_catalog = 0; next }
-
-        {
-          if (in_catalog == 0) {
-            next
-          }
-          if ($0 !~ /^\|/) {
-            next
-          }
-
-          line = $0
-          sub(/^\|/, "", line)
-          sub(/\|[[:space:]]*$/, "", line)
-          count = split(line, cols, "|")
-          if (count < 3) {
-            next
-          }
-
-          name = trim(cols[1])
-          path = trim(cols[2])
-          desc = trim(cols[3])
-          lower_name = tolower(name)
-          lower_path = tolower(path)
-
-          if (lower_name == "name" || lower_path == "file") {
-            next
-          }
-          if (name ~ /^-+$/ || path ~ /^-+$/) {
-            next
-          }
-
-          gsub(/\r/, "", desc)
-          print name "\t" path "\t" desc
-        }
-      ' "${tmp_catalog_file}"
-    )
+    done < <(parse_agent_catalog_entries "${tmp_catalog_file}")
 
     if [[ ${#agent_names[@]} -eq 0 ]]; then
       echo "错误: 远程 agents README.md 未包含可解析目录（缺少 AGENT_CATALOG 标记或内容为空）" >&2
@@ -1058,7 +1088,7 @@ install_agents_main() {
   if [[ -n "${agents_root}" ]]; then
     tmp_catalog_file="${agents_root}/README.md"
     if [[ -f "${tmp_catalog_file}" ]]; then
-      while IFS=$'\t' read -r name rel_path desc; do
+      while IFS=$'\t' read -r name rel_path desc group; do
         [[ -z "${name}" || -z "${rel_path}" ]] && continue
         [[ -z "${desc}" ]] && desc="(无 description)"
         if [[ ! -f "${agents_root}/${rel_path}" ]]; then
@@ -1073,54 +1103,9 @@ install_agents_main() {
         agent_names+=("${name}")
         agent_descs+=("${desc}")
         agent_paths+=("${rel_path}")
+        agent_groups+=("${group}")
         selected+=(0)
-      done < <(
-        awk '
-          function trim(s) {
-            gsub(/^[[:space:]]+/, "", s)
-            gsub(/[[:space:]]+$/, "", s)
-            return s
-          }
-
-          BEGIN { in_catalog = 0 }
-
-          /<!--[[:space:]]*AGENT_CATALOG_START[[:space:]]*-->/ { in_catalog = 1; next }
-          /<!--[[:space:]]*AGENT_CATALOG_END[[:space:]]*-->/ { in_catalog = 0; next }
-
-          {
-            if (in_catalog == 0) {
-              next
-            }
-            if ($0 !~ /^\|/) {
-              next
-            }
-
-            line = $0
-            sub(/^\|/, "", line)
-            sub(/\|[[:space:]]*$/, "", line)
-            count = split(line, cols, "|")
-            if (count < 3) {
-              next
-            }
-
-            name = trim(cols[1])
-            path = trim(cols[2])
-            desc = trim(cols[3])
-            lower_name = tolower(name)
-            lower_path = tolower(path)
-
-            if (lower_name == "name" || lower_path == "file") {
-              next
-            }
-            if (name ~ /^-+$/ || path ~ /^-+$/) {
-              next
-            }
-
-            gsub(/\r/, "", desc)
-            print name "\t" path "\t" desc
-          }
-        ' "${tmp_catalog_file}"
-      )
+      done < <(parse_agent_catalog_entries "${tmp_catalog_file}")
     fi
 
     if [[ ${#agent_names[@]} -eq 0 ]]; then
@@ -1135,6 +1120,7 @@ install_agents_main() {
         agent_names+=("${name}")
         agent_descs+=("${desc}")
         agent_paths+=("${rel_path}")
+        agent_groups+=("")
         selected+=(0)
       done < <(find "${agents_root}" -mindepth 1 -maxdepth 1 -type f -name '*.md' ! -name 'README.md' | sort)
     fi
@@ -1162,7 +1148,14 @@ install_agents_main() {
     while true; do
       echo
       echo "可安装的 agent 文件（来源: ${source_label}）"
+      current_group=""
       for idx in "${!agent_names[@]}"; do
+        group="${agent_groups[idx]:-}"
+        if [[ -n "${group}" && "${group}" != "${current_group}" ]]; then
+          echo
+          printf "【%s】\n" "${group}"
+          current_group="${group}"
+        fi
         if [[ "${selected[idx]}" -eq 1 ]]; then
           printf "%2d. [x] %s (%s)\n" "$((idx + 1))" "${agent_names[idx]}" "${agent_paths[idx]}"
         else

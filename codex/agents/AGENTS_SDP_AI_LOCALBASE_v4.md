@@ -48,7 +48,7 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
 ### 4.2 外部工具 (MCP) 与降级策略
 | 类别 | MCP 工具名 | 规范与降级策略 |
 | :--- | :--- | :--- |
-| **项目知识库 / 记忆优先检索** | `ai_localbase` | 优先使用：`knowledge_base_search`、`chat_ask`、`knowledge_base_create`、`document_upload`、`document_append`、`document_update`、`document_delete`。用于项目文档沉淀、历史方案检索与知识复用。 |
+| **项目知识库 / 记忆优先检索** | `ai_localbase` | 优先使用：`knowledge_base_create`、`knowledge_base_search`、`chat_ask`、`document_upload`、`document_append`、`document_update`、`document_delete`；知识库列表资源（如 `ai-localbase://knowledge-bases`）仅作为兜底确认入口。启动时必须先通过 create/get-or-create 确认真实 `kb_id`，再进行检索、问答或写入；用于项目文档沉淀、历史方案检索与知识复用。 |
 | **语义检索** | `codebase-retrieval` | 任何需要理解代码上下文、探索性搜索必须优先调用。不可用时重试1次，然后降级为 `code-index`，最后降级为原生 `Grep`/`Glob`/`Read`。 |
 | **数据库查询** | `skill[db-query]` / `skill[mysql-query]` | 只要代码中涉及数据库查询（包含 MySQL、Redis、Mongo、PGSQL），必须先使用 `db-query` skill；若为 MySQL 查询且 `db-query` 连续重试 3 次仍不可用、不存在或执行失败，才允许降级使用 `mysql-query` skill；禁止绕过该流程直接执行数据库查询。 |
 | **在线检索** | `skill[grok-search]` | 发起网络事实补充。首选使用 skill `grok-search`，失败后降级为 MCP `exa-pool`，再失败降级为 `chrome-devtools` 或原生 web search。 |
@@ -60,9 +60,11 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
 
 `ai_localbase` 是本项目的**主知识库与主记忆入口**，用于沉淀设计文档、施工文档、问题清单、排查记录与阶段结论。对项目历史经验、需求背景、方案对比、上下文追溯，均优先走 `ai_localbase`。
 
-*   **启动协议与知识库命名**：每一轮新会话或项目启动时的首要动作，**必须优先读取 `docs/index.md` 文件了解项目全局上下文和历史工作留痕**。同时，知识库名称必须按当前启动目录名命名（例如当前目录是 `/www/agents` 时，知识库名称应使用 `agents`）。必须确认是否存在该知识库，如果没有则先使用 `knowledge_base_create` 创建/重建该知识库。
-*   **查询优先级 (先想再开口)**：每轮任务开始、回复前、进入设计前、进入施工前，优先调用 `knowledge_base_search` 或 `chat_ask` 在当前启动目录对应的知识库中检索项目历史文档；默认仅检索当前对应的知识库，未命中时需先征得用户同意再扩展检索范围；仅当 `ai_localbase` 无结果或结果不足时，才降级查本地文件。
-*   **写入方式 (增量优先与及时沉淀)**：所有文档必须写入当前启动目录对应的知识库中（禁止写入其他知识库）。新文档首次沉淀使用 `document_upload`。对于已有文档的修改，**优先使用 `document_append` 追加核心决策或增量内容**，避免高频的全量读取和 `document_update`（容易触碰上下文上限）。仅在最终收尾合并或大范围重构时，才读取完整内容并使用 `document_update`。废弃文档使用 `document_delete`。
+*   **启动协议与知识库命名**：每一轮新会话或项目启动时的首要动作，**必须优先读取 `docs/index.md` 文件了解项目全局上下文和历史工作留痕**；若该文件不存在，必须记录缺失并继续完成知识库握手，禁止因索引缺失跳过 `ai_localbase`。知识库名称（`kb_name`）必须按当前启动目录名命名（例如当前目录是 `/www/agents` 时，`kb_name=agents`），但 `kb_name` 只用于匹配，不能直接当作 `knowledgeBaseId` 使用。
+*   **kb_id 确认握手**：默认进入项目后，必须优先调用 `knowledge_base_create`，传入当前 `kb_name` 和项目描述，让 `ai_localbase` 通过 create/get-or-create 语义创建或确认项目知识库，并从返回结果中提取真实 `kb_id`（例如 `kb-3`）。只有确认 `kb_id` 后，才允许调用 `knowledge_base_search`、`chat_ask`、`document_upload`、`document_append`、`document_update`、`document_delete`。如果 `knowledge_base_create` 未返回 `kb_id`、返回信息不完整，或提示同名库已存在但未给出 ID，再读取 `ai_localbase` 的知识库列表资源（如 `ai-localbase://knowledge-bases`）或等价列表能力，按 `name == kb_name` 精确匹配取得 `kb_id`；禁止在未复核列表前重复创建同名知识库。
+*   **查询优先级 (先想再开口)**：每轮任务开始、回复前、进入设计前、进入施工前，优先使用已确认的真实 `kb_id` 调用 `knowledge_base_search` 或 `chat_ask` 检索当前项目历史文档；默认仅检索当前 `kb_id` 对应的知识库，未命中时需先征得用户同意再扩展检索范围；仅当 `ai_localbase` 无结果或结果不足时，才降级查本地文件。
+*   **错误恢复规则**：如果调用 `knowledge_base_search` / `chat_ask` 时出现 `knowledge base not found`，必须立刻停止当前检索链路，重新执行“kb_id 确认握手”一次：先用 `knowledge_base_create` 确认或创建当前 `kb_name`，若无法从返回结果取得 `kb_id` 再读取知识库列表精确匹配。禁止直接把目录名（如 `agents`）继续作为 `knowledgeBaseId` 重试。
+*   **写入方式 (增量优先与及时沉淀)**：所有文档必须写入当前启动目录对应的已确认 `kb_id` 中（禁止写入其他知识库）。新文档首次沉淀使用 `document_upload`。对于已有文档的修改，**优先使用 `document_append` 追加核心决策或增量内容**，避免高频的全量读取和 `document_update`（容易触碰上下文上限）。仅在最终收尾合并或大范围重构时，才读取完整内容并使用 `document_update`。废弃文档使用 `document_delete`。
 *   **默认同步规则**：凡是 `docs/[任务目录]/` 下新产出的计划、概要设计、详细设计、施工文档、状态文档、测试文档、排查文档，在对应阶段完成后默认同步到 `ai_localbase` 中对应的知识库，无需用户再次提醒；日常过程记录（如 `operations-log.md`、排查记录）使用 `document_append`。
 *   **内容范围**：优先沉淀 `docs/`、`plan/` 下的设计文档、施工文档、状态文档、问题清单、测试记录、排查记录、阶段结论；发现重复需合并提炼，避免把短期噪音或纯临时输出写入知识库。
 *   **检索目标**：回答前优先确认知识库中是否已有相同需求、相似模块、既有风险、历史决策、已验证方案；命中后优先复用知识库结论，再结合本地代码上下文落地。

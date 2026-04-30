@@ -63,6 +63,7 @@ trap cleanup EXIT
 declare -a AGENT_NAMES=()
 declare -a AGENT_DESCS=()
 declare -a AGENT_PATHS=()
+declare -a AGENT_GROUPS=()
 declare -a SELECTED=()
 declare -A SEEN_PATHS=()
 
@@ -296,6 +297,7 @@ add_agent_entry() {
   local name="$1"
   local rel_path="$2"
   local desc="$3"
+  local group="${4:-}"
 
   [[ -z "${name}" || -z "${rel_path}" ]] && return
   [[ -z "${desc}" ]] && desc="(无 description)"
@@ -309,15 +311,16 @@ add_agent_entry() {
   AGENT_NAMES+=("${name}")
   AGENT_DESCS+=("${desc}")
   AGENT_PATHS+=("${rel_path}")
+  AGENT_GROUPS+=("${group}")
   SELECTED+=(0)
 }
 
 parse_agents_catalog_from_readme() {
   local readme_file="$1"
   local local_root="${2:-}"
-  local name rel_path desc
+  local name rel_path desc group
 
-  while IFS=$'\t' read -r name rel_path desc; do
+  while IFS=$'\t' read -r name rel_path desc group; do
     [[ -z "${name}" || -z "${rel_path}" ]] && continue
     [[ -z "${desc}" ]] && desc="(无 description)"
 
@@ -326,13 +329,17 @@ parse_agents_catalog_from_readme() {
       continue
     fi
 
-    add_agent_entry "${name}" "${rel_path}" "${desc}"
+    add_agent_entry "${name}" "${rel_path}" "${desc}" "${group}"
   done < <(
     awk '
       function trim(s) {
         gsub(/^[[:space:]]+/, "", s)
         gsub(/[[:space:]]+$/, "", s)
         return s
+      }
+
+      function is_separator(s) {
+        return s ~ /^:?-+:?$/
       }
 
       BEGIN { in_catalog = 0 }
@@ -342,6 +349,12 @@ parse_agents_catalog_from_readme() {
 
       {
         if (in_catalog == 0) {
+          next
+        }
+        if ($0 ~ /^##[[:space:]]+/) {
+          group = $0
+          sub(/^##[[:space:]]+/, "", group)
+          group = trim(group)
           next
         }
         if ($0 !~ /^\|/) {
@@ -356,28 +369,40 @@ parse_agents_catalog_from_readme() {
           next
         }
 
-        name = trim(cols[1])
-        path = trim(cols[2])
-        desc = trim(cols[3])
+        first = trim(cols[1])
+        second = trim(cols[2])
+        third = trim(cols[3])
+        fourth = count >= 4 ? trim(cols[4]) : ""
+
+        if (count >= 4 && (tolower(second) == "name" || tolower(third) == "file" || third ~ /\.md([?#].*)?$/)) {
+          name = second
+          path = third
+          desc = fourth
+        } else {
+          name = first
+          path = second
+          desc = third
+        }
+
         lower_name = tolower(name)
         lower_path = tolower(path)
 
         if (lower_name == "name" || lower_path == "file") {
           next
         }
-        if (name ~ /^-+$/ || path ~ /^-+$/) {
+        if (is_separator(name) || is_separator(path)) {
           next
         }
 
         gsub(/\r/, "", desc)
-        print name "\t" path "\t" desc
+        print name "\t" path "\t" desc "\t" group
       }
     ' "${readme_file}"
   )
 }
 
 select_agents_interactively() {
-  local cmd idx tty_opened selected_count
+  local cmd idx tty_opened selected_count group current_group
 
   if [[ "${AUTO_YES}" == "true" ]]; then
     for idx in "${!SELECTED[@]}"; do
@@ -397,7 +422,14 @@ select_agents_interactively() {
   while true; do
     echo
     echo "可安装的 agent 文件（来源: ${SOURCE_LABEL}）"
+    current_group=""
     for idx in "${!AGENT_NAMES[@]}"; do
+      group="${AGENT_GROUPS[idx]:-}"
+      if [[ -n "${group}" && "${group}" != "${current_group}" ]]; then
+        echo
+        printf "【%s】\n" "${group}"
+        current_group="${group}"
+      fi
       if [[ "${SELECTED[idx]}" -eq 1 ]]; then
         printf "%2d. [x] %s (%s)\n" "$((idx + 1))" "${AGENT_NAMES[idx]}" "${AGENT_PATHS[idx]}"
       else

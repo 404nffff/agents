@@ -71,6 +71,12 @@ type RedisConnConfig struct {
 	AllowedCommands []string
 }
 
+type MemcachedConnConfig struct {
+	Addrs           []string
+	TimeoutSeconds  int
+	AllowedCommands []string
+}
+
 type ESConnConfig struct {
 	URL            string
 	User           string

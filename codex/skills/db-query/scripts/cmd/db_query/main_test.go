@@ -91,6 +91,75 @@ func TestBuildRedisRawSQLUsesCommandSyntax(t *testing.T) {
 	}
 }
 
+func TestBuildMemcachedQueryUsesTargetAndKeys(t *testing.T) {
+	getQuery, err := buildMemcachedQuery(cli.Options{
+		Command: "get",
+		Target:  "session:1",
+	})
+	if err != nil {
+		t.Fatalf("buildMemcachedQuery GET returned error: %v", err)
+	}
+	if !strings.Contains(getQuery, "\"command\":\"GET\"") || !strings.Contains(getQuery, "\"key\":\"session:1\"") {
+		t.Fatalf("expected memcached GET query, got %s", getQuery)
+	}
+
+	mgetQuery, err := buildMemcachedQuery(cli.Options{
+		Command: "mget",
+		Keys:    "session:1,session:2",
+	})
+	if err != nil {
+		t.Fatalf("buildMemcachedQuery MGET returned error: %v", err)
+	}
+	if !strings.Contains(mgetQuery, "\"command\":\"MGET\"") || !strings.Contains(mgetQuery, "\"keys\":[\"session:1\",\"session:2\"]") {
+		t.Fatalf("expected memcached MGET query, got %s", mgetQuery)
+	}
+}
+
+func TestBuildMemcachedRawSQLUsesGetSyntax(t *testing.T) {
+	rawSQL, err := buildMemcachedRawSQL(`{"command":"MGET","keys":["session:1","session:2"]}`)
+	if err != nil {
+		t.Fatalf("buildMemcachedRawSQL returned error: %v", err)
+	}
+	want := "get session:1 session:2"
+	if rawSQL != want {
+		t.Fatalf("expected %q, got %q", want, rawSQL)
+	}
+}
+
+func TestResolveMemcachedConnConfigSupportsProfile(t *testing.T) {
+	cfg, err := resolveMemcachedConnConfig("cache", cli.Options{}, map[string]string{
+		"MEMCACHED_ADDR_cache":             "127.0.0.1:11211,127.0.0.1:11212",
+		"MEMCACHED_TIMEOUT_cache":          "7",
+		"MEMCACHED_ALLOWED_COMMANDS_cache": "GET",
+	})
+	if err != nil {
+		t.Fatalf("resolveMemcachedConnConfig returned error: %v", err)
+	}
+	if len(cfg.Addrs) != 2 || cfg.Addrs[0] != "127.0.0.1:11211" || cfg.Addrs[1] != "127.0.0.1:11212" {
+		t.Fatalf("unexpected addrs: %#v", cfg.Addrs)
+	}
+	if cfg.TimeoutSeconds != 7 {
+		t.Fatalf("expected timeout 7, got %d", cfg.TimeoutSeconds)
+	}
+	if len(cfg.AllowedCommands) != 1 || cfg.AllowedCommands[0] != "GET" {
+		t.Fatalf("unexpected allowed commands: %#v", cfg.AllowedCommands)
+	}
+}
+
+func TestValidateStructuredQueryConflictRejectsMemcachedQueryAndKeys(t *testing.T) {
+	err := validateStructuredQueryConflict("memcached", cli.Options{
+		Query:   "{\"command\":\"GET\",\"key\":\"session:1\"}",
+		Command: "GET",
+		Keys:    "session:1",
+	})
+	if err == nil {
+		t.Fatalf("expected conflict error")
+	}
+	if !strings.Contains(err.Error(), "--query cannot be used with") || !strings.Contains(err.Error(), "--keys") {
+		t.Fatalf("expected memcached query conflict message, got %v", err)
+	}
+}
+
 func TestBuildESQueryUsesUnifiedFlags(t *testing.T) {
 	query, err := buildESQuery(cli.Options{
 		Target:       "student_index",

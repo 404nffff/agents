@@ -11,6 +11,7 @@
 - PostgreSQL
 - MongoDB
 - Redis
+- Memcached
 - Elasticsearch
 
 核心目标：
@@ -55,6 +56,7 @@
 - PostgreSQL：`PGSQL_*_<profile>`
 - MongoDB：`MONGO_*_<profile>`
 - Redis：`REDIS_*_<profile>`
+- Memcached：`MEMCACHED_*_<profile>`
 - Elasticsearch：`ES_*_<profile>`
 
 ## 快速开始
@@ -117,6 +119,24 @@
   --command SCAN \
   --target session:* \
   --limit 50
+```
+
+### Memcached
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --driver memcached \
+  --profile cache \
+  --command GET \
+  --target session:123
+```
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --driver memcached \
+  --profile cache \
+  --command MGET \
+  --keys session:123,session:456
 ```
 
 ### Elasticsearch

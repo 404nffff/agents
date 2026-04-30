@@ -1,6 +1,6 @@
 ---
 name: db-query
-description: 使用 Go 打包二进制查询 Redis/MySQL/MongoDB/PostgreSQL/Elasticsearch。配置采用 `<DRIVER>_*_<profile>` 多库模式（例如 `MYSQL_HOST_main`、`REDIS_ADDR_cache`、`ES_URL_main`），通过 `--profile` 或 `DB_PROFILE` 选择。默认只允许只读查询，并强制输出 JSON。
+description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/PostgreSQL/Elasticsearch。配置采用 `<DRIVER>_*_<profile>` 多库模式（例如 `MYSQL_HOST_main`、`REDIS_ADDR_cache`、`MEMCACHED_ADDR_cache`、`ES_URL_main`），通过 `--profile` 或 `DB_PROFILE` 选择。默认只允许只读查询，并强制输出 JSON。
 ---
 
 # DB Query
@@ -74,7 +74,25 @@ description: 使用 Go 打包二进制查询 Redis/MySQL/MongoDB/PostgreSQL/Elas
   --limit 50
 ```
 
-### 4) Elasticsearch（结构化参数或原始 DSL）
+### 4) Memcached（统一外层参数）
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --driver memcached \
+  --profile cache \
+  --command GET \
+  --target session:123
+```
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --driver memcached \
+  --profile cache \
+  --command MGET \
+  --keys session:123,session:456
+```
+
+### 5) Elasticsearch（结构化参数或原始 DSL）
 
 ```bash
 ~/.codex/skills/db-query/bin/db-query-linux-amd64 \
@@ -116,7 +134,7 @@ description: 使用 Go 打包二进制查询 Redis/MySQL/MongoDB/PostgreSQL/Elas
 
 优先使用以下统一参数名：
 
-- `--target`：SQL 的表名、Mongo 的 collection、Redis 的 key 或 pattern、ES 的 index
+- `--target`：SQL 的表名、Mongo 的 collection、Redis 的 key 或 pattern、Memcached 的 key、ES 的 index
 - `--fields`：SQL 字段列表、Mongo 投影字段列表、ES `_source` 字段列表
 - `--where`：SQL 条件表达式，或 Mongo / ES 条件 `字段:操作符:值`
 - `--sort`：SQL 排序表达式，或 Mongo / ES 排序（使用 `字段:asc|desc`）
@@ -168,6 +186,12 @@ description: 使用 Go 打包二进制查询 Redis/MySQL/MongoDB/PostgreSQL/Elas
 
 1. 白名单命令：`GET`、`MGET`、`HGET`、`HGETALL`、`SMEMBERS`、`ZRANGE`、`LRANGE`、`SCAN`
 2. 禁止写入和高风险命令（例如 `SET`、`DEL`、`EXPIRE`、`EVAL`）
+
+### Memcached
+
+1. 白名单命令：`GET`、`MGET`
+2. 禁止写入命令（例如 `SET`、`ADD`、`REPLACE`、`APPEND`、`PREPEND`、`DELETE`、`INCR`、`DECR`、`FLUSH_ALL`）
+3. Memcached 不支持安全的通用 key 遍历，本工具不提供扫描能力
 
 ### Elasticsearch
 
