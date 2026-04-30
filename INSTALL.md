@@ -11,6 +11,7 @@
 - **必需工具:** `curl`、`bash`
 - **网络要求:** 能访问 GitHub 和 npm registry
 - **权限要求:** 对目标配置目录有写入权限
+- **安装流程:** 所有安装目标（MCP、Agents、Skills）都必须手动选择要安装的项目，不支持自动安装
 
 ## 客户端选择
 
@@ -42,28 +43,20 @@ INSTALL_URL="https://raw.githubusercontent.com/404nffff/agents/master/shell/code
 
 ### 交互式安装（推荐）
 
-脚本会先列出可安装项，用户选择后输入 `d` 确认安装。部分 MCP 需要 token，会在安装时提示输入：
+脚本会先列出可安装项，用户必须手动选择后输入 `d` 确认安装。部分 MCP 需要 token，会在安装时提示输入：
 
 ```bash
 # 1. 安装 MCP servers（如需 token 会提示输入）
 curl -fsSL "${INSTALL_URL}" | bash -s -- mcp
 
-# 2. 安装 Agent 规则文件（选择一个）
+# 2. 安装 Agent 规则文件（必须手动选择一个）
 curl -fsSL "${INSTALL_URL}" | bash -s -- agents
 
-# 3. 安装 Skills（可多选）
+# 3. 安装 Skills（必须手动选择）
 curl -fsSL "${INSTALL_URL}" | bash -s -- skills
 
-# 或一次性安装全部（会分三个阶段交互）
+# 或一次性安装全部（每个阶段都需要手动选择）
 curl -fsSL "${INSTALL_URL}" | bash -s -- all
-```
-
-### 自动化安装（仅限 CI/CD）
-
-⚠️ **警告:** `--yes` 模式会跳过所有交互和 token 输入，仅适合自动化环境：
-
-```bash
-curl -fsSL "${INSTALL_URL}" | bash -s -- all --yes
 ```
 
 ### 指定版本安装
@@ -447,16 +440,16 @@ echo "❌ 未找到 skills"
 
 `shell/codex/install_codex.sh` 支持 4 个安装目标：
 
-| 目标 | 说明 | 交互命令 | 自动化命令 |
-| --- | --- | --- | --- |
-| `all` | 完整安装流程（mcp → agents → skills） | `bash -s -- all` | `bash -s -- all --yes` |
-| `mcp` | 安装 MCP servers 到 `~/.codex/config.toml` | `bash -s -- mcp` | `bash -s -- mcp --yes` |
-| `agents` | 安装 Agent 规则到 `~/.codex/AGENTS.md` | `bash -s -- agents` | `bash -s -- agents --yes` |
-| `skills` | 安装 Skills 到 `~/.codex/skills/` | `bash -s -- skills` | `bash -s -- skills --yes` |
+| 目标 | 说明 | 安装命令 |
+| --- | --- | --- |
+| `all` | 完整安装流程（mcp → agents → skills） | `bash -s -- all` |
+| `mcp` | 安装 MCP servers 到 `~/.codex/config.toml` | `bash -s -- mcp` |
+| `agents` | 安装 Agent 规则到 `~/.codex/AGENTS.md` | `bash -s -- agents` |
+| `skills` | 安装 Skills 到 `~/.codex/skills/` | `bash -s -- skills` |
 
 ⚠️ **注意:**
+- 所有安装目标都必须手动选择要安装的项目
 - 交互模式会列出可选项，用户选择后输入 `d` 确认安装
-- `--yes` 模式跳过所有交互，仅适合 CI/CD 环境
 - 部分 MCP 需要 token，交互模式会提示输入
 - 只有安装 `db-query` skill 时才会下载二进制文件
 

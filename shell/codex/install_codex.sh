@@ -102,8 +102,7 @@ usage() {
      - ./shell/codex/install_codex.sh mcp --help
      - ./shell/codex/install_codex.sh agents --help
      - ./shell/codex/install_codex.sh skills --help
-  3) mcp / agents / skills 默认都会先列出可安装项，选择后输入 d 才开始安装
-  4) --yes 会跳过人工选择列表，仅适合自动化环境，日常安装不要使用
+  3) mcp / agents / skills 都必须先列出可安装项，用户手动选择后输入 d 才开始安装
 EOF
 }
 
@@ -114,23 +113,21 @@ agents_usage() {
   ./shell/codex/install_codex.sh agents [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--agents-path <path_in_repo>]
   ./shell/codex/install_codex.sh agents [--source <path_or_url>]
   ./shell/codex/install_codex.sh agents [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--file <path_in_repo>]
-  ./shell/codex/install_codex.sh agents [--yes]
 
 说明:
   1) 本地执行优先扫描本地 agents 目录
   2) 网络请求执行时，先读取远程 agents/README.md 展示可选 agent 文件列表
   3) 只能单选一个 agent 文件；选择 README 入口或 *GLOBAL*.md 时写入 ~/.codex/AGENTS.md，选择其他 agent 文件时写入当前项目 AGENTS.md
   4) 可通过 --github / --ref / --agents-path 指定远程来源
-  5) 若本地存在同名文件，提示是否覆盖（--yes 自动覆盖）
+  5) 若本地存在同名文件，提示是否覆盖
   6) 兼容单文件安装：可使用 --source 或 --file 直接安装单个文件
-  7) 默认必须先列出选项并由用户选择；--yes 会跳过选择列表
+  7) 必须手动选择要安装的 agent 文件
 
   --source       单个 agent 文件源地址，可为本地路径或 http(s) URL
   --github   GitHub 仓库地址（owner/repo 或完整 URL）
   --ref      GitHub 分支或标签，默认 master
   --agents-path  仓库内 agents 目录路径，默认 agents
   --file     仓库内单个 agent 文件路径（与 --github 搭配）
-  --yes      无交互模式，默认选择列表第 1 项并自动覆盖同名文件
 EOF
 }
 
@@ -139,16 +136,14 @@ skills_usage() {
 用法:
   ./shell/codex/install_codex.sh skills
   ./shell/codex/install_codex.sh skills [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--skills-path <path_in_repo>] [--db-query-tag <tag>] [--db-query-download <yes|no>]
-  ./shell/codex/install_codex.sh skills [--yes]
 
 说明:
   1) 本地执行优先扫描本地 skills 目录
   2) 网络请求执行时，先读取远程 skills/README.md 展示可选 skill 列表
-  3) 选中 skill 后才会拉取远程仓库并执行安装
+  3) 必须手动勾选要安装的 skill
   4) 可通过 --github / --ref / --skills-path 指定远程来源
   5) 安装到 ~/.codex/skills/
-  6) 若本地存在同名 skill，提示是否覆盖（--yes 自动覆盖）
-  7) 默认必须先列出选项并由用户勾选；--yes 会跳过选择列表
+  6) 若本地存在同名 skill，提示是否覆盖
 
 db-query 二进制发布地址可通过以下环境变量覆盖：
   DB_QUERY_RELEASE_BASE_URL  例如: https://github.com/owner/repo/releases/download/v0.1.0
@@ -163,16 +158,15 @@ mcp_usage() {
 用法:
   ./shell/codex/install_codex.sh mcp
   ./shell/codex/install_codex.sh mcp [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--mcp-path <path_in_repo>]
-  ./shell/codex/install_codex.sh mcp [--source <path_or_url>] [--config <config_path>] [--yes]
+  ./shell/codex/install_codex.sh mcp [--source <path_or_url>] [--config <config_path>]
 
 说明:
   1) 默认来源会自动判断：本地执行优先本地 mcp/*.md，网络请求执行优先远程仓库（404nffff/agents@master:mcp）
   2) 读取 ~/.codex/config.toml 的 mcp_servers 相关配置并对比
-  3) 交互勾选要安装/更新的 mcp server
-  4) 若目标已存在且配置不同，会逐项询问是否覆盖（--yes 自动覆盖）
+  3) 必须手动勾选要安装/更新的 mcp server
+  4) 若目标已存在且配置不同，会逐项询问是否覆盖
   5) 仅修改 mcp_servers 段落，不改动 config.toml 其他内容
-  6) 若选中配置包含空 token 或占位 token，会在写入前交互输入；--yes 模式不会交互输入 token
-  7) 默认必须先列出选项并由用户勾选；--yes 会跳过选择列表
+  6) 若选中配置包含空 token 或占位 token，会在写入前交互输入
 EOF
 }
 
@@ -984,10 +978,6 @@ install_agents_main() {
         github_agents_path="${2:-}"
         shift 2
         ;;
-      --yes)
-        AUTO_YES="true"
-        shift
-        ;;
       -h|--help)
         agents_usage
         return "${HELP_EXIT_CODE}"
@@ -1156,13 +1146,8 @@ install_agents_main() {
   fi
 
   if [[ "${AUTO_YES}" == "true" ]]; then
-    for idx in "${!selected[@]}"; do
-      selected[idx]=0
-    done
-    if [[ ${#selected[@]} -gt 0 ]]; then
-      selected[0]=1
-      selected_count=1
-    fi
+    echo "错误: agents 安装不支持 --yes 模式，必须手动选择要安装的 agent 文件。" >&2
+    return 1
   else
     tty_opened="false"
     if [[ -t 1 && -r /dev/tty ]] && exec 9<>/dev/tty 2>/dev/null; then
@@ -1361,10 +1346,6 @@ install_skills_main() {
         DB_QUERY_REMOTE_DOWNLOAD="${2:-}"
         DB_QUERY_REMOTE_DOWNLOAD_EXPLICIT="true"
         shift 2
-        ;;
-      --yes)
-        AUTO_YES="true"
-        shift
         ;;
       -h|--help)
         skills_usage
@@ -2621,10 +2602,6 @@ install_mcp_main() {
         target_config="${2:-}"
         shift 2
         ;;
-      --yes)
-        AUTO_YES="true"
-        shift
-        ;;
       -h|--help)
         mcp_usage
         return "${HELP_EXIT_CODE}"
@@ -2650,44 +2627,36 @@ install_mcp_main() {
 }
 
 install_all_main() {
-  local -a yes_args=()
-
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --yes)
-        AUTO_YES="true"
-        yes_args+=(--yes)
-        shift
-        ;;
       -h|--help)
         cat <<'EOF'
 用法:
-  ./shell/codex/install_codex.sh all [--yes]
+  ./shell/codex/install_codex.sh all
 
 说明:
   all 模式会按顺序执行 mcp -> agents -> skills。
-  不带 --yes 时，每一步都会先列出选项，用户选择并输入 d 后才安装。
-  带 --yes 时会跳过人工选择列表，仅适合自动化环境。
+  每一步都会先列出选项，用户必须手动选择并输入 d 后才安装。
 EOF
         return "${HELP_EXIT_CODE}"
         ;;
       *)
-        echo "错误: all 模式仅支持 --yes 参数，收到: $1" >&2
+        echo "错误: all 模式不支持参数: $1" >&2
         return 1
         ;;
     esac
   done
 
   echo ">>> 开始执行 MCP 安装"
-  install_mcp_main "${yes_args[@]}"
+  install_mcp_main
 
   echo
   echo ">>> 开始执行 AGENTS 安装"
-  install_agents_main "${yes_args[@]}"
+  install_agents_main
 
   echo
   echo ">>> 开始执行 Skills 安装"
-  install_skills_main "${yes_args[@]}"
+  install_skills_main
 }
 
 main() {
