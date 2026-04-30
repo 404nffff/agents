@@ -76,19 +76,19 @@ def load_runtime_env(env_file: str | None) -> tuple[dict[str, str], Path]:
         values.update(load_env_file(env_path))
     elif env_file:
         raise RuntimeError(f"Missing env file: {env_path}")
-
-    # 运行时环境变量优先级高于文件，便于外部覆盖敏感配置。
-    for key in (
-        ENV_KEY_BASE_URL,
-        ENV_KEY_API_KEY,
-        ENV_KEY_MODEL,
-        ENV_KEY_TIMEOUT,
-        ENV_KEY_SIZE,
-        ENV_KEY_ACTION,
-    ):
-        runtime_value = os.environ.get(key, "").strip()
-        if runtime_value:
-            values[key] = runtime_value
+    else:
+        # 默认 .env 不存在时才回退到进程环境，避免宿主机全局变量悄悄覆盖技能本地配置。
+        for key in (
+            ENV_KEY_BASE_URL,
+            ENV_KEY_API_KEY,
+            ENV_KEY_MODEL,
+            ENV_KEY_TIMEOUT,
+            ENV_KEY_SIZE,
+            ENV_KEY_ACTION,
+        ):
+            runtime_value = os.environ.get(key, "").strip()
+            if runtime_value:
+                values[key] = runtime_value
 
     return values, env_path
 

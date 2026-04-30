@@ -150,9 +150,9 @@ GATEWAY_IMAGEGEN_ACTION=auto
 
 优先级：
 
-- 命令行参数覆盖环境变量和 `.env`
-- 进程环境变量覆盖 `.env`
-- `.env` 作为这个技能的默认本地配置
+- 命令行参数覆盖 `.env` 和进程环境变量
+- `.env` 存在时作为这个技能的本地权威配置，不被宿主机进程环境变量覆盖
+- 仅当默认 `.env` 不存在时，才回退读取进程环境变量
 
 文生图示例：
 
@@ -183,7 +183,8 @@ python scripts/generate_gateway_image.py --prompt "<prompt>" --image "<reference
 脚本行为：
 
 - 默认从 skill 根目录读取 `.env`
-- 从 `.env` 或进程环境变量解析 `OPENAI_BASE_URL` 和 `OPENAI_API_KEY`
+- 默认优先从 `.env` 解析 `OPENAI_BASE_URL` 和 `OPENAI_API_KEY`
+- 当默认 `.env` 不存在时，才回退从进程环境变量解析配置
 - 调用 `/responses`
 - 默认使用 `model="gpt-5.4"`，也可以从 `GATEWAY_IMAGEGEN_MODEL` 覆盖
 - 通过 `image_generation` 工具发起 `action=auto|generate|edit`
