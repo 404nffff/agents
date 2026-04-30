@@ -12,6 +12,13 @@ else
   SCRIPT_DIR="$(pwd)"
 fi
 
+REPO_ROOT="${SCRIPT_DIR}"
+if [[ "${SCRIPT_DIR}" == */shell/codex ]]; then
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+elif [[ "${SCRIPT_DIR}" == */shell ]]; then
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
+
 IS_NETWORK_REQUEST_EXECUTION="false"
 case "${SCRIPT_PATH}" in
   /dev/fd/*|/proc/self/fd/*|/dev/stdin|stdin|-)
@@ -28,8 +35,8 @@ fi
 
 DEFAULT_GITHUB_REPO="404nffff/agents"
 DEFAULT_GITHUB_REF="master"
-DEFAULT_GITHUB_AGENTS_PATH="codex/agents"
-LOCAL_AGENTS_ROOT="${SCRIPT_DIR}/agents"
+DEFAULT_GITHUB_AGENTS_PATH="agents"
+LOCAL_AGENTS_ROOT="${REPO_ROOT}/agents"
 TARGET_ROOT="${HOME}/.codex"
 TARGET_AGENT_FILE="AGENTS.md"
 PROJECT_TARGET_FILE="$(pwd)/AGENTS.md"
@@ -70,15 +77,15 @@ declare -A SEEN_PATHS=()
 usage() {
   cat <<'USAGE'
 用法:
-  ./install_agents.sh
-  ./install_agents.sh [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--agents-path <path_in_repo>]
-  ./install_agents.sh [--source <path_or_url>]
-  ./install_agents.sh [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--file <path_in_repo>]
-  ./install_agents.sh [--yes]
+  ./shell/codex/install_agents.sh
+  ./shell/codex/install_agents.sh [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--agents-path <path_in_repo>]
+  ./shell/codex/install_agents.sh [--source <path_or_url>]
+  ./shell/codex/install_agents.sh [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--file <path_in_repo>]
+  ./shell/codex/install_agents.sh [--yes]
 
 说明:
-  1) 本地执行优先扫描本地 codex/agents 目录
-  2) 网络请求执行时，先读取远程 codex/agents/README.md 展示可选 agent 文件列表
+  1) 本地执行优先扫描本地 agents 目录
+  2) 网络请求执行时，先读取远程 agents/README.md 展示可选 agent 文件列表
   3) 只能单选一个 agent 文件，安装时同时覆盖 ~/.codex/AGENTS.md 与当前项目目录 AGENTS.md
   4) 可通过 --github / --ref / --agents-path 指定远程来源
   5) 若本地存在同名文件，提示是否覆盖（--yes 自动覆盖）
@@ -88,7 +95,7 @@ usage() {
   --source       单个 agent 文件源地址，可为本地路径或 http(s) URL
   --github       GitHub 仓库地址（owner/repo 或完整 URL）
   --ref          GitHub 分支或标签，默认 master
-  --agents-path  仓库内 agents 目录路径，默认 codex/agents
+  --agents-path  仓库内 agents 目录路径，默认 agents
   --file         仓库内单个 agent 文件路径（与 --github 搭配）
   --yes          无交互模式，默认选择列表第 1 项并自动覆盖同名文件
 USAGE

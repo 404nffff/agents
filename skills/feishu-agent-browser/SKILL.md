@@ -22,7 +22,7 @@ allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*)/
 ## 默认约定
 
 - 浏览器会话名：`feishu_cookie`
-- 状态文件：`codex/skills/feishu-agent-browser/feishu-agent-browser-state.json`
+- 状态文件：`skills/feishu-agent-browser/feishu-agent-browser-state.json`
 - 运行时目录：`/tmp/agent-browser-runtime`
 
 可通过以下环境变量覆盖：
@@ -73,7 +73,7 @@ allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*)/
 - `agent-browser --session "$SESSION" screenshot`
   - 用途：仅作为补充取证，不作为施工文档主体来源
 - `agent-browser --session "$SESSION" state save "$STATE_FILE"`
-  - 用途：当前飞书登录态保存到 `codex/skills/feishu-agent-browser/feishu-agent-browser-state.json`
+  - 用途：当前飞书登录态保存到 `skills/feishu-agent-browser/feishu-agent-browser-state.json`
 - `agent-browser --session "$SESSION" state load "$STATE_FILE"`
   - 用途：复用已保存的飞书状态重新打开页面
 - `agent-browser --session "$SESSION" close`
@@ -135,7 +135,7 @@ bash ~/.codex/skills/feishu-agent-browser/scripts/open_with_cookie.sh "https://x
 - 把 Cookie 写入当前飞书浏览会话
 - 打开目标飞书页面
 - 自动等待 `networkidle`
-- 把当前状态保存到 `codex/skills/feishu-agent-browser/feishu-agent-browser-state.json`
+- 把当前状态保存到 `skills/feishu-agent-browser/feishu-agent-browser-state.json`
 - 输出标题和 URL
 
 也支持通过环境变量直接传 Cookie：
@@ -235,7 +235,7 @@ agent-browser --session "${FEISHU_AGENT_BROWSER_SESSION:-feishu_cookie}" close
 ### `scripts/save_state.sh`
 
 - 从当前 `agent-browser` 会话导出飞书状态
-- 默认保存到 `codex/skills/feishu-agent-browser/feishu-agent-browser-state.json`
+- 默认保存到 `skills/feishu-agent-browser/feishu-agent-browser-state.json`
 - 允许通过环境变量覆盖会话名和输出路径
 
 ### `scripts/open_with_cookie.sh`
@@ -269,7 +269,7 @@ agent-browser --session "${FEISHU_AGENT_BROWSER_SESSION:-feishu_cookie}" close
 - 抓取到飞书页面内容后，必须继续产出施工文档；不能只停留在“打开页面”或“提取正文”
 - 施工文档是页面业务内容的结构化重写，不是浏览器执行报告；任何抓取动作、命令结果、截图路径、状态保存记录都不得充当文档主内容
 - 施工文档输出必须严格遵循同目录下的 `本 Skill 末尾的「施工文档模板」`；生成结果必须使用该模板的章节、字段名和顺序，禁止自定义结构
-- 正式生成的计划/施工文档必须写到按链接区分的 `docs/feishu_url_<slug>/` 目录下；`codex/skills/feishu-agent-browser/` 目录只保留模板、样例和脚本，不作为正式结果输出目录
+- 正式生成的计划/施工文档必须写到按链接区分的 `docs/feishu_url_<slug>/` 目录下；`skills/feishu-agent-browser/` 目录只保留模板、样例和脚本，不作为正式结果输出目录
 - 正式结果文件全部写入后，必须执行 `agent-browser --session "$SESSION_NAME" close` 关闭当前会话；不要把飞书浏览 session 长时间挂在后台
 
 ## 施工文档模板

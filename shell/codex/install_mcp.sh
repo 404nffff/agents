@@ -11,9 +11,16 @@ if [[ -n "${SCRIPT_PATH}" ]] && [[ "${SCRIPT_PATH}" == */* ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
 fi
 
+REPO_ROOT="${SCRIPT_DIR}"
+if [[ -n "${SCRIPT_DIR}" && "${SCRIPT_DIR}" == */shell/codex ]]; then
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+elif [[ -n "${SCRIPT_DIR}" && "${SCRIPT_DIR}" == */shell ]]; then
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
+
 DEFAULT_GITHUB_REPO="404nffff/agents"
 DEFAULT_GITHUB_REF="master"
-DEFAULT_GITHUB_MCP_PATH="codex/mcp.md"
+DEFAULT_GITHUB_MCP_PATH="mcp/mcp.md"
 TARGET_CONFIG="${HOME}/.codex/config.toml"
 AUTO_YES="false"
 
@@ -24,10 +31,10 @@ GITHUB_REF="${DEFAULT_GITHUB_REF}"
 GITHUB_MCP_PATH="${DEFAULT_GITHUB_MCP_PATH}"
 SOURCE_LABEL=""
 LOCAL_FALLBACK_SOURCE=""
-CWD_FALLBACK_SOURCE_1="$(pwd)/codex/mcp.md"
+CWD_FALLBACK_SOURCE_1="$(pwd)/mcp/mcp.md"
 CWD_FALLBACK_SOURCE_2="$(pwd)/mcp.md"
-if [[ -n "${SCRIPT_DIR}" ]]; then
-  LOCAL_FALLBACK_SOURCE="${SCRIPT_DIR}/mcp.md"
+if [[ -n "${REPO_ROOT}" ]]; then
+  LOCAL_FALLBACK_SOURCE="${REPO_ROOT}/mcp/mcp.md"
 fi
 
 TMP_FETCH_DIR=""
@@ -66,12 +73,12 @@ handle_interrupt() {
 usage() {
   cat <<'EOF'
 用法:
-  ./install_mcp.sh
-  ./install_mcp.sh [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--mcp-path <path_in_repo>]
-  ./install_mcp.sh [--source <path_or_url>] [--config <config_path>] [--yes]
+  ./shell/codex/install_mcp.sh
+  ./shell/codex/install_mcp.sh [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--mcp-path <path_in_repo>]
+  ./shell/codex/install_mcp.sh [--source <path_or_url>] [--config <config_path>] [--yes]
 
 说明:
-  1) 默认从远程仓库读取 404nffff/agents@master:codex/mcp.md
+  1) 默认从远程仓库读取 404nffff/agents@master:mcp/mcp.md
   2) 读取 ~/.codex/config.toml 的 mcp_servers 相关配置并对比
   3) 交互勾选要安装/更新的 mcp server
   4) 若目标已存在且配置不同，会逐项询问是否覆盖
@@ -81,7 +88,7 @@ usage() {
   --source   直接指定 mcp.md 来源（本地路径或 http(s) URL）
   --github   指定 GitHub 仓库（owner/repo 或完整 URL）
   --ref      指定 GitHub 分支或标签，默认 master
-  --mcp-path 指定仓库中的 mcp.md 路径，默认 codex/mcp.md
+  --mcp-path 指定仓库中的 mcp.md 路径，默认 mcp/mcp.md
   --config   指定目标配置文件路径，默认 ~/.codex/config.toml
   --yes      自动同意覆盖（仅对“配置不同”的已存在 server 生效）
 EOF
@@ -181,7 +188,7 @@ fetch_source_file() {
       return
     fi
     echo "错误: 未安装 curl，且未找到可用本地 mcp.md 回退文件。" >&2
-    echo "提示: 可使用 --source 指定本地文件或 URL，例如: --source codex/mcp.md" >&2
+    echo "提示: 可使用 --source 指定本地文件或 URL，例如: --source mcp/mcp.md" >&2
     exit 1
   fi
 
@@ -203,7 +210,7 @@ fetch_source_file() {
   fi
 
   echo "错误: 无法拉取远程文件 ${raw_url}" >&2
-  echo "提示: 可使用 --source 指定本地文件或 URL，例如: --source codex/mcp.md" >&2
+  echo "提示: 可使用 --source 指定本地文件或 URL，例如: --source mcp/mcp.md" >&2
   exit 1
 }
 

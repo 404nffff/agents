@@ -13,6 +13,13 @@ else
   SCRIPT_DIR="$(pwd)"
 fi
 
+REPO_ROOT="${SCRIPT_DIR}"
+if [[ "${SCRIPT_DIR}" == */shell/codex ]]; then
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+elif [[ "${SCRIPT_DIR}" == */shell ]]; then
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
+
 IS_NETWORK_REQUEST_EXECUTION="false"
 case "${SCRIPT_PATH}" in
   /dev/fd/*|/proc/self/fd/*|/dev/stdin|stdin|-)
@@ -84,17 +91,17 @@ trap handle_interrupt INT
 usage() {
   cat <<'EOF'
 用法:
-  ./install.sh
-  ./install.sh <mcp|agents|skills|all> [目标参数...]
-  ./install.sh --target <mcp|agents|skills|all> [目标参数...]
-  ./install.sh --mcp|--agents|--skills|--all [目标参数...]
+  ./shell/codex/install_codex.sh
+  ./shell/codex/install_codex.sh <mcp|agents|skills|all> [目标参数...]
+  ./shell/codex/install_codex.sh --target <mcp|agents|skills|all> [目标参数...]
+  ./shell/codex/install_codex.sh --mcp|--agents|--skills|--all [目标参数...]
 
 说明:
   1) 不带参数时，进入交互菜单选择安装目标
   2) 各目标参数与原脚本基本兼容，详情见:
-     - ./install.sh mcp --help
-     - ./install.sh agents --help
-     - ./install.sh skills --help
+     - ./shell/codex/install_codex.sh mcp --help
+     - ./shell/codex/install_codex.sh agents --help
+     - ./shell/codex/install_codex.sh skills --help
   3) all 模式会顺序执行: mcp -> agents -> skills
 EOF
 }
@@ -102,15 +109,15 @@ EOF
 agents_usage() {
   cat <<'EOF'
 用法:
-  ./install.sh agents
-  ./install.sh agents [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--agents-path <path_in_repo>]
-  ./install.sh agents [--source <path_or_url>]
-  ./install.sh agents [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--file <path_in_repo>]
-  ./install.sh agents [--yes]
+  ./shell/codex/install_codex.sh agents
+  ./shell/codex/install_codex.sh agents [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--agents-path <path_in_repo>]
+  ./shell/codex/install_codex.sh agents [--source <path_or_url>]
+  ./shell/codex/install_codex.sh agents [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--file <path_in_repo>]
+  ./shell/codex/install_codex.sh agents [--yes]
 
 说明:
-  1) 本地执行优先扫描本地 codex/agents 目录
-  2) 网络请求执行时，先读取远程 codex/agents/README.md 展示可选 agent 文件列表
+  1) 本地执行优先扫描本地 agents 目录
+  2) 网络请求执行时，先读取远程 agents/README.md 展示可选 agent 文件列表
   3) 只能单选一个 agent 文件；选择 README 入口或 *GLOBAL*.md 时写入 ~/.codex/AGENTS.md，选择其他 agent 文件时写入当前项目 AGENTS.md
   4) 可通过 --github / --ref / --agents-path 指定远程来源
   5) 若本地存在同名文件，提示是否覆盖（--yes 自动覆盖）
@@ -119,7 +126,7 @@ agents_usage() {
   --source       单个 agent 文件源地址，可为本地路径或 http(s) URL
   --github   GitHub 仓库地址（owner/repo 或完整 URL）
   --ref      GitHub 分支或标签，默认 master
-  --agents-path  仓库内 agents 目录路径，默认 codex/agents
+  --agents-path  仓库内 agents 目录路径，默认 agents
   --file     仓库内单个 agent 文件路径（与 --github 搭配）
   --yes      无交互模式，默认选择列表第 1 项并自动覆盖同名文件
 EOF
@@ -128,13 +135,13 @@ EOF
 skills_usage() {
   cat <<'EOF'
 用法:
-  ./install.sh skills
-  ./install.sh skills [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--skills-path <path_in_repo>] [--db-query-tag <tag>] [--db-query-download <yes|no>]
-  ./install.sh skills [--yes]
+  ./shell/codex/install_codex.sh skills
+  ./shell/codex/install_codex.sh skills [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--skills-path <path_in_repo>] [--db-query-tag <tag>] [--db-query-download <yes|no>]
+  ./shell/codex/install_codex.sh skills [--yes]
 
 说明:
-  1) 本地执行优先扫描本地 codex/skills 目录
-  2) 网络请求执行时，先读取远程 codex/skills/README.md 展示可选 skill 列表
+  1) 本地执行优先扫描本地 skills 目录
+  2) 网络请求执行时，先读取远程 skills/README.md 展示可选 skill 列表
   3) 选中 skill 后才会拉取远程仓库并执行安装
   4) 可通过 --github / --ref / --skills-path 指定远程来源
   5) 安装到 ~/.codex/skills/
@@ -151,12 +158,12 @@ EOF
 mcp_usage() {
   cat <<'EOF'
 用法:
-  ./install.sh mcp
-  ./install.sh mcp [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--mcp-path <path_in_repo>]
-  ./install.sh mcp [--source <path_or_url>] [--config <config_path>] [--yes]
+  ./shell/codex/install_codex.sh mcp
+  ./shell/codex/install_codex.sh mcp [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--mcp-path <path_in_repo>]
+  ./shell/codex/install_codex.sh mcp [--source <path_or_url>] [--config <config_path>] [--yes]
 
 说明:
-  1) 默认来源会自动判断：本地执行优先本地文件，网络请求执行优先远程仓库（404nffff/agents@master:codex/mcp.md）
+  1) 默认来源会自动判断：本地执行优先本地文件，网络请求执行优先远程仓库（404nffff/agents@master:mcp/mcp.md）
   2) 读取 ~/.codex/config.toml 的 mcp_servers 相关配置并对比
   3) 交互勾选要安装/更新的 mcp server
   4) 若目标已存在且配置不同，会逐项询问是否覆盖（--yes 自动覆盖）
@@ -900,8 +907,8 @@ install_agents_main() {
   local github_repo=""
   local github_ref="${DEFAULT_GITHUB_REF}"
   local github_file=""
-  local github_agents_path="codex/agents"
-  local local_agents_root="${SCRIPT_DIR}/agents"
+  local github_agents_path="agents"
+  local local_agents_root="${REPO_ROOT}/agents"
   local target_root="${HOME}/.codex"
   local target_agent_file="AGENTS.md"
   local project_target_file="$(pwd)/AGENTS.md"
@@ -1280,8 +1287,8 @@ install_skills_main() {
   local source_mode=""
   local github_repo=""
   local github_ref="${DEFAULT_GITHUB_REF}"
-  local github_skills_path="codex/skills"
-  local local_skills_root="${SCRIPT_DIR}/skills"
+  local github_skills_path="skills"
+  local local_skills_root="${REPO_ROOT}/skills"
   local target_root="${HOME}/.codex/skills"
   local skills_root=""
   local source_label=""
@@ -1721,11 +1728,11 @@ install_mcp_main() {
   local source_input=""
   local github_repo="${DEFAULT_GITHUB_REPO}"
   local github_ref="${DEFAULT_GITHUB_REF}"
-  local github_mcp_path="codex/mcp.md"
+  local github_mcp_path="mcp/mcp.md"
   local target_config="${HOME}/.codex/config.toml"
   local source_label=""
-  local local_fallback_source="${SCRIPT_DIR}/mcp.md"
-  local cwd_fallback_source_1="$(pwd)/codex/mcp.md"
+  local local_fallback_source="${REPO_ROOT}/mcp/mcp.md"
+  local cwd_fallback_source_1="$(pwd)/mcp/mcp.md"
   local cwd_fallback_source_2="$(pwd)/mcp.md"
   local tmp_source_file=""
   local tmp_status_dir=""
@@ -1782,7 +1789,7 @@ install_mcp_main() {
         return
       fi
       echo "错误: 未安装 curl，且未找到可用本地 mcp.md 回退文件。" >&2
-      echo "提示: 可使用 --source 指定本地文件或 URL，例如: --source codex/mcp.md" >&2
+      echo "提示: 可使用 --source 指定本地文件或 URL，例如: --source mcp/mcp.md" >&2
       exit 1
     fi
 
@@ -1804,7 +1811,7 @@ install_mcp_main() {
     fi
 
     echo "错误: 无法拉取远程文件 ${raw_url}" >&2
-    echo "提示: 可使用 --source 指定本地文件或 URL，例如: --source codex/mcp.md" >&2
+    echo "提示: 可使用 --source 指定本地文件或 URL，例如: --source mcp/mcp.md" >&2
     exit 1
   }
 
@@ -2562,7 +2569,7 @@ install_all_main() {
       -h|--help)
         cat <<'EOF'
 用法:
-  ./install.sh all [--yes]
+  ./shell/codex/install_codex.sh all [--yes]
 
 说明:
   all 模式会按顺序执行 mcp -> agents -> skills。

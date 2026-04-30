@@ -1,5 +1,5 @@
 # MCP 清单说明
-`install_mcp.sh` 会解析本文件中的每个 `mcp_servers.*` 条目，并把对应 TOML 配置写入 `~/.codex/config.toml` 的 `mcp_servers` 区域。
+`shell/codex/install_mcp.sh` 会解析本文件中的每个 `mcp_servers.*` 条目，并把对应 TOML 配置写入 `~/.codex/config.toml` 的 `mcp_servers` 区域。
 
 ## 基础安装
 ### uv 安装

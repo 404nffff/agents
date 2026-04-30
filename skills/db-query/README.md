@@ -395,14 +395,14 @@ bash release_with_gh.sh
 
 ```bash
 cd /path/to/your/repo
-bash codex/skills/db-query/scripts/build.sh
-git add codex/skills/db-query
+bash skills/db-query/scripts/build.sh
+git add skills/db-query
 git commit -m "release: db-query binaries"
 git tag -a v0.1.0 -m "db-query v0.1.0"
 git push origin HEAD --tags
 gh release create v0.1.0 \
-  codex/skills/db-query/bin/db-query-linux-amd64 \
-  codex/skills/db-query/bin/db-query-windows-amd64.exe \
+  skills/db-query/bin/db-query-linux-amd64 \
+  skills/db-query/bin/db-query-windows-amd64.exe \
   --title "v0.1.0" \
   --notes "db-query release binaries"
 ```
@@ -411,7 +411,7 @@ gh release create v0.1.0 \
 
 ```bash
 gh release upload v0.1.0 \
-  codex/skills/db-query/bin/db-query-linux-amd64 \
-  codex/skills/db-query/bin/db-query-windows-amd64.exe \
+  skills/db-query/bin/db-query-linux-amd64 \
+  skills/db-query/bin/db-query-windows-amd64.exe \
   --clobber
 ```

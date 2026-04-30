@@ -11,15 +11,22 @@ if [[ -n "${SCRIPT_PATH}" ]] && [[ "${SCRIPT_PATH}" == */* ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
 fi
 
+REPO_ROOT="${SCRIPT_DIR}"
+if [[ -n "${SCRIPT_DIR}" && "${SCRIPT_DIR}" == */shell/codex ]]; then
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+elif [[ -n "${SCRIPT_DIR}" && "${SCRIPT_DIR}" == */shell ]]; then
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
+
 LOCAL_SKILLS_ROOT=""
-if [[ -n "${SCRIPT_DIR}" ]]; then
-  LOCAL_SKILLS_ROOT="${SCRIPT_DIR}/skills"
+if [[ -n "${REPO_ROOT}" ]]; then
+  LOCAL_SKILLS_ROOT="${REPO_ROOT}/skills"
 fi
 TARGET_ROOT="${HOME}/.codex/skills"
 
 DEFAULT_GITHUB_REPO="404nffff/agents"
 DEFAULT_GITHUB_REF="master"
-DEFAULT_GITHUB_SKILLS_PATH="codex/skills"
+DEFAULT_GITHUB_SKILLS_PATH="skills"
 DB_QUERY_RELEASE_TAG="${DB_QUERY_RELEASE_TAG:-latest}"
 DB_QUERY_RELEASE_REPO="${DB_QUERY_RELEASE_REPO:-}"
 DB_QUERY_RELEASE_BASE_URL="${DB_QUERY_RELEASE_BASE_URL:-}"
@@ -55,12 +62,12 @@ handle_interrupt() {
 usage() {
   cat <<'EOF'
 用法:
-  ./install_skills.sh
-  ./install_skills.sh [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--skills-path <path_in_repo>]
+  ./shell/codex/install_skills.sh
+  ./shell/codex/install_skills.sh [--github <owner/repo|https://github.com/owner/repo>] [--ref <branch_or_tag>] [--skills-path <path_in_repo>]
 
 说明:
   1) 扫描当前仓库的 skills 目录
-  2) 若本地 skills 不存在，则默认从远程仓库读取（404nffff/agents@master:codex/skills）
+  2) 若本地 skills 不存在，则默认从远程仓库读取（404nffff/agents@master:skills）
   3) 可通过 --github / --ref / --skills-path 指定远程仓库来源
   4) 读取每个 skill 的 SKILL.md/skill.md 的 name 与 description
   5) 交互勾选需要安装的 skills

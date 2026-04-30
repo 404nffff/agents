@@ -1,13 +1,13 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-set "DEFAULT_REMOTE_SOURCE=https://raw.githubusercontent.com/404nffff/agents/master/codex/AGENTS.md"
+set "DEFAULT_REMOTE_SOURCE=https://raw.githubusercontent.com/404nffff/agents/master/agents/AGENTS.md"
 set "TARGET_USER_FILE=%USERPROFILE%\.codex\AGENTS.md"
 set "SOURCE_MODE="
 set "SOURCE_INPUT="
 set "GITHUB_REPO="
-set "GITHUB_REF=main"
-set "GITHUB_FILE=AGENTS.md"
+set "GITHUB_REF=master"
+set "GITHUB_FILE=agents/AGENTS.md"
 set "AUTO_YES=0"
 
 if "%~1"=="" goto parse_done
@@ -87,15 +87,15 @@ goto cleanup
 
 :usage
 echo Usage:
-echo   install_agents_windows.bat [--source ^<path_or_url^>]
-echo   install_agents_windows.bat [--github ^<owner/repo^|https://github.com/owner/repo^>] [--ref ^<branch_or_tag^>] [--file ^<path_in_repo^>]
-echo   install_agents_windows.bat [--yes]
+echo   shell\codex\install_agents_windows.bat [--source ^<path_or_url^>]
+echo   shell\codex\install_agents_windows.bat [--github ^<owner/repo^|https://github.com/owner/repo^>] [--ref ^<branch_or_tag^>] [--file ^<path_in_repo^>]
+echo   shell\codex\install_agents_windows.bat [--yes]
 echo.
 echo Options:
 echo   --source   Source AGENTS.md from local path or URL
 echo   --github   GitHub repository source
-echo   --ref      Branch/tag, default: main
-echo   --file     File path in repository, default: AGENTS.md
+echo   --ref      Branch/tag, default: master
+echo   --file     File path in repository, default: agents/AGENTS.md
 echo   --yes      Non-interactive mode, auto replace when needed
 exit /b 0
 

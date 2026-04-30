@@ -3,12 +3,13 @@ setlocal EnableExtensions EnableDelayedExpansion
 
 set "SCRIPT_DIR=%~dp0"
 if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
-set "LOCAL_SKILLS_ROOT=%SCRIPT_DIR%\skills"
+set "REPO_ROOT=%SCRIPT_DIR%\..\.."
+set "LOCAL_SKILLS_ROOT=%REPO_ROOT%\skills"
 set "TARGET_ROOT=%USERPROFILE%\.codex\skills"
 
 set "DEFAULT_GITHUB_REPO=404nffff/agents"
 set "DEFAULT_GITHUB_REF=master"
-set "DEFAULT_GITHUB_SKILLS_PATH=codex/skills"
+set "DEFAULT_GITHUB_SKILLS_PATH=skills"
 
 set "SOURCE_MODE="
 set "GITHUB_REPO="
@@ -94,14 +95,14 @@ goto cleanup_ok
 
 :usage
 echo Usage:
-echo   install_skills_windows.bat
-echo   install_skills_windows.bat [--github ^<owner/repo^|https://github.com/owner/repo^>] [--ref ^<branch_or_tag^>] [--skills-path ^<path_in_repo^>]
-echo   install_skills_windows.bat [--yes]
+echo   shell\codex\install_skills_windows.bat
+echo   shell\codex\install_skills_windows.bat [--github ^<owner/repo^|https://github.com/owner/repo^>] [--ref ^<branch_or_tag^>] [--skills-path ^<path_in_repo^>]
+echo   shell\codex\install_skills_windows.bat [--yes]
 echo.
 echo Options:
 echo   --github      GitHub repository source
 echo   --ref         Branch/tag, default: master
-echo   --skills-path Skills path in repository, default: codex/skills
+echo   --skills-path Skills path in repository, default: skills
 echo   --yes         Non-interactive mode, overwrite existing selected skills
 exit /b 0
 

@@ -1,6 +1,6 @@
 # Agents Catalog
 
-本文件用于 `codex/install.sh agents` 与 `codex/install_agents.sh` 在安装前展示可选 agent 文件列表。
+本文件用于 `shell/codex/install_codex.sh agents` 与 `shell/codex/install_agents.sh` 在安装前展示可选 agent 文件列表。
 新增或调整 agent 文件时，请同步更新下方目录清单。
 
 

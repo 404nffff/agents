@@ -1,16 +1,16 @@
 # Skills Catalog
 
-本文件是 `codex/skills` 的总目录清单，主要提供给以下两个场景：
+本文件是 `skills` 的总目录清单，主要提供给以下两个场景：
 
-- `codex/install.sh skills` 在远程模式下先读取本文件，再展示可安装的 skill 列表
+- `shell/codex/install_codex.sh skills` 在远程模式下先读取本文件，再展示可安装的 skill 列表
 - 维护者快速核对本地 skill 目录、相对路径与对外展示名称
 
 ## 维护说明
 
-- 目录表只能维护在 `<!-- SKILL_CATALOG_START -->` 与 `<!-- SKILL_CATALOG_END -->` 之间，避免影响 `install.sh` 的远程解析逻辑
+- 目录表只能维护在 `<!-- SKILL_CATALOG_START -->` 与 `<!-- SKILL_CATALOG_END -->` 之间，避免影响 `shell/codex/install_codex.sh` 的远程解析逻辑
 - 每个 skill 至少应有一个 `SKILL.md`，并在 frontmatter 中声明 `name` 与 `description`
 - 新增、删除、重命名或移动 skill 目录后，必须同步更新下方目录表
-- `Directory` 字段填写相对于 `codex/skills/` 的目录路径，可与 `name` 不同，例如：
+- `Directory` 字段填写相对于 `skills/` 的目录路径，可与 `name` 不同，例如：
   - `grok-search` 的目录是 `grok-skill`
   - `vercel-react-best-practices` 的目录是 `react-best-practices`
   - `using-superpowers` 的目录是 `superpowers/using-superpowers`
@@ -21,7 +21,7 @@
 | 字段 | 说明 |
 | --- | --- |
 | `Name` | 对外展示名称，通常取自 `SKILL.md` frontmatter 的 `name` |
-| `Directory` | skill 在 `codex/skills/` 下的相对目录 |
+| `Directory` | skill 在 `skills/` 下的相对目录 |
 | `Description` | skill 的触发场景或用途摘要 |
 
 <!-- SKILL_CATALOG_START -->

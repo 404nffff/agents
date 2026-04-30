@@ -23,7 +23,7 @@ description: 当用户在 Codex CLI 中要求生成图片、希望把图片保�
    - 方图：`1024x1024`
    - 竖图 / 手机截图：`1024x1536`
    - 横图：`1536x1024`
-7. 把 `codex/skills/codex-gateway-imagegen/.env.example` 复制为 `codex/skills/codex-gateway-imagegen/.env`，并填入真实网关配置。
+7. 把 `skills/codex-gateway-imagegen/.env.example` 复制为 `skills/codex-gateway-imagegen/.env`，并填入真实网关配置。
 8. 执行 `scripts/generate_gateway_image.py`。
 9. 如果沙箱内请求因 TLS、schannel 或 read-timeout 失败，用同样参数在更高网络权限下重试。
 10. 向用户回报最终图片保存路径。
@@ -128,7 +128,7 @@ description: 当用户在 Codex CLI 中要求生成图片、希望把图片保�
 
 ### 5. 用脚本发起请求
 
-先准备 `codex/skills/codex-gateway-imagegen/.env`。最快的方式是从 `.env.example` 复制：
+先准备 `skills/codex-gateway-imagegen/.env`。最快的方式是从 `.env.example` 复制：
 
 ```dotenv
 OPENAI_BASE_URL=https://your-gateway.example.com/v1
