@@ -43,7 +43,7 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
 | `update_plan` (plan tool)| 维护任务拆解与状态 | 视配置决定是否包含，使用时保持计划与实际同步，辅助复杂场景规划。 |
 | `unified_exec` | 提供 PTY 会话运行交互式命令 | 仅在 `experimental_unified_exec_tool` 开启时使用。 |
 | `view_image` | 获取界面截图或渲染图像供分析 | 需在配置中启用 `tools.view_image`。 |
-| `web_search_request` | 发起在线检索以补充事实依据 | 默认关闭，需配置 `tools.web_search` 或执行时加 `--search`。 |
+| `web_search_request` | 发起在线检索以补充事实依据 | 仅作为 MCP 检索不可用时的最终降级路径；默认关闭，需配置 `tools.web_search` 或执行时加 `--search`。 |
 
 ### 4.2 外部工具 (MCP) 与降级策略
 | 类别 | MCP 工具名 | 规范与降级策略 |
@@ -51,7 +51,8 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
 | **项目知识库 / 记忆优先检索** | `ai_localbase` | 优先使用：`knowledge_base_create`、`knowledge_base_search`、`chat_ask`、`document_upload`、`document_append`、`document_update`、`document_delete`；知识库列表资源（如 `ai-localbase://knowledge-bases`）仅作为兜底确认入口。启动时必须先通过 create/get-or-create 确认真实 `kb_id`，再进行检索、问答或写入；用于项目文档沉淀、历史方案检索与知识复用。 |
 | **语义检索** | `codebase-retrieval` | 任何需要理解代码上下文、探索性搜索必须优先调用。不可用时重试1次，然后降级为 `code-index`，最后降级为原生 `Grep`/`Glob`/`Read`。 |
 | **数据库查询** | `skill[db-query]` / `skill[mysql-query]` | 只要代码中涉及数据库查询（包含 MySQL、Redis、Mongo、PGSQL），必须先使用 `db-query` skill；若为 MySQL 查询且 `db-query` 连续重试 3 次仍不可用、不存在或执行失败，才允许降级使用 `mysql-query` skill；禁止绕过该流程直接执行数据库查询。 |
-| **在线检索** | `skill[grok-search]` | 发起网络事实补充。首选使用 skill `grok-search`，失败后降级为 MCP `exa-pool`，再失败降级为 `chrome-devtools` 或原生 web search。 |
+| **在线检索** | `exa` MCP | 发起通用网络事实补充、官方页面定位、产品/价格/新闻等实时信息查询时，首选使用 `exa` MCP（如 `web_search_exa`、`web_fetch_exa`）。若 `exa` MCP 不可用、超时或连续失败，再降级为原生 web search / `web_search_request`。 |
+| **文档搜索** | `context7` / `deepwiki` / `microsoft-docs-mcp` MCP | 查询库、框架、GitHub 仓库或 Microsoft / Azure 官方技术文档时，必须优先使用专用文档 MCP：通用库与框架文档使用 `context7`，GitHub 仓库架构与项目文档使用 `deepwiki`，Microsoft / Azure / .NET / Microsoft 365 相关文档与代码示例使用 `microsoft-docs-mcp`。若对应 MCP 不可用、无结果或连续失败，再降级为 `exa` MCP；仍不可用时才降级为原生 web search / `web_search_request`。 |
 | **深度思考** | `sequential-thinking` | 复杂问题分析、风险识别必须强制使用。 |
 | **任务规划** | `shrimp-task-manager` | 复杂任务必须使用 `plan_task`, `analyze_task`, `reflect_task`, `split_tasks` 做规模评估与任务拆解。 |
 
