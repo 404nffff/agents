@@ -2,12 +2,21 @@
 
 > **目标读者:** AI Agent & 自动化执行脚本
 > **标准仓库位置:** `https://github.com/404nffff/agents`
-> **标准脚本位置:** `https://raw.githubusercontent.com/404nffff/agents/master/shell/codex/install_codex.sh`
-> **核心准则:** 本文档可以部署到任意位置，但安装来源必须始终指向标准仓库。Codex 使用 `shell/codex/install_codex.sh` 自动安装；Claude Code、OpenClaw 复用本仓库资源并按各自客户端格式导入，不要把 Codex 脚本当作跨客户端安装器。
+> **标准资源位置:** `mcp/mcp.md`、`agents/README.md`、`skills/README.md`
+> **Codex 脚本入口:** `https://raw.githubusercontent.com/404nffff/agents/master/shell/codex/install_codex.sh`
+> **核心准则:** 本文档是标准仓库资源的全局安装入口，覆盖 Codex、Claude Code、OpenClaw 三类客户端。所有客户端都必须从标准仓库读取 MCP、Agents、Skills 源文件，并在安装前先确认要导入的条目；Codex 使用 `shell/codex/install_codex.sh` 交互安装，Claude Code 与 OpenClaw 按各自官方配置入口导入。不要把任一客户端的安装方式当作其他客户端的通用安装器。
 
 ## 快速开始
 
-Codex 默认安装方式是直接从 Raw GitHub 拉取标准安装脚本执行，不要求当前机器已有本仓库源码。
+先确认目标客户端，再按对应章节安装。不要跳过客户端选择，也不要把 Codex 的脚本入口用于 Claude Code 或 OpenClaw。
+
+| 客户端 | 快速入口 | 适用范围 |
+| --- | --- | --- |
+| Codex | 见下方 Codex 交互命令 | 可通过 `shell/codex/install_codex.sh` 自动读取列表、交互选择并写入 `~/.codex`。 |
+| Claude Code | 跳到 [Claude Code](#claude-code) | 需要把标准资源转换/复制到 Claude Code 的 MCP、`CLAUDE.md`、subagents、skills 入口。 |
+| OpenClaw | 跳到 [OpenClaw](#openclaw) | 需要把标准资源导入 OpenClaw MCP registry、workspace bootstrap、agents config 和 skills 目录。 |
+
+### Codex 快速开始
 
 默认必须使用交互安装：脚本会先列出可安装的 MCP servers、Agent 文件或 Skills，用户选择条目并输入 `d` 后才开始安装。部分 MCP server 需要 API Token 或 Bearer Token，安装脚本会在写入 `~/.codex/config.toml` 前提示用户输入，输入完成后再继续安装：
 
@@ -24,13 +33,7 @@ curl -fsSL "${INSTALL_URL}" | bash -s -- agents
 curl -fsSL "${INSTALL_URL}" | bash -s -- skills
 ```
 
-只有在自动化环境中已明确知道要安装默认项，且接受不先人工选择列表时，才使用无交互安装：
-
-```bash
-curl -fsSL "${INSTALL_URL}" | bash -s -- all --yes
-```
-
-`--yes` 模式不会停下来要求用户选择条目，也不会要求输入 token；遇到空 token 或占位 token 时会保留原占位并输出提示。日常安装不要使用 `--yes`。
+不要在日常安装流程中使用 `--yes`。`--yes` 模式不会停下来要求用户选择条目，也不会要求输入 token；遇到空 token 或占位 token 时会保留原占位并输出提示。只有自动化环境已明确接受默认项时才允许使用。
 
 ---
 
@@ -61,11 +64,7 @@ curl -fsSL "${INSTALL_URL}" | bash -s -- agents
 curl -fsSL "${INSTALL_URL}" | bash -s -- skills
 ```
 
-仅当处于自动化环境、已明确接受跳过人工选择列表时，才使用全量无交互安装：
-
-```bash
-curl -fsSL "${INSTALL_URL}" | bash -s -- all --yes
-```
+日常安装不要使用 `--yes`。`--yes` 会跳过人工选择列表，仅适合自动化环境。
 
 ### Claude Code
 
@@ -289,21 +288,24 @@ OpenClaw 官方参考：
 | 项目 | 标准位置 |
 | --- | --- |
 | GitHub 仓库 | `https://github.com/404nffff/agents` |
-| Raw GitHub 安装脚本 | `https://raw.githubusercontent.com/404nffff/agents/master/shell/codex/install_codex.sh` |
 | MCP 配置来源 | `mcp/mcp.md` |
 | Agents 目录索引 | `agents/README.md` |
 | Skills 目录索引 | `skills/README.md` |
+| Codex Raw 安装脚本 | `https://raw.githubusercontent.com/404nffff/agents/master/shell/codex/install_codex.sh` |
+| Claude Code 安装入口 | Claude Code 官方 MCP / `CLAUDE.md` / subagents / skills 配置入口 |
+| OpenClaw 安装入口 | OpenClaw 官方 MCP registry / workspace bootstrap / agents config / skills 目录 |
 
 ---
 
 ## 安装目标说明
 
-`shell/codex/install_codex.sh` 是 Codex 自动安装器，支持 4 个安装目标：
+`shell/codex/install_codex.sh` 是 Codex 交互安装器，支持 4 个安装目标：
 
-### 1. `all` (自动化专用)
+### 1. `all`
 按顺序完整执行安装流程：`mcp` -> `agents` -> `skills`。
-- **命令:** `curl -fsSL "${INSTALL_URL}" | bash -s -- all --yes`
-- *注意: `all` 模式必须配合 `--yes` 参数使用，因此不会先让用户选择 MCP、Agent 或 Skill 条目，也不会交互输入 MCP token。日常安装不要使用 `all`，请分别执行 `mcp`、`agents`、`skills`。*
+- **交互命令:** `curl -fsSL "${INSTALL_URL}" | bash -s -- all`
+- **无交互命令:** `curl -fsSL "${INSTALL_URL}" | bash -s -- all --yes`
+- *注意: `all` 不带 `--yes` 时，会在 `mcp`、`agents`、`skills` 三个阶段分别列出选项，并等待用户选择后输入 `d` 才安装。`all --yes` 会跳过所有人工选择和 token 输入，仅适合自动化环境。*
 
 ### 2. `mcp`
 将 `mcp/mcp.md` 中的 `mcp_servers` 配置写入到目标机器的 `~/.codex/config.toml`。
@@ -344,11 +346,17 @@ curl -fsSL "${INSTALL_URL}" | bash -s -- agents
 # 3. 列出 Skills，勾选需要安装的 skill
 curl -fsSL "${INSTALL_URL}" | bash -s -- skills
 
-# 自动化专用：不先人工选择列表，日常安装不要使用
-curl -fsSL "${INSTALL_URL}" | bash -s -- all --yes
 ```
 
 远程执行 `mcp`、`agents`、`skills` 安装时，脚本会先列出可安装项，只有在用户选择条目并输入 `d` 后才会写入本机配置或文件。远程执行 `mcp` 安装时，如果选中的 MCP 配置包含 `API_KEY`、`TOKEN`、`Authorization Bearer token` 或空 `--api-key` 等占位，脚本会提示输入。可直接输入 token；也可以留空保留占位，后续再手动补齐 `~/.codex/config.toml`。
+
+自动化环境如必须跳过人工选择列表，可显式使用：
+
+```bash
+curl -fsSL "${INSTALL_URL}" | bash -s -- all --yes
+```
+
+这会直接进入无交互流程，不会列出选项等待用户确认，日常安装不要使用。
 
 只有安装流程实际选中 `db-query` skill 时，脚本才会访问 GitHub Release 下载 `db-query-linux-amd64` 或 `db-query-windows-amd64.exe`。其他安装目标不会触发这两个二进制下载。
 
@@ -387,7 +395,7 @@ test -f ~/.codex/config.toml && grep -q "mcp_servers" ~/.codex/config.toml && ec
 ## 目录结构参考
 
 为了帮助 AI 更好地理解上下文，以下是关键文件的说明：
-- `shell/codex/install_codex.sh`：Codex 自动安装逻辑的统一入口。
+- `shell/codex/install_codex.sh`：Codex 交互安装逻辑的统一入口。
 - `mcp/mcp.md`：MCP (Model Context Protocol) 原始配置来源。
 - `agents/README.md`：可安装的 Agent 规则文件目录索引。
 - `skills/README.md`：可安装的 Skill 扩展包目录索引。

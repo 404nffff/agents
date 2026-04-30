@@ -102,7 +102,8 @@ usage() {
      - ./shell/codex/install_codex.sh mcp --help
      - ./shell/codex/install_codex.sh agents --help
      - ./shell/codex/install_codex.sh skills --help
-  3) all 模式会顺序执行: mcp -> agents -> skills
+  3) mcp / agents / skills 默认都会先列出可安装项，选择后输入 d 才开始安装
+  4) --yes 会跳过人工选择列表，仅适合自动化环境，日常安装不要使用
 EOF
 }
 
@@ -122,6 +123,7 @@ agents_usage() {
   4) 可通过 --github / --ref / --agents-path 指定远程来源
   5) 若本地存在同名文件，提示是否覆盖（--yes 自动覆盖）
   6) 兼容单文件安装：可使用 --source 或 --file 直接安装单个文件
+  7) 默认必须先列出选项并由用户选择；--yes 会跳过选择列表
 
   --source       单个 agent 文件源地址，可为本地路径或 http(s) URL
   --github   GitHub 仓库地址（owner/repo 或完整 URL）
@@ -146,6 +148,7 @@ skills_usage() {
   4) 可通过 --github / --ref / --skills-path 指定远程来源
   5) 安装到 ~/.codex/skills/
   6) 若本地存在同名 skill，提示是否覆盖（--yes 自动覆盖）
+  7) 默认必须先列出选项并由用户勾选；--yes 会跳过选择列表
 
 db-query 二进制发布地址可通过以下环境变量覆盖：
   DB_QUERY_RELEASE_BASE_URL  例如: https://github.com/owner/repo/releases/download/v0.1.0
@@ -169,6 +172,7 @@ mcp_usage() {
   4) 若目标已存在且配置不同，会逐项询问是否覆盖（--yes 自动覆盖）
   5) 仅修改 mcp_servers 段落，不改动 config.toml 其他内容
   6) 若选中配置包含空 token 或占位 token，会在写入前交互输入；--yes 模式不会交互输入 token
+  7) 默认必须先列出选项并由用户勾选；--yes 会跳过选择列表
 EOF
 }
 
@@ -2573,7 +2577,8 @@ install_all_main() {
 
 说明:
   all 模式会按顺序执行 mcp -> agents -> skills。
-  为避免参数语义冲突，all 模式仅支持 --yes。
+  不带 --yes 时，每一步都会先列出选项，用户选择并输入 d 后才安装。
+  带 --yes 时会跳过人工选择列表，仅适合自动化环境。
 EOF
         return "${HELP_EXIT_CODE}"
         ;;
