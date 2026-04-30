@@ -20,7 +20,7 @@ fi
 
 DEFAULT_GITHUB_REPO="404nffff/agents"
 DEFAULT_GITHUB_REF="master"
-DEFAULT_GITHUB_MCP_PATH="mcp/mcp.md"
+DEFAULT_GITHUB_MCP_PATH="mcp"
 TARGET_CONFIG="${HOME}/.codex/config.toml"
 AUTO_YES="false"
 
@@ -31,10 +31,10 @@ GITHUB_REF="${DEFAULT_GITHUB_REF}"
 GITHUB_MCP_PATH="${DEFAULT_GITHUB_MCP_PATH}"
 SOURCE_LABEL=""
 LOCAL_FALLBACK_SOURCE=""
-CWD_FALLBACK_SOURCE_1="$(pwd)/mcp/mcp.md"
+CWD_FALLBACK_SOURCE_1="$(pwd)/mcp"
 CWD_FALLBACK_SOURCE_2="$(pwd)/mcp.md"
 if [[ -n "${REPO_ROOT}" ]]; then
-  LOCAL_FALLBACK_SOURCE="${REPO_ROOT}/mcp/mcp.md"
+  LOCAL_FALLBACK_SOURCE="${REPO_ROOT}/mcp"
 fi
 
 TMP_FETCH_DIR=""
@@ -78,17 +78,17 @@ usage() {
   ./shell/codex/install_mcp.sh [--source <path_or_url>] [--config <config_path>] [--yes]
 
 说明:
-  1) 默认从远程仓库读取 404nffff/agents@master:mcp/mcp.md
+  1) 默认从远程仓库读取 404nffff/agents@master:mcp 目录下的单服务 Markdown
   2) 读取 ~/.codex/config.toml 的 mcp_servers 相关配置并对比
   3) 交互勾选要安装/更新的 mcp server
   4) 若目标已存在且配置不同，会逐项询问是否覆盖
   5) 只修改 mcp_servers 相关段落，不改动 config.toml 其他内容
 
 参数:
-  --source   直接指定 mcp.md 来源（本地路径或 http(s) URL）
+  --source   直接指定 MCP 来源（本地目录、单个 Markdown 文件或 http(s) URL）
   --github   指定 GitHub 仓库（owner/repo 或完整 URL）
   --ref      指定 GitHub 分支或标签，默认 master
-  --mcp-path 指定仓库中的 mcp.md 路径，默认 mcp/mcp.md
+  --mcp-path 指定仓库中的 MCP 目录或单个 Markdown 文件路径，默认 mcp
   --config   指定目标配置文件路径，默认 ~/.codex/config.toml
   --yes      自动同意覆盖（仅对“配置不同”的已存在 server 生效）
 EOF
@@ -143,9 +143,39 @@ normalize_github_repo() {
   echo "${repo}"
 }
 
+append_source_file_to_bundle() {
+  local file="$1"
+  if [[ -s "${TMP_SOURCE_FILE}" ]]; then
+    printf "\n\n" >> "${TMP_SOURCE_FILE}"
+  fi
+  cat "${file}" >> "${TMP_SOURCE_FILE}"
+  printf "\n" >> "${TMP_SOURCE_FILE}"
+}
+
+bundle_local_directory() {
+  local source_dir="$1"
+  local file count=0
+
+  : > "${TMP_SOURCE_FILE}"
+  while IFS= read -r file; do
+    append_source_file_to_bundle "${file}"
+    count=$((count + 1))
+  done < <(find "${source_dir}" -maxdepth 1 -type f -name '*.md' ! -name 'README.md' ! -name 'mcp.md' | sort)
+
+  if (( count == 0 )); then
+    echo "错误: MCP 目录未包含可解析的单服务 Markdown 文件: ${source_dir}" >&2
+    exit 1
+  fi
+}
+
 use_local_fallback() {
   local candidate=""
   for candidate in "${LOCAL_FALLBACK_SOURCE}" "${CWD_FALLBACK_SOURCE_1}" "${CWD_FALLBACK_SOURCE_2}"; do
+    if [[ -n "${candidate}" && -d "${candidate}" ]]; then
+      bundle_local_directory "${candidate}"
+      SOURCE_LABEL="本地回退目录 ${candidate}"
+      return 0
+    fi
     if [[ -n "${candidate}" && -f "${candidate}" ]]; then
       cp "${candidate}" "${TMP_SOURCE_FILE}"
       SOURCE_LABEL="本地回退 ${candidate}"
@@ -155,10 +185,55 @@ use_local_fallback() {
   return 1
 }
 
+fetch_github_directory() {
+  local repo="$1"
+  local path="$2"
+  local manifest_file download_url file tmp_file count=0
+
+  manifest_file="$(mktemp)"
+  TMP_FETCH_DIR="${TMP_FETCH_DIR:-$(mktemp -d)}"
+  if ! curl -fsSL "https://api.github.com/repos/${repo}/contents/${path}?ref=${GITHUB_REF}" -o "${manifest_file}" >/dev/null 2>&1; then
+    rm -f "${manifest_file}"
+    return 1
+  fi
+  : > "${TMP_SOURCE_FILE}"
+
+  while IFS= read -r download_url; do
+    [[ -z "${download_url}" ]] && continue
+    file="${download_url%%\?*}"
+    file="$(basename "${file}")"
+    [[ "${file}" == "README.md" || "${file}" == "mcp.md" ]] && continue
+
+    tmp_file="$(mktemp)"
+    if ! curl -fsSL "${download_url}" -o "${tmp_file}" >/dev/null 2>&1; then
+      rm -f "${manifest_file}" "${tmp_file}"
+      return 1
+    fi
+    append_source_file_to_bundle "${tmp_file}"
+    rm -f "${tmp_file}"
+    count=$((count + 1))
+  done < <(
+    sed -n 's/.*"download_url"[[:space:]]*:[[:space:]]*"\([^"]*\.md\)".*/\1/p' "${manifest_file}" | sort
+  )
+
+  rm -f "${manifest_file}"
+
+  if (( count == 0 )); then
+    echo "错误: 远程 MCP 目录未包含可解析的单服务 Markdown 文件: ${repo}@${GITHUB_REF}:${path}" >&2
+    return 1
+  fi
+}
+
 fetch_source_file() {
   TMP_SOURCE_FILE="$(mktemp)"
 
   if [[ "${SOURCE_MODE}" == "source" ]]; then
+    if [[ -d "${SOURCE_INPUT}" ]]; then
+      bundle_local_directory "${SOURCE_INPUT}"
+      SOURCE_LABEL="本地目录 ${SOURCE_INPUT}"
+      return
+    fi
+
     if [[ "${SOURCE_INPUT}" =~ ^https?:// ]]; then
       if ! command -v curl >/dev/null 2>&1; then
         echo "错误: 需要 curl 来拉取 URL 源。" >&2
@@ -179,7 +254,6 @@ fetch_source_file() {
 
   local repo raw_url
   repo="$(normalize_github_repo "${GITHUB_REPO}")"
-  raw_url="https://raw.githubusercontent.com/${repo}/${GITHUB_REF}/${GITHUB_MCP_PATH}"
 
   echo "正在拉取远程 MCP 清单: ${repo}@${GITHUB_REF}:${GITHUB_MCP_PATH}"
   if ! command -v curl >/dev/null 2>&1; then
@@ -187,11 +261,19 @@ fetch_source_file() {
       echo "警告: 未安装 curl，已回退到本地文件: ${SOURCE_LABEL#本地回退 }" >&2
       return
     fi
-    echo "错误: 未安装 curl，且未找到可用本地 mcp.md 回退文件。" >&2
-    echo "提示: 可使用 --source 指定本地文件或 URL，例如: --source mcp/mcp.md" >&2
+    echo "错误: 未安装 curl，且未找到可用本地 MCP 目录或 Markdown 回退文件。" >&2
+    echo "提示: 可使用 --source 指定本地目录或文件，例如: --source mcp" >&2
     exit 1
   fi
 
+  if [[ "${GITHUB_MCP_PATH}" != *.md ]]; then
+    if fetch_github_directory "${repo}" "${GITHUB_MCP_PATH}"; then
+      SOURCE_LABEL="远程目录 ${repo}@${GITHUB_REF}:${GITHUB_MCP_PATH}"
+      return
+    fi
+  fi
+
+  raw_url="https://raw.githubusercontent.com/${repo}/${GITHUB_REF}/${GITHUB_MCP_PATH}"
   if command -v timeout >/dev/null 2>&1; then
     if timeout 30s curl -fsSL "${raw_url}" -o "${TMP_SOURCE_FILE}" >/dev/null 2>&1; then
       SOURCE_LABEL="远程文件 ${raw_url}"
@@ -210,7 +292,7 @@ fetch_source_file() {
   fi
 
   echo "错误: 无法拉取远程文件 ${raw_url}" >&2
-  echo "提示: 可使用 --source 指定本地文件或 URL，例如: --source mcp/mcp.md" >&2
+  echo "提示: 可使用 --source 指定本地目录或文件，例如: --source mcp" >&2
   exit 1
 }
 
@@ -257,7 +339,7 @@ discover_servers() {
           desc = title
         }
         if (code == "") {
-          print "警告: mcp.md 条目缺少配置代码块，已跳过: " server > "/dev/stderr"
+          print "警告: MCP Markdown 条目缺少配置代码块，已跳过: " server > "/dev/stderr"
           server = ""
           title = ""
           desc = ""
@@ -372,7 +454,7 @@ discover_servers() {
   )
 
   if [[ ${#SERVER_NAMES[@]} -eq 0 ]]; then
-    echo "错误: 未在 mcp.md 中发现可安装的 mcp server" >&2
+    echo "错误: 未在 MCP 来源中发现可安装的 mcp server" >&2
     exit 1
   fi
 }
@@ -716,7 +798,7 @@ collect_upsert_targets() {
     dst_norm="${TMP_STATUS_DIR}/dst-${name}.norm"
 
     if [[ -z "${src_block}" || ! -s "${src_block}" ]]; then
-      echo "警告: mcp.md 中不存在 ${name} 的配置代码块，已跳过。"
+      echo "警告: MCP 来源中不存在 ${name} 的配置代码块，已跳过。"
       continue
     fi
 
@@ -768,7 +850,7 @@ apply_merge() {
     dst_block="${TMP_STATUS_DIR}/dst-apply-${name}.toml"
 
     if [[ -z "${src_block}" || ! -s "${src_block}" ]]; then
-      echo "警告: 跳过 ${name}（mcp.md 配置代码块不存在）"
+      echo "警告: 跳过 ${name}（MCP 配置代码块不存在）"
       continue
     fi
 

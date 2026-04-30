@@ -349,6 +349,12 @@ parse_agents_catalog_from_readme() {
         return s ~ /^:?-+:?$/
       }
 
+      function clean_markdown_code(s) {
+        gsub(/\r/, "", s)
+        gsub(/`/, "", s)
+        return trim(s)
+      }
+
       BEGIN { in_catalog = 0 }
 
       /<!--[[:space:]]*AGENT_CATALOG_START[[:space:]]*-->/ { in_catalog = 1; next }
@@ -372,29 +378,36 @@ parse_agents_catalog_from_readme() {
         sub(/^\|/, "", line)
         sub(/\|[[:space:]]*$/, "", line)
         count = split(line, cols, "|")
-        if (count < 3) {
+        if (count < 2) {
           next
         }
 
         first = trim(cols[1])
         second = trim(cols[2])
-        third = trim(cols[3])
+        third = count >= 3 ? trim(cols[3]) : ""
         fourth = count >= 4 ? trim(cols[4]) : ""
 
-        if (count >= 4 && (tolower(second) == "name" || tolower(third) == "file" || third ~ /\.md([?#].*)?$/)) {
+        if (count == 2) {
+          name = clean_markdown_code(first)
+          path = clean_markdown_code(first)
+          desc = second
+          if (name ~ /\.md([?#].*)?$/) {
+            sub(/\.md([?#].*)?$/, "", name)
+          }
+        } else if (count >= 4 && (tolower(second) == "name" || tolower(third) == "file" || third ~ /\.md([?#].*)?$/)) {
           name = second
-          path = third
+          path = clean_markdown_code(third)
           desc = fourth
         } else {
           name = first
-          path = second
+          path = clean_markdown_code(second)
           desc = third
         }
 
         lower_name = tolower(name)
         lower_path = tolower(path)
 
-        if (lower_name == "name" || lower_path == "file") {
+        if (lower_name == "name" || lower_path == "file" || lower_path == "文件名") {
           next
         }
         if (is_separator(name) || is_separator(path)) {

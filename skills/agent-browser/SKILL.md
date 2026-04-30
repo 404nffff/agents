@@ -1,5 +1,5 @@
 ---
-name: 代理浏览器
+name: agent-browser
 description: 面向 AI Agent 的浏览器自动化 CLI。当用户需要与网站交互时使用，包括页面导航、表单填写、按钮点击、截图、数据提取、Web 应用测试或任意浏览器自动化任务。触发场景包括“打开网站”“填写表单”“点击按钮”“截图”“抓取页面数据”“测试这个 Web 应用”“登录网站”“自动化浏览器操作”等所有需要程序化网页交互的请求。
 allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*)/
 ---

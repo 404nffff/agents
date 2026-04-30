@@ -9,8 +9,9 @@ description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/Postg
 
 使用这个 skill 时，必须优先使用打包后的 `bin` 命令，不直接运行源码：
 
-1. Linux：`~/.codex/skills/db-query/bin/db-query-linux-amd64`
-2. Windows：`~/.codex/skills/db-query/bin/db-query-windows-amd64.exe`
+1. Linux amd64：`~/.codex/skills/db-query/bin/db-query-linux-amd64`
+2. Linux arm64：`~/.codex/skills/db-query/bin/db-query-linux-arm64`
+3. Windows amd64：`~/.codex/skills/db-query/bin/db-query-windows-amd64.exe`
 
 配置文件固定读取：skill 根目录的 `config.env`（即 `~/.codex/skills/db-query/config.env`）。
 `config.env` 为必需文件，不存在时命令会报错退出。
@@ -115,9 +116,10 @@ description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/Postg
 
 ## 平台与 bin 规则（强制）
 
-`bin` 目录需要保留两个版本：
+`bin` 目录需要保留三个版本：
 
 - `bin/db-query-linux-amd64`
+- `bin/db-query-linux-arm64`
 - `bin/db-query-windows-amd64.exe`
 
 运行时必须判断平台，选择对应二进制执行。

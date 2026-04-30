@@ -2,85 +2,127 @@
 
 > **目标读者:** AI Agent & 自动化执行脚本
 > **标准仓库位置:** `https://github.com/404nffff/agents`
-> **标准资源位置:** `mcp/mcp.md`、`agents/README.md`、`skills/README.md`
-> **Codex 脚本入口:** `https://raw.githubusercontent.com/404nffff/agents/master/shell/codex/install_codex.sh`
-> **核心准则:** 本文档是标准仓库资源的全局安装入口，覆盖 Codex、Claude Code、OpenClaw 三类客户端。所有客户端都必须从标准仓库读取 MCP、Agents、Skills 源文件，并在安装前先确认要导入的条目；Codex 使用 `shell/codex/install_codex.sh` 交互安装，Claude Code 与 OpenClaw 按各自官方配置入口导入。不要把任一客户端的安装方式当作其他客户端的通用安装器。
+> **标准资源位置:** `mcp/*.md`、`agents/README.md`、`skills/README.md`
+> **核心准则:** 本文档是标准仓库资源的全局安装入口，覆盖 Codex、Claude Code、OpenClaw 三类客户端。所有客户端都必须从标准仓库读取 MCP、Agents、Skills 源文件，并在安装前先确认要导入的条目。不要把任一客户端的安装方式当作其他客户端的通用安装器。
 
-## 快速开始
+## 前置要求
+
+- **操作系统:** Linux / macOS / Windows (WSL)
+- **必需工具:** `curl`、`bash`
+- **网络要求:** 能访问 GitHub 和 npm registry
+- **权限要求:** 对目标配置目录有写入权限
+
+## 客户端选择
 
 先确认目标客户端，再按对应章节安装。不要跳过客户端选择，也不要把 Codex 的脚本入口用于 Claude Code 或 OpenClaw。
 
-| 客户端 | 快速入口 | 适用范围 |
+| 客户端 | 安装方式 | 配置位置 |
 | --- | --- | --- |
-| Codex | 见下方 Codex 交互命令 | 可通过 `shell/codex/install_codex.sh` 自动读取列表、交互选择并写入 `~/.codex`。 |
-| Claude Code | 跳到 [Claude Code](#claude-code) | 需要把标准资源转换/复制到 Claude Code 的 MCP、`CLAUDE.md`、subagents、skills 入口。 |
-| OpenClaw | 跳到 [OpenClaw](#openclaw) | 需要把标准资源导入 OpenClaw MCP registry、workspace bootstrap、agents config 和 skills 目录。 |
-
-### Codex 快速开始
-
-默认必须使用交互安装：脚本会先列出可安装的 MCP servers、Agent 文件或 Skills，用户选择条目并输入 `d` 后才开始安装。部分 MCP server 需要 API Token 或 Bearer Token，安装脚本会在写入 `~/.codex/config.toml` 前提示用户输入，输入完成后再继续安装：
-
-```bash
-INSTALL_URL="https://raw.githubusercontent.com/404nffff/agents/master/shell/codex/install_codex.sh"
-
-# 1. 先列出 MCP servers，选择需要安装的项；如选中项需要 token，按提示输入后继续
-curl -fsSL "${INSTALL_URL}" | bash -s -- mcp
-
-# 2. 列出 Agent 文件，选择一个需要安装的 agent
-curl -fsSL "${INSTALL_URL}" | bash -s -- agents
-
-# 3. 列出 Skills，勾选需要安装的 skill
-curl -fsSL "${INSTALL_URL}" | bash -s -- skills
-```
-
-不要在日常安装流程中使用 `--yes`。`--yes` 模式不会停下来要求用户选择条目，也不会要求输入 token；遇到空 token 或占位 token 时会保留原占位并输出提示。只有自动化环境已明确接受默认项时才允许使用。
+| **Codex** | 交互式脚本自动安装 | `~/.codex/` |
+| **Claude Code** | 手动转换并使用官方 CLI | `~/.claude/` 或项目 `.claude/` |
+| **OpenClaw** | 手动转换并使用官方 CLI | `~/.openclaw/` 或项目配置 |
 
 ---
 
-## 按客户端安装
+## 一、Codex 安装
 
-### Codex
-
-`shell/codex/install_codex.sh` 当前只自动写入 Codex 目录和配置：
-
-| 资源 | 安装目标 | 安装命令 |
-| --- | --- | --- |
-| MCP | `~/.codex/config.toml` 的 `mcp_servers` 区域 | `curl -fsSL "${INSTALL_URL}" | bash -s -- mcp`，先列出 MCP servers，再选择安装项 |
-| Agents | `~/.codex/AGENTS.md` 或当前项目 `AGENTS.md` | `curl -fsSL "${INSTALL_URL}" | bash -s -- agents`，先列出 Agent 文件，再选择一个安装项 |
-| Skills | `~/.codex/skills/` | `curl -fsSL "${INSTALL_URL}" | bash -s -- skills`，先列出 Skills，再勾选安装项 |
-
-推荐执行顺序：
+### 安装脚本入口
 
 ```bash
 INSTALL_URL="https://raw.githubusercontent.com/404nffff/agents/master/shell/codex/install_codex.sh"
-
-# 1. 先列出 MCP servers，选择需要安装的项；如选中项需要 token，按提示输入后继续
-curl -fsSL "${INSTALL_URL}" | bash -s -- mcp
-
-# 2. 列出 Agent 文件，选择一个需要安装的 agent
-curl -fsSL "${INSTALL_URL}" | bash -s -- agents
-
-# 3. 列出 Skills，勾选需要安装的 skill
-curl -fsSL "${INSTALL_URL}" | bash -s -- skills
 ```
 
-日常安装不要使用 `--yes`。`--yes` 会跳过人工选择列表，仅适合自动化环境。
+### 安装目标
 
-### Claude Code
-
-本仓库不直接写入 `~/.claude`。Claude Code 需要按当前版本官方命令和目录导入，建议按资源类型处理。以下命令示例默认在目标项目根目录执行。
-
-| 资源 | 本仓库来源 | Claude Code 安装方式 |
+| 资源 | 安装位置 | 说明 |
 | --- | --- | --- |
-| MCP | `mcp/mcp.md` | 从目标 `mcp_servers.<name>` TOML 块转换为 Claude Code JSON；用 `claude mcp add-json` / `claude mcp add` 导入，或写入项目 `.mcp.json`。 |
-| Agents / 规则 | `agents/AGENTS_GLOBAL.md`、`agents/*.md` | Claude Code 读取 `CLAUDE.md`，不直接读取 `AGENTS.md`。把通用规则写入 `~/.claude/CLAUDE.md`，项目规则写入 `./CLAUDE.md` 或 `./.claude/CLAUDE.md`；已有 `AGENTS.md` 时可在 `CLAUDE.md` 中用 `@AGENTS.md` 导入。 |
-| Subagents | `agents/*.md` | 如需 Claude Code custom subagent，把选定 agent 文件改写为带 YAML frontmatter 的 subagent markdown，放入 `.claude/agents/` 或 `~/.claude/agents/`。 |
-| Skills | `skills/<name>/` | 保留完整目录结构，复制到 `.claude/skills/<name>/` 或 `~/.claude/skills/<name>/`；`SKILL.md` 必须位于 skill 目录根部。 |
+| MCP | `~/.codex/config.toml` | 写入 `mcp_servers` 配置段 |
+| Agents | `~/.codex/AGENTS.md` | 全局 Agent 规则文件 |
+| Skills | `~/.codex/skills/` | Skill 扩展包目录 |
 
-#### Claude Code MCP
+### 交互式安装（推荐）
 
-先从 `mcp/mcp.md` 选一个 server。Codex TOML 来源示例：
+脚本会先列出可安装项，用户选择后输入 `d` 确认安装。部分 MCP 需要 token，会在安装时提示输入：
 
+```bash
+# 1. 安装 MCP servers（如需 token 会提示输入）
+curl -fsSL "${INSTALL_URL}" | bash -s -- mcp
+
+# 2. 安装 Agent 规则文件（选择一个）
+curl -fsSL "${INSTALL_URL}" | bash -s -- agents
+
+# 3. 安装 Skills（可多选）
+curl -fsSL "${INSTALL_URL}" | bash -s -- skills
+
+# 或一次性安装全部（会分三个阶段交互）
+curl -fsSL "${INSTALL_URL}" | bash -s -- all
+```
+
+### 自动化安装（仅限 CI/CD）
+
+⚠️ **警告:** `--yes` 模式会跳过所有交互和 token 输入，仅适合自动化环境：
+
+```bash
+curl -fsSL "${INSTALL_URL}" | bash -s -- all --yes
+```
+
+### 指定版本安装
+
+将 `master` 替换为具体 tag：
+
+```bash
+INSTALL_URL="https://raw.githubusercontent.com/404nffff/agents/v1.0.0/shell/codex/install_codex.sh"
+curl -fsSL "${INSTALL_URL}" | bash -s -- mcp
+```
+
+### 安装验证
+
+**AI 执行强制要求:** 安装完成后必须执行以下验证命令并反馈结果：
+
+```bash
+# 检查目录结构
+ls -la ~/.codex
+ls -la ~/.codex/skills
+
+# 验证核心文件
+test -f ~/.codex/AGENTS.md && echo "✅ AGENTS.md 已安装" || echo "❌ AGENTS.md 缺失"
+test -f ~/.codex/config.toml && grep -q "mcp_servers" ~/.codex/config.toml && echo "✅ MCP 配置已写入" || echo "❌ MCP 配置缺失"
+
+# 列出已安装的 Skills
+ls ~/.codex/skills/ 2>/dev/null && echo "✅ Skills 已安装" || echo "❌ Skills 目录为空"
+```
+
+### 查看帮助
+
+```bash
+curl -fsSL "${INSTALL_URL}" | bash -s -- --help
+curl -fsSL "${INSTALL_URL}" | bash -s -- mcp --help
+curl -fsSL "${INSTALL_URL}" | bash -s -- agents --help
+curl -fsSL "${INSTALL_URL}" | bash -s -- skills --help
+```
+
+---
+
+## 二、Claude Code 安装
+
+⚠️ **重要:** 本仓库不提供 Claude Code 自动安装脚本，需手动转换配置并使用官方 CLI。
+
+### 资源映射
+
+| 资源类型 | 本仓库来源 | Claude Code 目标位置 |
+| --- | --- | --- |
+| MCP | `mcp/*.md` | 使用 `claude mcp add` 或写入 `.mcp.json` |
+| Agent 规则 | `agents/AGENTS_GLOBAL.md` | `~/.claude/CLAUDE.md` 或 `./CLAUDE.md` |
+| Subagents | `agents/*.md` | `.claude/agents/` 或 `~/.claude/agents/` |
+| Skills | `skills/<name>/` | `.claude/skills/<name>/` 或 `~/.claude/skills/<name>/` |
+
+### 2.1 安装 MCP
+
+从 `mcp/*.md` 选择需要的 MCP server，转换 TOML 配置为 Claude Code 格式。
+
+**示例：安装 sequential-thinking**
+
+原始 TOML 配置（`mcp/sequential-thinking.md`）：
 ```toml
 [mcp_servers.sequential-thinking]
 command = "npx"
@@ -88,26 +130,32 @@ args = ["-y", "@modelcontextprotocol/server-sequential-thinking"]
 startup_timeout_sec = 120.0
 ```
 
-可用 Claude Code CLI 导入为本项目可用的 MCP server：
+**方式一：使用 CLI 添加**
 
 ```bash
+# 添加到当前项目（默认 --scope local）
 claude mcp add --transport stdio sequential-thinking -- npx -y @modelcontextprotocol/server-sequential-thinking
+
+# 添加到项目共享配置（写入 .mcp.json，可提交）
+claude mcp add --scope project --transport stdio sequential-thinking -- npx -y @modelcontextprotocol/server-sequential-thinking
+
+# 添加到用户全局配置（所有项目可用）
+claude mcp add --scope user --transport stdio sequential-thinking -- npx -y @modelcontextprotocol/server-sequential-thinking
+
+# 验证安装
 claude mcp list
-```
-
-如果需要从 JSON 导入：
-
-```bash
-claude mcp add-json sequential-thinking '{"type":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-sequential-thinking"]}'
 claude mcp get sequential-thinking
 ```
 
-作用域按使用场景选择：
-- `--scope local`：默认值，仅当前项目可用，私有配置，适合含个人 token 的 MCP。
-- `--scope project`：写入项目根 `.mcp.json`，可提交给团队共享；不要把真实 token 写入仓库。
-- `--scope user`：写入用户配置，所有项目可用。
+**方式二：使用 JSON 格式添加**
 
-若手写 `.mcp.json`，结构应为：
+```bash
+claude mcp add-json sequential-thinking '{"type":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-sequential-thinking"]}'
+```
+
+**方式三：手动编辑 .mcp.json**
+
+在项目根目录创建或编辑 `.mcp.json`：
 
 ```json
 {
@@ -121,104 +169,185 @@ claude mcp get sequential-thinking
 }
 ```
 
-含 token 的 MCP server 必须在导入前补齐真实 token，或改成环境变量注入；不要把 token 提交到 `.mcp.json`。Windows 原生环境下，如果 server 通过 `npx` 启动，通常需要用 `cmd /c npx ...` 包一层。
+**含 Token 的 MCP 配置**
 
-#### Claude Code Agents / CLAUDE.md
-
-Claude Code 的常驻项目规则入口是 `CLAUDE.md`，不是 `AGENTS.md`。推荐二选一：
+⚠️ **安全提示:** 不要把真实 token 提交到 `.mcp.json`，使用环境变量：
 
 ```bash
-# 项目级：让 Claude Code 复用本项目已有 AGENTS.md
-printf '@AGENTS.md\n\n## Claude Code\n\n遵循本项目现有 Agent 规则。\n' > CLAUDE.md
+# 使用环境变量
+claude mcp add-json context7 '{"type":"stdio","command":"npx","args":["-y","@upstash/context7-mcp"],"env":{"CONTEXT7_API_KEY":"${CONTEXT7_API_KEY}"}}'
+```
 
-# 用户级：把本仓库全局规则复制到 Claude Code 用户规则
+**Windows 注意事项**
+
+Windows 原生环境下，通过 `npx` 启动的 MCP 需要用 `cmd /c` 包装：
+
+```bash
+claude mcp add --transport stdio sequential-thinking -- cmd /c npx -y @modelcontextprotocol/server-sequential-thinking
+```
+
+### 2.2 安装 Agent 规则
+
+⚠️ **重要:** Claude Code 使用 `CLAUDE.md`，不是 `AGENTS.md`。
+
+**方式一：项目级引用（推荐）**
+
+如果项目已有 `AGENTS.md`，在 `CLAUDE.md` 中引用：
+
+```bash
+cat > CLAUDE.md <<'EOF'
+@AGENTS.md
+
+## Claude Code 配置
+
+遵循本项目现有 Agent 规则。
+EOF
+```
+
+**方式二：用户级全局规则**
+
+将全局规则复制到用户配置：
+
+```bash
 mkdir -p ~/.claude
 cp agents/AGENTS_GLOBAL.md ~/.claude/CLAUDE.md
 ```
 
-如果要使用 Claude Code subagents，不要直接把 `agents/AGENTS_GLOBAL.md` 原样复制进去；需要转换为 subagent 格式：
+**方式三：创建 Subagent**
+
+如需自定义 subagent，转换为带 frontmatter 的格式：
 
 ```bash
 mkdir -p .claude/agents
 cat > .claude/agents/codex-engineer.md <<'EOF'
 ---
 name: codex-engineer
-description: 使用本仓库 Codex 工程规范处理代码、文档、验证和交付任务。
+description: 使用 Codex 工程规范处理代码、文档、验证和交付任务
 tools: Read, Grep, Glob, Bash
 model: inherit
 ---
 
-请遵循 agents/AGENTS_GLOBAL.md 中的工程规范，并按当前项目上下文执行任务。
+遵循 agents/AGENTS_GLOBAL.md 中的工程规范，并按当前项目上下文执行任务。
 EOF
 ```
 
-#### Claude Code Skills
+### 2.3 安装 Skills
 
-Claude Code skills 是目录式资源，目录中必须有 `SKILL.md`。安装时保留 supporting files：
+Claude Code skills 是目录式资源，必须包含 `SKILL.md` 文件。安装时保留完整目录结构。
+
+**用户级安装（所有项目可用）**
 
 ```bash
-# 用户级 skill：所有项目可用
 mkdir -p ~/.claude/skills
-cp -R skills/git-commit-helper ~/.claude/skills/git-commit-helper
-
-# 项目级 skill：只在当前项目可用，可提交给团队
-mkdir -p .claude/skills
-cp -R skills/git-commit-helper .claude/skills/git-commit-helper
+cp -R skills/git-commit-helper ~/.claude/skills/
 ```
 
-验证方式：
+**项目级安装（仅当前项目，可提交）**
 
 ```bash
-claude mcp list
-test -f CLAUDE.md || test -f .claude/CLAUDE.md
-test -f .claude/skills/git-commit-helper/SKILL.md || test -f ~/.claude/skills/git-commit-helper/SKILL.md
+mkdir -p .claude/skills
+cp -R skills/git-commit-helper .claude/skills/
 ```
 
-Claude Code 官方参考：
-- MCP：`https://docs.claude.com/en/docs/claude-code/mcp`
-- CLAUDE.md / AGENTS.md 导入：`https://docs.claude.com/en/docs/claude-code/memory`
-- Subagents：`https://docs.claude.com/en/docs/claude-code/sub-agents`
-- Skills：`https://docs.claude.com/en/docs/claude-code/skills`
+**批量安装多个 Skills**
 
-### OpenClaw
+```bash
+# 用户级
+for skill in git-commit-helper db-query agent-browser; do
+  cp -R skills/$skill ~/.claude/skills/ 2>/dev/null || echo "跳过 $skill"
+done
 
-本仓库不提供 OpenClaw 专用写入脚本。OpenClaw 需要按当前版本的 CLI 和配置入口导入。以下命令示例默认在目标 workspace 或项目根目录执行。
+# 项目级
+mkdir -p .claude/skills
+for skill in git-commit-helper db-query; do
+  cp -R skills/$skill .claude/skills/ 2>/dev/null || echo "跳过 $skill"
+done
+```
 
-| 资源 | 本仓库来源 | OpenClaw 安装方式 |
+### 2.4 安装验证
+
+```bash
+# 验证 MCP 配置
+claude mcp list
+
+# 验证 CLAUDE.md
+test -f CLAUDE.md && echo "✅ 项目级 CLAUDE.md 已配置" || echo "⚠️  未找到项目级配置"
+test -f ~/.claude/CLAUDE.md && echo "✅ 用户级 CLAUDE.md 已配置" || echo "⚠️  未找到用户级配置"
+
+# 验证 Skills
+ls -la .claude/skills/ 2>/dev/null && echo "✅ 项目级 Skills 已安装" || echo "⚠️  未安装项目级 Skills"
+ls -la ~/.claude/skills/ 2>/dev/null && echo "✅ 用户级 Skills 已安装" || echo "⚠️  未安装用户级 Skills"
+
+# 检查 Skill 结构
+test -f .claude/skills/git-commit-helper/SKILL.md && echo "✅ git-commit-helper 结构正确" || echo "❌ SKILL.md 缺失"
+```
+
+### 参考文档
+
+- MCP：https://docs.claude.com/en/docs/claude-code/mcp
+- CLAUDE.md：https://docs.claude.com/en/docs/claude-code/memory
+- Subagents：https://docs.claude.com/en/docs/claude-code/sub-agents
+- Skills：https://docs.claude.com/en/docs/claude-code/skills
+
+---
+
+## 三、OpenClaw 安装
+
+⚠️ **重要:** 本仓库不提供 OpenClaw 自动安装脚本，需手动转换配置并使用官方 CLI。
+
+### 资源映射
+
+| 资源类型 | 本仓库来源 | OpenClaw 目标位置 |
 | --- | --- | --- |
-| MCP | `mcp/mcp.md` | 从目标 `mcp_servers.<name>` TOML 块转换为 JSON，用 `openclaw mcp set <name> '<json>'` 保存到 OpenClaw 管理的 MCP registry。 |
-| Agent 规则 / bootstrap | `agents/AGENTS_GLOBAL.md`、`agents/*.md` | OpenClaw workspace 可使用 `AGENTS.md` 等 bootstrap 文件。把全局规则复制到目标 workspace 的 `AGENTS.md`，或按 agent profile 写入对应 workspace/agent 目录。 |
-| Agent 配置 | `agents/*.md` | 通过 `~/.openclaw/openclaw.json` 的 `agents.defaults` / `agents.list[]` 配置 workspace、repoRoot、skills allowlist、模型、runtime 等。 |
-| Skills | `skills/<name>/` | OpenClaw 支持 AgentSkills-compatible skill folders。完整复制 skill 目录到 `<workspace>/skills`、`<workspace>/.agents/skills`、`~/.agents/skills` 或 `~/.openclaw/skills`。 |
+| MCP | `mcp/*.md` | 使用 `openclaw mcp set` 写入 MCP registry |
+| Agent 规则 | `agents/AGENTS_GLOBAL.md` | workspace 的 `AGENTS.md` |
+| Agent 配置 | `agents/*.md` | `~/.openclaw/openclaw.json` |
+| Skills | `skills/<name>/` | `<workspace>/skills` 或 `~/.agents/skills` |
 
-#### OpenClaw MCP
+### 3.1 安装 MCP
 
-从 `mcp/mcp.md` 选择一个 server，转换为 OpenClaw `openclaw mcp set` 需要的 JSON：
+从 `mcp/*.md` 选择需要的 MCP server，转换为 JSON 格式并使用 `openclaw mcp set` 命令。
+
+**示例：安装 sequential-thinking**
+
+原始 TOML 配置（`mcp/sequential-thinking.md`）：
+```toml
+[mcp_servers.sequential-thinking]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+```
+
+转换为 OpenClaw 命令：
 
 ```bash
 openclaw mcp set sequential-thinking '{"command":"npx","args":["-y","@modelcontextprotocol/server-sequential-thinking"]}'
+
+# 验证安装
 openclaw mcp list
 openclaw mcp show sequential-thinking --json
 ```
 
-带环境变量的 MCP 示例：
+**含环境变量的 MCP**
 
 ```bash
-openclaw mcp set context7 '{"command":"npx","args":["-y","@upstash/context7-mcp","--api-key",""],"env":{"CONTEXT7_API_KEY":"${CONTEXT7_API_KEY}"}}'
+openclaw mcp set context7 '{"command":"npx","args":["-y","@upstash/context7-mcp"],"env":{"CONTEXT7_API_KEY":"${CONTEXT7_API_KEY}"}}'
 ```
 
-含 token 的配置优先使用 OpenClaw secrets、环境变量或本机私有配置，不要写入仓库。
+⚠️ **安全提示:** 优先使用 OpenClaw secrets 或环境变量，不要把 token 硬编码到配置中。
 
-#### OpenClaw Agent 规则 / 配置
+### 3.2 安装 Agent 规则
 
-OpenClaw 的 agent 配置在 `~/.openclaw/openclaw.json` 中按 `agents.defaults` 和 `agents.list[]` 管理；workspace 中的 bootstrap 文件（如 `AGENTS.md`）会作为 agent 上下文。推荐：
+OpenClaw workspace 使用 `AGENTS.md` 作为 bootstrap 文件。
+
+**复制全局规则到 workspace**
 
 ```bash
-# 当前 workspace 使用本仓库全局规则
 cp agents/AGENTS_GLOBAL.md AGENTS.md
 ```
 
-如需给某个 OpenClaw agent 固定 workspace、repoRoot 和 skill allowlist，可在 `~/.openclaw/openclaw.json` 中加入类似配置：
+**配置 Agent（可选）**
+
+在 `~/.openclaw/openclaw.json` 中配置 agent 的 workspace、repoRoot 和 skills allowlist：
 
 ```json
 {
@@ -240,178 +369,102 @@ cp agents/AGENTS_GLOBAL.md AGENTS.md
 }
 ```
 
-`skills` 是 allowlist：设置后该 agent 只使用列表中的 skill；如果希望不限制 skills，不要设置该字段。
+⚠️ **注意:** `skills` 字段是 allowlist，设置后该 agent 只能使用列表中的 skills。如不限制，不要设置该字段。
 
-#### OpenClaw Skills
+### 3.3 安装 Skills
 
-OpenClaw 的 skills 是 AgentSkills-compatible 目录。按作用域选择复制位置：
+OpenClaw skills 是 AgentSkills-compatible 目录。按作用域选择安装位置。
+
+**优先级说明**（从高到低）：
+1. `<workspace>/skills` - workspace 最高优先级
+2. `<workspace>/.agents/skills` - workspace project skills
+3. `~/.agents/skills` - 用户级所有 agent 可用
+4. `~/.openclaw/skills` - OpenClaw 管理的本地 skills
+
+**安装示例**
 
 ```bash
-# 当前 workspace 最高优先级
+# Workspace 最高优先级
 mkdir -p skills
-cp -R /path/to/agents/skills/git-commit-helper skills/git-commit-helper
+cp -R /path/to/agents/skills/git-commit-helper skills/
 
-# 当前 workspace 的 project agent skills
+# Workspace project skills
 mkdir -p .agents/skills
-cp -R /path/to/agents/skills/git-commit-helper .agents/skills/git-commit-helper
+cp -R /path/to/agents/skills/git-commit-helper .agents/skills/
 
-# 当前用户所有 OpenClaw agent 可用
+# 用户级（所有 agent 可用）
 mkdir -p ~/.agents/skills
-cp -R /path/to/agents/skills/git-commit-helper ~/.agents/skills/git-commit-helper
+cp -R /path/to/agents/skills/git-commit-helper ~/.agents/skills/
 
-# OpenClaw 管理/本地 skills
+# OpenClaw 管理的本地 skills
 mkdir -p ~/.openclaw/skills
-cp -R /path/to/agents/skills/git-commit-helper ~/.openclaw/skills/git-commit-helper
+cp -R /path/to/agents/skills/git-commit-helper ~/.openclaw/skills/
 ```
 
-OpenClaw skill 优先级从高到低通常是：`<workspace>/skills`、`<workspace>/.agents/skills`、`~/.agents/skills`、`~/.openclaw/skills`、bundled skills、`skills.load.extraDirs`。
-
-验证方式：
+### 3.4 安装验证
 
 ```bash
+# 验证 MCP
 openclaw mcp list
+
+# 验证 Agents
 openclaw agents list
-test -f skills/git-commit-helper/SKILL.md || test -f .agents/skills/git-commit-helper/SKILL.md || test -f ~/.agents/skills/git-commit-helper/SKILL.md || test -f ~/.openclaw/skills/git-commit-helper/SKILL.md
+
+# 验证 AGENTS.md
+test -f AGENTS.md && echo "✅ AGENTS.md 已配置" || echo "❌ AGENTS.md 缺失"
+
+# 验证 Skills（检查各优先级目录）
+test -f skills/git-commit-helper/SKILL.md && echo "✅ Workspace skills 已安装" || \
+test -f .agents/skills/git-commit-helper/SKILL.md && echo "✅ Project skills 已安装" || \
+test -f ~/.agents/skills/git-commit-helper/SKILL.md && echo "✅ 用户级 skills 已安装" || \
+test -f ~/.openclaw/skills/git-commit-helper/SKILL.md && echo "✅ OpenClaw skills 已安装" || \
+echo "❌ 未找到 skills"
 ```
 
-OpenClaw 官方参考：
-- MCP CLI：`https://docs.openclaw.ai/cli/mcp`
-- Agent runtime / workspace bootstrap：`https://docs.openclaw.ai/concepts/agent`
-- Agents CLI：`https://docs.openclaw.ai/cli/agents`
-- Agents config：`https://docs.openclaw.ai/gateway/config-agents`
-- Skills：`https://docs.openclaw.ai/skills`
+### 参考文档
+
+- MCP CLI：https://docs.openclaw.ai/cli/mcp
+- Agent runtime：https://docs.openclaw.ai/concepts/agent
+- Agents CLI：https://docs.openclaw.ai/cli/agents
+- Agents config：https://docs.openclaw.ai/gateway/config-agents
+- Skills：https://docs.openclaw.ai/skills
 
 ---
 
-## 标准仓库与路径
+## 附录
 
-| 项目 | 标准位置 |
+### A. 标准仓库路径
+
+| 项目 | 地址 |
 | --- | --- |
-| GitHub 仓库 | `https://github.com/404nffff/agents` |
-| MCP 配置来源 | `mcp/mcp.md` |
-| Agents 目录索引 | `agents/README.md` |
-| Skills 目录索引 | `skills/README.md` |
-| Codex Raw 安装脚本 | `https://raw.githubusercontent.com/404nffff/agents/master/shell/codex/install_codex.sh` |
-| Claude Code 安装入口 | Claude Code 官方 MCP / `CLAUDE.md` / subagents / skills 配置入口 |
-| OpenClaw 安装入口 | OpenClaw 官方 MCP registry / workspace bootstrap / agents config / skills 目录 |
+| GitHub 仓库 | https://github.com/404nffff/agents |
+| Codex 安装脚本 | https://raw.githubusercontent.com/404nffff/agents/master/shell/codex/install_codex.sh |
+| MCP 配置来源 | `mcp/*.md` - [查看列表](mcp/README.md) |
+| Agents 目录 | `agents/README.md` |
+| Skills 目录 | `skills/README.md` |
 
----
+### B. Codex 安装目标说明
 
-## 安装目标说明
+`shell/codex/install_codex.sh` 支持 4 个安装目标：
 
-`shell/codex/install_codex.sh` 是 Codex 交互安装器，支持 4 个安装目标：
+| 目标 | 说明 | 交互命令 | 自动化命令 |
+| --- | --- | --- | --- |
+| `all` | 完整安装流程（mcp → agents → skills） | `bash -s -- all` | `bash -s -- all --yes` |
+| `mcp` | 安装 MCP servers 到 `~/.codex/config.toml` | `bash -s -- mcp` | `bash -s -- mcp --yes` |
+| `agents` | 安装 Agent 规则到 `~/.codex/AGENTS.md` | `bash -s -- agents` | `bash -s -- agents --yes` |
+| `skills` | 安装 Skills 到 `~/.codex/skills/` | `bash -s -- skills` | `bash -s -- skills --yes` |
 
-### 1. `all`
-按顺序完整执行安装流程：`mcp` -> `agents` -> `skills`。
-- **交互命令:** `curl -fsSL "${INSTALL_URL}" | bash -s -- all`
-- **无交互命令:** `curl -fsSL "${INSTALL_URL}" | bash -s -- all --yes`
-- *注意: `all` 不带 `--yes` 时，会在 `mcp`、`agents`、`skills` 三个阶段分别列出选项，并等待用户选择后输入 `d` 才安装。`all --yes` 会跳过所有人工选择和 token 输入，仅适合自动化环境。*
+⚠️ **注意:**
+- 交互模式会列出可选项，用户选择后输入 `d` 确认安装
+- `--yes` 模式跳过所有交互，仅适合 CI/CD 环境
+- 部分 MCP 需要 token，交互模式会提示输入
+- 只有安装 `db-query` skill 时才会下载二进制文件
 
-### 2. `mcp`
-将 `mcp/mcp.md` 中的 `mcp_servers` 配置写入到目标机器的 `~/.codex/config.toml`。
-- **交互命令:** `curl -fsSL "${INSTALL_URL}" | bash -s -- mcp`
-- **无交互命令:** `curl -fsSL "${INSTALL_URL}" | bash -s -- mcp --yes`
-- *注意: 交互模式会先列出 MCP servers，用户勾选后输入 `d` 才开始安装。此操作仅更新 `mcp_servers` 节点，不会破坏或修改用户的其他配置。部分 MCP server 需要配置 token；交互模式会提示用户输入，`--yes` 模式不会输入 token，会保留占位。*
+### C. db-query 二进制文件
 
-### 3. `agents`
-将全局代理规则文件安装至 `~/.codex/AGENTS.md`。
-- **交互命令:** `curl -fsSL "${INSTALL_URL}" | bash -s -- agents`
-- **无交互命令:** `curl -fsSL "${INSTALL_URL}" | bash -s -- agents --yes`
-- *行为: 交互模式会先读取标准仓库的 `agents/README.md` 并列出可安装 Agent 文件；用户选择一个条目并输入 `d` 后才开始安装。`--yes` 会跳过人工选择，日常安装不要使用。*
+`db-query` skill 的 release 二进制地址：
 
-### 4. `skills`
-将 `skills/` 下的所有可用技能安装至 `~/.codex/skills/`。
-- **交互命令:** `curl -fsSL "${INSTALL_URL}" | bash -s -- skills`
-- **无交互命令:** `curl -fsSL "${INSTALL_URL}" | bash -s -- skills --yes`
-- *行为: 交互模式会先读取标准仓库的 `skills/README.md` 并列出可安装 Skills；用户勾选条目并输入 `d` 后才开始安装。如遇同名 skill，覆盖时会保留原有的配置文件。只有安装或同步 `db-query` skill 时，才会下载 db-query release 二进制；安装 MCP、Agents 或其他 Skills 不会下载下方二进制文件。`--yes` 会跳过人工选择，日常安装不要使用。*
+- Linux: https://github.com/404nffff/agents/releases/download/v0.0.1/db-query-linux-amd64
+- Windows: https://github.com/404nffff/agents/releases/download/v0.0.1/db-query-windows-amd64.exe
 
-`db-query` skill 涉及的 release 二进制地址：
-
-- `https://github.com/404nffff/agents/releases/download/v0.0.1/db-query-linux-amd64`
-- `https://github.com/404nffff/agents/releases/download/v0.0.1/db-query-windows-amd64.exe`
-
----
-
-## Codex 默认远程安装方式
-
-```bash
-INSTALL_URL="https://raw.githubusercontent.com/404nffff/agents/master/shell/codex/install_codex.sh"
-
-# 1. 先列出 MCP servers，选择需要安装的项；如选中项需要 token，按提示输入后继续
-curl -fsSL "${INSTALL_URL}" | bash -s -- mcp
-
-# 2. 列出 Agent 文件，选择一个需要安装的 agent
-curl -fsSL "${INSTALL_URL}" | bash -s -- agents
-
-# 3. 列出 Skills，勾选需要安装的 skill
-curl -fsSL "${INSTALL_URL}" | bash -s -- skills
-
-```
-
-远程执行 `mcp`、`agents`、`skills` 安装时，脚本会先列出可安装项，只有在用户选择条目并输入 `d` 后才会写入本机配置或文件。远程执行 `mcp` 安装时，如果选中的 MCP 配置包含 `API_KEY`、`TOKEN`、`Authorization Bearer token` 或空 `--api-key` 等占位，脚本会提示输入。可直接输入 token；也可以留空保留占位，后续再手动补齐 `~/.codex/config.toml`。
-
-自动化环境如必须跳过人工选择列表，可显式使用：
-
-```bash
-curl -fsSL "${INSTALL_URL}" | bash -s -- all --yes
-```
-
-这会直接进入无交互流程，不会列出选项等待用户确认，日常安装不要使用。
-
-只有安装流程实际选中 `db-query` skill 时，脚本才会访问 GitHub Release 下载 `db-query-linux-amd64` 或 `db-query-windows-amd64.exe`。其他安装目标不会触发这两个二进制下载。
-
-指定版本安装时，将 `master` 替换为固定 tag：
-
-```bash
-INSTALL_URL="https://raw.githubusercontent.com/404nffff/agents/v1.0.0/shell/codex/install_codex.sh"
-curl -fsSL "${INSTALL_URL}" | bash -s -- mcp
-curl -fsSL "${INSTALL_URL}" | bash -s -- agents
-curl -fsSL "${INSTALL_URL}" | bash -s -- skills
-```
-
----
-
-## Codex 安装后验证步骤
-
-**AI 执行强制要求:** 安装完成后，绝对不能仅回复“已完成”。必须立即执行以下命令进行存在性检查，并向用户反馈验证结果：
-
-```bash
-# 1. 检查基础目录结构
-ls -la ~/.codex
-ls -la ~/.codex/skills
-
-# 2. 验证核心文件与配置状态
-test -f ~/.codex/AGENTS.md && echo "✅ AGENTS OK" || echo "❌ AGENTS MISSING"
-test -f ~/.codex/config.toml && grep -q "mcp_servers" ~/.codex/config.toml && echo "✅ CONFIG OK" || echo "❌ CONFIG MISSING/INVALID"
-```
-
-完整的安装预期结果应当是：
-1. `~/.codex/AGENTS.md` 文件已存在。
-2. `~/.codex/config.toml` 文件已存在，且包含有效的 `mcp_servers` 配置段。
-3. `~/.codex/skills/` 目录下出现已安装的各个 skill 文件夹。
-
----
-
-## 目录结构参考
-
-为了帮助 AI 更好地理解上下文，以下是关键文件的说明：
-- `shell/codex/install_codex.sh`：Codex 交互安装逻辑的统一入口。
-- `mcp/mcp.md`：MCP (Model Context Protocol) 原始配置来源。
-- `agents/README.md`：可安装的 Agent 规则文件目录索引。
-- `skills/README.md`：可安装的 Skill 扩展包目录索引。
-
----
-
-## Codex 安装脚本帮助
-
-要查看任何命令或目标的详细帮助信息，请执行：
-
-```bash
-INSTALL_URL="https://raw.githubusercontent.com/404nffff/agents/master/shell/codex/install_codex.sh"
-
-curl -fsSL "${INSTALL_URL}" | bash -s -- --help
-curl -fsSL "${INSTALL_URL}" | bash -s -- mcp --help
-curl -fsSL "${INSTALL_URL}" | bash -s -- agents --help
-curl -fsSL "${INSTALL_URL}" | bash -s -- skills --help
-curl -fsSL "${INSTALL_URL}" | bash -s -- all --help
-```
+只有在安装 `db-query` skill 时才会自动下载。
