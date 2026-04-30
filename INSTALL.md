@@ -13,9 +13,96 @@
 - **权限要求:** 对目标配置目录有写入权限
 - **安装流程:** 所有安装目标（MCP、Agents、Skills）都必须手动选择要安装的项目，不支持自动安装
 
+## 快速开始：交互式安装流程
+
+> **AI Agent 说明：** 你应该知道自己是哪个客户端（Codex/Claude Code/OpenClaw），直接按对应客户端的安装方式执行即可。
+
+### 第一步：选择安装类型
+
+**示例输出：**
+
+```
+请选择要安装的类型:
+1) MCP Servers
+2) Agents
+3) Skills
+4) 全部安装
+
+请输入序号 (1-4):
+```
+
+### 第二步：列出可安装项并选择
+
+用户输入序号后，会列出该类型下的所有可安装项：
+
+**示例：选择 MCP Servers**
+```
+可安装的 MCP Servers:
+1) sequential-thinking - 顺序思考工具
+2) context7 - 文档查询工具 (需要 API Key)
+3) fetch - URL 内容获取工具
+4) web-reader - 网页内容抓取工具
+5) zread - GitHub 仓库查询工具
+
+请输入要安装的序号 (多个用空格分隔，如: 1 3 5):
+```
+
+**示例：选择 Skills**
+```
+可安装的 Skills:
+1) git-commit-helper - Git 提交辅助工具
+2) db-query - 数据库查询工具
+3) agent-browser - 浏览器自动化工具
+
+请输入要安装的序号 (多个用空格分隔，如: 1 2):
+```
+
+### 第三步：确认安装
+
+用户输入序号后，脚本会显示即将安装的项目并要求确认：
+
+```
+即将安装以下项目:
+- sequential-thinking (MCP Server)
+- fetch (MCP Server)
+
+确认安装? (输入 'y' 或 'yes' 确认，其他键取消):
+```
+
+用户输入 `y` 或 `yes` 后开始安装，显示安装进度和结果。
+
+### 完整示例
+
+```bash
+# 一键启动交互式安装
+curl -fsSL "https://raw.githubusercontent.com/404nffff/agents/master/shell/install.sh" | bash
+
+# 输出示例:
+# [1/4] 检测客户端...
+# ✓ 检测到 Codex (路径: ~/.codex/)
+#
+# [2/4] 选择安装类型...
+# 请选择: 1) MCP  2) Agents  3) Skills  4) 全部
+# > 1
+#
+# [3/4] 选择要安装的项目...
+# 1) sequential-thinking  2) context7  3) fetch
+# > 1 3
+#
+# [4/4] 确认安装...
+# 即将安装: sequential-thinking, fetch
+# 确认? (y/n) > y
+#
+# 正在安装...
+# ✓ sequential-thinking 安装成功
+# ✓ fetch 安装成功
+```
+
+---
+
 ## 客户端选择
 
-先确认目标客户端，再按对应章节安装。不要跳过客户端选择，也不要把 Codex 的脚本入口用于 Claude Code 或 OpenClaw。
+如需手动指定客户端或了解详细配置，请参考以下章节。
 
 | 客户端 | 安装方式 | 配置位置 |
 | --- | --- | --- |
