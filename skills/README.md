@@ -62,6 +62,12 @@
 | grok-search | grok-skill | 实时网络搜索，输出 JSON 格式结果 |
 | exa-search | exa-search | 语义 Web 搜索，适合官方文档、API 参考、产品规格等高质量来源 |
 
+### 角色选择
+
+| Name | Directory | Description |
+| --- | --- | --- |
+| who | who | 根据用户任务自动选取最匹配的专业角色，覆盖工程、设计、研究、审查、运维、安全、AI、数据、文档等场景 |
+
 ### 前端开发
 
 | Name | Directory | Description |

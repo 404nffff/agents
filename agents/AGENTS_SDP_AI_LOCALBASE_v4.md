@@ -49,7 +49,7 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
 | 类别 | MCP 工具名 | 规范与降级策略 |
 | :--- | :--- | :--- |
 | **项目知识库 / 记忆优先检索** | `ai_localbase` | 优先使用：`knowledge_base_create`、`knowledge_base_search`、`chat_ask`、`document_upload`、`document_append`、`document_update`、`document_delete`；知识库列表资源（如 `ai-localbase://knowledge-bases`）仅作为兜底确认入口。启动时必须先通过 create/get-or-create 确认真实 `kb_id`，再进行检索、问答或写入；用于项目文档沉淀、历史方案检索与知识复用。 |
-| **语义检索** | `codebase-retrieval` | 任何需要理解代码上下文、探索性搜索必须优先调用。不可用时重试1次，然后降级为 `code-index`，最后降级为原生 `Grep`/`Glob`/`Read`。 |
+| **语义检索 / 代码定位** | `codebase-retrieval` / `code-index` | 任何需要理解代码上下文、探索性搜索必须优先调用 `codebase-retrieval`。若出现不可用、限流、超时、鉴权失败或连续失败，必须先重试 1 次；仍不可用时，**强制**降级到 `code-index`，先完成 `set_project_path` / `build_deep_index`，再使用 `search_code_advanced`、`get_file_summary`、`get_symbol_body` 等能力做文件定位、符号提取与上下文补全。仅当 `code-index` 也不可用时，才允许继续降级为原生 `Grep`/`Glob`/`Read`。 |
 | **数据库查询** | `skill[db-query]` / `skill[mysql-query]` | 只要代码中涉及数据库查询（包含 MySQL、Redis、Mongo、PGSQL），必须先使用 `db-query` skill；若为 MySQL 查询且 `db-query` 连续重试 3 次仍不可用、不存在或执行失败，才允许降级使用 `mysql-query` skill；禁止绕过该流程直接执行数据库查询。 |
 | **在线检索** | `exa` MCP | 发起通用网络事实补充、官方页面定位、产品/价格/新闻等实时信息查询时，首选使用 `exa` MCP（如 `web_search_exa`、`web_fetch_exa`）。若 `exa` MCP 不可用、超时或连续失败，再降级为原生 web search / `web_search_request`。 |
 | **文档搜索** | `context7` / `deepwiki` / `microsoft-docs-mcp` MCP | 查询库、框架、GitHub 仓库或 Microsoft / Azure 官方技术文档时，必须优先使用专用文档 MCP：通用库与框架文档使用 `context7`，GitHub 仓库架构与项目文档使用 `deepwiki`，Microsoft / Azure / .NET / Microsoft 365 相关文档与代码示例使用 `microsoft-docs-mcp`。若对应 MCP 不可用、无结果或连续失败，再降级为 `exa` MCP；仍不可用时才降级为原生 web search / `web_search_request`。 |
@@ -88,11 +88,11 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
    - `verification.md`
    - `review-report.md`
 5. **四步收集法 (鼓励并发收集)**：
-   - 步骤1：结构化快速扫描，输出 `docs/[任务目录]/onlyAI/context-scan.json`，记录位置、现状、技术栈、测试与专家观察。**鼓励在此时并行调用多个检索工具**（如同时发起 `codebase-retrieval` 与 `local_shell grep`），以缩短第一阶段等待时间。
+   - 步骤1：结构化快速扫描，输出 `docs/[任务目录]/onlyAI/context-scan.json`，记录位置、现状、技术栈、测试与专家观察。默认先用 `codebase-retrieval` 建立语义级全局视图；若 `codebase-retrieval` 不可用、限流、超时或结果不足，必须立刻切换到 `code-index` 做文件级与符号级扫描，并在 `context-scan.json` 中记录降级原因、使用的 `code-index` 工具与命中结果。**鼓励在此时并行调用多个检索工具**（如 `ai_localbase` + `codebase-retrieval`，或降级后 `ai_localbase` + `code-index`），但原生 `grep`/`rg` 仅作为补充精确匹配，禁止跳过前述链路直接代替语义检索。
    - 步骤2：识别关键疑问，使用 `sequential-thinking` 找出已知、未知及优先级。
-   - 步骤3：针对高优疑问深挖，输出 `docs/[任务目录]/onlyAI/context-question-N.json`，建议最多 3 次。同样鼓励并行获取信息。
+   - 步骤3：针对高优疑问深挖，输出 `docs/[任务目录]/onlyAI/context-question-N.json`，建议最多 3 次。深挖时同样遵循“`codebase-retrieval` 优先，失败后强制切 `code-index`”的链路；需要定位具体符号、调用关系、文件摘要时，优先使用 `code-index` 的对应能力补齐证据。同样鼓励并行获取信息。
    - 步骤4：充分性检查，确认接口契约、技术理由、主要风险和验证方式已清晰；若未满足，必须回溯补充上下文。
-6. **禁止事项**：禁止跳过扫描与提问步骤，禁止在信息不足时强行进入规划或施工。
+6. **禁止事项**：禁止跳过扫描与提问步骤，禁止在信息不足时强行进入规划或施工；禁止在 `codebase-retrieval` 失效后直接退回纯 shell 文本搜索而不经过 `code-index`。
 
 ### 阶段 2：规模评估与动态裁剪任务规划 (Adaptive SDLC)
 
