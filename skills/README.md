@@ -95,6 +95,7 @@
 | Name | Directory | Description |
 | --- | --- | --- |
 | software-dev-process | software-dev-process | 管理完整 SDLC（需求、设计、实现、测试、调试），支持分阶段或全自动执行 |
+| software-dev-process-mutil-agent | software-dev-process-mutil-agent | 管理完整 SDLC，并在各阶段结合角色选择与子代理派发执行任务 |
 | sdlc-doc-implementation | sdlc-doc-implementation | 严格按 `docs/[任务目录]/` 中的文档执行施工、测试、调试 |
 
 ### Superpowers 系列
