@@ -1,7 +1,0 @@
-interface:
-  display_name: "Who Role Selector"
-  short_description: "按任务自动选择专业角色"
-  default_prompt: "Use $who to select the best expert role for this task and continue with that persona."
-
-policy:
-  allow_implicit_invocation: true

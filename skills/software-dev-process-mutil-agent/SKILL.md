@@ -7,12 +7,25 @@ description: 用于需要按 SDLC 阶段推进任务，并在设计、实现、�
 
 当用户明确使用 `sdlc-design-1`、`sdlc-design-2`、`sdlc-implement`、`sdlc-test`、`sdlc-debug`、`sdlc-solo`，并且希望把不同阶段或子任务派给不同专业角色/子代理时，使用本 Skill。
 
-本 Skill 基于 `software-dev-process` 扩展，额外内置了来自 `who` 的本地角色库，位于 `roles/`。使用时只读取当前阶段命中的角色文件，禁止一次性读取全部角色库。
+## 何时使用本 Skill
+
+**使用本 Skill（多代理模式）**：
+- 任务涉及 3 个以上独立模块或技术域（如前端 + 后端 + 数据库 + 安全）
+- 需要并行执行多个独立的分析或实现任务
+- 团队协作场景，需要明确角色分工和责任边界
+- 复杂系统的架构设计，需要多领域专家视角
+
+**使用基础版 `software-dev-process`**：
+- 单一技术栈的简单需求
+- 任务可由单一角色独立完成
+- 不需要并行执行或角色协作
+
+本 Skill 基于 `software-dev-process` 扩展，通过调用 `who` Skill 进行角色选择。使用时通过 `Skill` 工具调用 `who`，由其自动选择并加载最适合的角色，禁止手动读取角色文件。
 
 ## 核心约束
 
 1. **阶段仍由 SDLC 指令驱动**：每个开发阶段必须通过对应的 `sdlc-*` 指令触发，禁止绕过阶段边界直接派发实施。
-2. **每阶段先选主控角色**：进入任意阶段前，必须先读取 `roles/ROLE-SELECTOR.md`，选择 1 个主控角色；只有天然跨域时才补 1 个辅助角色。
+2. **每阶段先选主控角色**：进入任意阶段前，必须先通过 `Skill` 工具调用 `who`，由其自动选择 1 个主控角色；只有天然跨域时才补 1 个辅助角色。
 3. **主控保留全局状态，子代理只做局部任务**：主控负责阶段判断、文档维护、任务编排、结果验收；子代理只处理明确范围内的分析、实现、测试或排障任务。
 4. **默认最小上下文派发**：子代理默认使用 `fork_context=false`；只传本任务所需的目标、范围、文件清单、约束和交付格式，禁止把整段会话历史整包透传。
 5. **Agent 类型强约束**：
@@ -27,8 +40,7 @@ description: 用于需要按 SDLC 阶段推进任务，并在设计、实现、�
 ## 本 Skill 内置资源
 
 - 施工模板：`software-dev-process-mutil-agent/assets/`
-- 角色选择规则：`software-dev-process-mutil-agent/roles/ROLE-SELECTOR.md`
-- 角色库：`software-dev-process-mutil-agent/roles/design/`、`roles/engineering/`、`roles/game-development/`
+- 角色选择：通过 `Skill` 工具调用 `who` 进行自动选角
 - 并行判定清单：`software-dev-process-mutil-agent/assets/并行任务判定清单.md`
 - 子代理任务模板：`software-dev-process-mutil-agent/assets/子代理任务模板.md`
 
@@ -51,6 +63,20 @@ description: 用于需要按 SDLC 阶段推进任务，并在设计、实现、�
 | `sdlc-implement` | `Senior Developer` / `Minimal Change Engineer` | `Frontend Developer` / `AI Engineer` / 具体引擎角色 | `worker` 执行，默认串行 |
 | `sdlc-test` | `Code Reviewer` / `Senior Developer` | `SRE` / `Security Engineer` / `Threat Detection Engineer` | 可按测试域并行 `worker` 或 `explorer` |
 | `sdlc-debug` | `Senior Developer` / `Incident Response Commander` | `SRE` / `Security Engineer` / `Code Reviewer` | 先复现，允许并行只读排查 |
+
+### 角色复用策略
+
+**何时可以复用上一阶段角色**：
+- 连续阶段的技术域一致（如 `design-1` → `design-2` 都是后端架构设计）
+- 上一阶段主控角色在当前阶段的默认角色列表中
+- 任务复杂度未发生量级变化
+
+**何时必须重新选角**：
+- 阶段跨越技术域（如从架构设计进入前端实现）
+- 当前阶段需要不同的专业视角（如从开发进入安全测试）
+- 上一阶段遇到该角色能力边界外的问题
+
+**选角流程**：每个阶段开始时，先检查上一阶段角色是否适用当前阶段；若适用则可直接复用并在 `status.md` 中注明"沿用上阶段角色"；若不适用则必须通过 `Skill` 工具调用 `who` 进行重新选角。
 
 ### 子代理提示词最小要素
 
@@ -78,6 +104,8 @@ description: 用于需要按 SDLC 阶段推进任务，并在设计、实现、�
 
 在真正并行派发前，必须先过一遍 `assets/并行任务判定清单.md`。只要其中任一阻断项命中，就退回串行执行。
 
+**降级策略**：若 `assets/并行任务判定清单.md` 不存在或读取失败，则默认采用保守策略——仅允许设计阶段的只读 `explorer` 并行，所有 `worker` 类型任务强制串行执行。
+
 ## 阶段命令
 
 ### `sdlc-design-1`
@@ -85,7 +113,7 @@ description: 用于需要按 SDLC 阶段推进任务，并在设计、实现、�
 阶段 1：需求理解与概要设计。
 
 1. 简单任务可直接进入上下文收集；复杂任务必须先确认任务目录。
-2. 先读取 `roles/ROLE-SELECTOR.md`，选择当前阶段主控角色；如需要，只补 1 个辅助角色，并只读取命中的角色文件。
+2. 通过 `Skill` 工具调用 `who`，由其自动选择当前阶段主控角色；如需要，只补 1 个辅助角色。
 3. 在 `docs/[需求目录]/onlyAI/structured-request.json` 记录结构化需求，必须包含系统名称和本阶段主控角色。
 4. 首次创建 `status.md` 时，记录系统名称、当前阶段、主控角色与辅助角色。
 5. 输出 `docs/[需求目录]/onlyAI/context-scan.json`，完成结构化快速扫描。
@@ -102,8 +130,8 @@ description: 用于需要按 SDLC 阶段推进任务，并在设计、实现、�
 
 阶段 2：详细设计与施工规划。
 
-1. 前置校验：若 `001-概要设计-待确认.md` 状态仍为“待处理”，拒绝进入本阶段。
-2. 重新进行阶段选角，通常主控为 `Software Architect`、`Backend Architect` 或目标技术域角色。
+1. 前置校验：若 `001-概要设计-待确认.md` 状态仍为”待处理”，拒绝进入本阶段。
+2. 通过 `Skill` 工具调用 `who` 进行阶段选角，通常主控为 `Software Architect`、`Backend Architect` 或目标技术域角色。
 3. 基于 `001-概要设计.md` 继续收集实现细节，并补齐接口契约、风险与验证标准。
 4. 使用 `assets/详细设计模板.md` 输出 `002-详细设计.md`。
 5. 使用 `assets/施工文档模板.md` 输出 `003-施工文档.md`。
@@ -143,7 +171,7 @@ description: 用于需要按 SDLC 阶段推进任务，并在设计、实现、�
 
 阶段 4：质量验证与测试。
 
-1. 重新进行阶段选角，主控通常为 `Code Reviewer` 或 `Senior Developer`。
+1. 通过 `Skill` 工具调用 `who` 进行阶段选角，主控通常为 `Code Reviewer` 或 `Senior Developer`。
 2. 使用 `assets/测试用例模板.md` 输出 `004-测试用例.md`。
 3. 在 `onlyAI/testing.md` 和 `onlyAI/verification.md` 记录测试执行过程、输出和风险评估。
 4. 可按测试域派发子代理，但必须满足测试对象和输出不相互覆盖。
@@ -155,7 +183,7 @@ description: 用于需要按 SDLC 阶段推进任务，并在设计、实现、�
 
 排查与修复阶段。
 
-1. 重新选角：一般由 `Senior Developer` 或 `Incident Response Commander` 主控。
+1. 通过 `Skill` 工具调用 `who` 进行选角，一般由 `Senior Developer` 或 `Incident Response Commander` 主控。
 2. 先复现问题，再写入 `assets/Debug排查记录模板.md` 生成 `006-Debug排查记录.md`。
 3. 若存在多个彼此独立的异常现象，可并行派发多个只读 `explorer` 做根因排查。
 4. 真正的修复任务仍遵守实现阶段的文件所有权和并行规则。
@@ -167,7 +195,7 @@ description: 用于需要按 SDLC 阶段推进任务，并在设计、实现、�
 全自动模式：从当前阶段自动执行到测试完成。
 
 1. 先检测 `docs/[需求目录]/` 的现有产物，判断当前已完成阶段。
-2. 从下一个未完成阶段开始，每进入一个阶段都必须先做一次阶段选角。
+2. 从下一个未完成阶段开始，每进入一个阶段都必须通过 `Skill` 工具调用 `who` 进行阶段选角。
 3. 若预计剩余工作量大于 3 天，必须先警告用户再继续。
 4. 自动执行剩余阶段时：
    - `design-1` / `design-2` 允许自动并行派发只读 `explorer`
@@ -188,7 +216,7 @@ description: 用于需要按 SDLC 阶段推进任务，并在设计、实现、�
 - `software-dev-process-mutil-agent/assets/待确认模板.md`
 - `software-dev-process-mutil-agent/assets/并行任务判定清单.md`
 - `software-dev-process-mutil-agent/assets/子代理任务模板.md`
-- `software-dev-process-mutil-agent/roles/ROLE-SELECTOR.md`
+- 角色选择：通过 `Skill` 工具调用 `who` 技能
 
 ## 落地规则总结
 
