@@ -1,20 +1,35 @@
 ---
 name: db-query
-description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/PostgreSQL/Elasticsearch。配置采用 `<DRIVER>_*_<profile>` 多库模式（例如 `MYSQL_HOST_main`、`REDIS_ADDR_cache`、`MEMCACHED_ADDR_cache`、`ES_URL_main`），通过 `--profile` 或 `DB_PROFILE` 选择。默认只允许只读查询，并强制输出 JSON。
+description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/PostgreSQL/Elasticsearch。配置采用 DRIVER 前缀加 profile 后缀的多库模式（例如 `MYSQL_HOST_main`、`REDIS_ADDR_cache`、`MEMCACHED_ADDR_cache`、`ES_URL_main`），通过 `--profile` 或 `DB_PROFILE` 选择。默认只允许只读查询，并强制输出 JSON。
 ---
 
 # DB Query
 
 脚本目录：`~/.codex/skills/db-query/`
 
-使用这个 skill 时，必须优先使用打包后的 `bin` 命令，不直接运行源码：
+默认附加加载资料：`~/.codex/skills/db-query/engineering-database-optimizer.md`。
+当任务涉及数据库结构设计、索引策略、慢查询分析、`EXPLAIN` / `EXPLAIN ANALYZE`、连接池、迁移策略或性能优化时，**必须先读取该资料**，再使用本 skill。
 
-1. Linux amd64：`~/.codex/skills/db-query/bin/db-query-linux-amd64`
-2. Linux arm64：`~/.codex/skills/db-query/bin/db-query-linux-arm64`
-3. Windows amd64：`~/.codex/skills/db-query/bin/db-query-windows-amd64.exe`
+使用这个 skill 时，必须优先使用打包后的 `bin` 命令，不直接运行源码。
 
-配置文件固定读取：skill 根目录的 `config.env`（即 `~/.codex/skills/db-query/config.env`）。
-`config.env` 为必需文件，不存在时命令会报错退出。
+**平台检测与二进制选择**：
+- Linux amd64：`~/.codex/skills/db-query/bin/db-query-linux-amd64`
+- Linux arm64：`~/.codex/skills/db-query/bin/db-query-linux-arm64`
+- Windows amd64：`~/.codex/skills/db-query/bin/db-query-windows-amd64.exe`
+
+使用 `uname -m` 和 `uname -s` 判断平台，自动选择对应二进制。
+
+**配置文件读取约定**：
+
+1. 若调用方显式传入 `--config <path>`，以显式路径为准。
+2. 默认先检查当前工作区的 `docs/db.env`；若存在，调用命令时必须显式追加 `--config docs/db.env`。
+3. 若 `docs/db.env` 不存在，再回退到 skill 根目录的 `config.env`（即 `~/.codex/skills/db-query/config.env`）。
+4. 若 `docs/db.env` 与 skill 根目录 `config.env` 都不存在，命令返回错误码 1，输出 JSON 格式错误：
+   ```json
+   {"error": {"code": "CONFIG_NOT_FOUND", "message": "配置文件不存在", "driver": "unknown"}}
+   ```
+
+以下示例统一遵循上述规则：如果工作区存在 `docs/db.env`，请在命令中补上 `--config docs/db.env`；否则按默认回退到 skill 根目录 `config.env`。
 
 ## 快速开始
 
@@ -56,6 +71,8 @@ description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/Postg
   --limit 20
 ```
 
+**注意**：MongoDB 需要 `--database` 参数指定数据库名。
+
 ### 3) Redis（统一外层参数）
 
 ```bash
@@ -90,8 +107,10 @@ description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/Postg
   --driver memcached \
   --profile cache \
   --command MGET \
-  --keys session:123,session:456
+  --target session:123,session:456
 ```
+
+**注意**：Memcached 的 MGET 使用 `--target` 传入逗号分隔的多个 key。
 
 ### 5) Elasticsearch（结构化参数或原始 DSL）
 
@@ -141,13 +160,14 @@ description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/Postg
 - `--where`：SQL 条件表达式，或 Mongo / ES 条件 `字段:操作符:值`
 - `--sort`：SQL 排序表达式，或 Mongo / ES 排序（使用 `字段:asc|desc`）
 - `--limit`：结果上限
+- `--database`：数据库名（仅 MongoDB 必需）
 - `--query`：原始查询兜底入口
 
 兼容说明：
 
 - SQL 旧参数 `--table`、`--columns`、`--order-by` 仍可用
 - Mongo / Redis / ES 旧 `--query` JSON 仍可用
-- 一旦传入 `--query`，不得再混用结构化参数
+- **警告**：一旦传入 `--query`，不得再混用结构化参数，否则返回错误
 
 ### Mongo `--where` 语法
 
@@ -202,7 +222,7 @@ description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/Postg
 3. 原始 `--query` 仅允许 JSON body，最终仍会走 `_search`
 4. 禁止 index / bulk / update / delete / script 等写操作入口
 
-### 6) DDL/DML 请求处理规则（强制）
+## DDL/DML 请求处理规则（强制）
 
 当需求包含以下任一操作时，不得直接连接数据库执行：
 1. `INSERT`（DML）
@@ -225,19 +245,49 @@ description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/Postg
 4. 每次成功输出必须包含 `raw_sql` 字段，用于打印当前驱动对应的原生可读语句；其中 `query` 保留内部统一请求体。
 
 成功输出字段：
-- `driver`
-- `profile`
-- `query`
-- `raw_sql`
-- `row_count`
-- `columns`
-- `rows`
-- `meta.elapsed_ms`
+- `driver`：驱动类型
+- `profile`：使用的 profile
+- `query`：内部统一请求体
+- `raw_sql`：原生可读语句（各驱动格式见下方示例）
+- `row_count`：结果行数
+- `columns`：列名数组
+- `rows`：结果数据
+- `meta.elapsed_ms`：执行耗时（毫秒）
 
 失败输出字段：
-- `error.code`
-- `error.message`
-- `error.driver`
+- `error.code`：错误码
+- `error.message`：错误信息
+- `error.driver`：驱动类型
+
+### `raw_sql` 格式示例
+
+**MySQL/PostgreSQL**：
+```
+SELECT id, name FROM users WHERE status = 'active' ORDER BY id DESC LIMIT 20
+```
+
+**MongoDB**：
+```
+db.users.find({"status": "active", "age": {"$gte": 18}}).limit(20)
+```
+
+**Redis**：
+```
+GET session:123
+SCAN 0 MATCH session:* COUNT 50
+```
+
+**Memcached**：
+```
+GET session:123
+MGET session:123 session:456
+```
+
+**Elasticsearch**：
+```
+POST /student_index/_search
+{"query": {"bool": {"must": [{"term": {"status": "active"}}, {"range": {"age": {"gte": 18}}}]}}, "size": 20}
+```
 
 ## 构建命令
 
