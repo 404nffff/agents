@@ -252,6 +252,52 @@ curl_download_with_retry() {
   return 1
 }
 
+run_with_timeout_if_available() {
+  local seconds="$1"
+  shift
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${seconds}s" "$@" >/dev/null 2>&1
+  else
+    "$@" >/dev/null 2>&1
+  fi
+}
+
+git_sparse_checkout_repo_path() {
+  local repo="$1"
+  local ref="$2"
+  local root_path="$3"
+  local clone_dir="$4"
+  shift 4
+  local -a sparse_paths=("$@")
+  local repo_url="https://github.com/${repo}.git"
+
+  if ! command -v git >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if [[ ${#sparse_paths[@]} -eq 0 ]]; then
+    sparse_paths=("${root_path}")
+  fi
+
+  if ! run_with_timeout_if_available 40 git clone --depth 1 --branch "${ref}" --filter=blob:none --sparse "${repo_url}" "${clone_dir}"; then
+    return 1
+  fi
+
+  if ! (
+    cd "${clone_dir}" &&
+    run_with_timeout_if_available 20 git sparse-checkout set "${sparse_paths[@]}"
+  ); then
+    return 1
+  fi
+
+  if [[ ! -d "${clone_dir}/${root_path}" ]]; then
+    return 1
+  fi
+
+  printf "%s\n" "${clone_dir}/${root_path}"
+}
+
 preview_file_head() {
   local file="$1"
   local lines="${2:-20}"
@@ -1338,7 +1384,7 @@ install_skills_main() {
   local remote_skills_root=""
   local tmp_fetch_dir=""
   local tmp_catalog_file=""
-  local archive_url archive_file extract_root candidate
+  local archive_url archive_file extract_root candidate archive_extract_dir sparse_clone_dir
   local dir skill_file name desc rel_path
   local cmd token idx tty_opened
   local installed overwritten skipped selected_count
@@ -1348,6 +1394,7 @@ install_skills_main() {
   local -a skill_descs=()
   local -a skill_paths=()
   local -a selected=()
+  local -a selected_sparse_paths=()
   declare -A seen_names=()
   declare -A seen_dirs=()
 
@@ -1647,26 +1694,37 @@ install_skills_main() {
     fi
 
     tmp_fetch_dir="$(new_tmp_dir)"
+    archive_extract_dir="${tmp_fetch_dir}/archive"
+    sparse_clone_dir="${tmp_fetch_dir}/sparse-repo"
+    mkdir -p "${archive_extract_dir}"
     archive_url="https://codeload.github.com/${remote_repo}/tar.gz/${github_ref}"
     archive_file="${tmp_fetch_dir}/repo.tar.gz"
     echo "已选择 ${selected_count} 个 skill，开始拉取远程仓库: ${remote_repo}@${github_ref}"
-    if ! curl -fsSL "${archive_url}" -o "${archive_file}" >/dev/null 2>&1; then
-      echo "错误: 无法下载远程仓库压缩包 ${archive_url}" >&2
-      return 1
+    echo "提示: 若压缩包下载超过约 10 秒，将自动切换为按所选 skill 稀疏拉取。"
+
+    candidate=""
+    if curl_download_with_retry "${archive_url}" "${archive_file}" 1 5 10; then
+      if run_with_timeout_if_available 20 tar -xzf "${archive_file}" -C "${archive_extract_dir}"; then
+        extract_root="$(find "${archive_extract_dir}" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
+        if [[ -n "${extract_root}" ]]; then
+          candidate="${extract_root}/${remote_path}"
+        fi
+      fi
     fi
-    if ! tar -xzf "${archive_file}" -C "${tmp_fetch_dir}" >/dev/null 2>&1; then
-      echo "错误: 无法解压远程仓库压缩包 ${archive_file}" >&2
-      return 1
+
+    if [[ -z "${candidate}" || ! -d "${candidate}" ]]; then
+      selected_sparse_paths=()
+      for idx in "${!skill_names[@]}"; do
+        [[ "${selected[idx]}" -ne 1 ]] && continue
+        selected_sparse_paths+=("${remote_path}/${skill_paths[idx]}")
+      done
+      echo "警告: 远程仓库压缩包下载较慢或失败，尝试按目录稀疏拉取: ${remote_repo}@${github_ref}:${remote_path}" >&2
+      candidate="$(git_sparse_checkout_repo_path "${remote_repo}" "${github_ref}" "${remote_path}" "${sparse_clone_dir}" "${selected_sparse_paths[@]}" 2>/dev/null || true)"
     fi
-    extract_root="$(find "${tmp_fetch_dir}" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
-    if [[ -z "${extract_root}" ]]; then
-      echo "错误: 压缩包解压后未找到仓库目录 ${remote_repo}@${github_ref}" >&2
-      return 1
-    fi
-    candidate="${extract_root}/${remote_path}"
-    if [[ ! -d "${candidate}" ]]; then
-      echo "错误: 远程仓库中不存在 skills 路径: ${remote_path}" >&2
-      echo "仓库: ${remote_repo} 分支: ${github_ref}" >&2
+
+    if [[ -z "${candidate}" || ! -d "${candidate}" ]]; then
+      echo "错误: 无法获取远程 skills 目录 ${remote_repo}@${github_ref}:${remote_path}" >&2
+      echo "已尝试: codeload 压缩包、git sparse-checkout" >&2
       return 1
     fi
     remote_skills_root="${candidate}"

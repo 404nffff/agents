@@ -41,6 +41,9 @@ SKILLS_PATH_SET="false"
 SKILLS_ROOT=""
 SOURCE_LABEL=""
 TMP_FETCH_DIR=""
+REMOTE_REPO_RESOLVED=""
+REMOTE_SKILLS_PATH_RESOLVED=""
+REMOTE_SKILLS_ROOT=""
 
 declare -a SKILL_DIRS=()
 declare -a SKILL_NAMES=()
@@ -126,6 +129,102 @@ normalize_github_repo() {
   echo "${repo}"
 }
 
+curl_download_with_retry() {
+  local url="$1"
+  local out_file="$2"
+  local max_attempts="${3:-2}"
+  local connect_timeout="${4:-5}"
+  local max_time="${5:-25}"
+  local timeout_window="$((max_time + 5))"
+  local attempt=1
+  local -a curl_cmd=(
+    curl -fsSL
+    --connect-timeout "${connect_timeout}"
+    --max-time "${max_time}"
+    "${url}"
+    -o "${out_file}"
+  )
+
+  while (( attempt <= max_attempts )); do
+    if command -v timeout >/dev/null 2>&1; then
+      if timeout "${timeout_window}s" "${curl_cmd[@]}" >/dev/null 2>&1; then
+        return 0
+      fi
+    else
+      if "${curl_cmd[@]}" >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  return 1
+}
+
+run_with_timeout_if_available() {
+  local seconds="$1"
+  shift
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${seconds}s" "$@" >/dev/null 2>&1
+  else
+    "$@" >/dev/null 2>&1
+  fi
+}
+
+git_sparse_checkout_repo_path() {
+  local repo="$1"
+  local ref="$2"
+  local root_path="$3"
+  local clone_dir="$4"
+  shift 4
+  local -a sparse_paths=("$@")
+  local repo_url="https://github.com/${repo}.git"
+
+  if ! command -v git >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if [[ ${#sparse_paths[@]} -eq 0 ]]; then
+    sparse_paths=("${root_path}")
+  fi
+
+  if ! run_with_timeout_if_available 40 git clone --depth 1 --branch "${ref}" --filter=blob:none --sparse "${repo_url}" "${clone_dir}"; then
+    return 1
+  fi
+
+  if ! (
+    cd "${clone_dir}" &&
+    run_with_timeout_if_available 20 git sparse-checkout set "${sparse_paths[@]}"
+  ); then
+    return 1
+  fi
+
+  if [[ ! -d "${clone_dir}/${root_path}" ]]; then
+    return 1
+  fi
+
+  printf "%s\n" "${clone_dir}/${root_path}"
+}
+
+fetch_raw_from_github() {
+  local repo="$1"
+  local ref="$2"
+  local path="$3"
+  local out_file="$4"
+  local raw_url="https://raw.githubusercontent.com/${repo}/${ref}/${path}"
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "错误: 需要 curl 来拉取 GitHub 源。" >&2
+    exit 1
+  fi
+
+  if ! curl_download_with_retry "${raw_url}" "${out_file}" 2 5 15; then
+    echo "错误: 无法拉取 GitHub 源: ${raw_url}" >&2
+    exit 1
+  fi
+}
+
 resolve_skills_root() {
   local repo path
 
@@ -135,7 +234,10 @@ resolve_skills_root() {
     fi
     repo="$(normalize_github_repo "${GITHUB_REPO}")"
     path="${GITHUB_SKILLS_PATH}"
-    fetch_remote_skills_root "${repo}" "${GITHUB_REF}" "${path}"
+    REMOTE_REPO_RESOLVED="${repo}"
+    REMOTE_SKILLS_PATH_RESOLVED="${path}"
+    SKILLS_ROOT=""
+    SOURCE_LABEL="远程目录 ${repo}@${GITHUB_REF}:${path}（先读取 README 列表）"
     return
   fi
 
@@ -148,17 +250,27 @@ resolve_skills_root() {
   repo="${DEFAULT_GITHUB_REPO}"
   path="${DEFAULT_GITHUB_SKILLS_PATH}"
   echo "未检测到本地 skills 目录，默认使用远程仓库: ${repo}@${DEFAULT_GITHUB_REF}:${path}"
-  fetch_remote_skills_root "${repo}" "${DEFAULT_GITHUB_REF}" "${path}"
+  SOURCE_MODE="github"
+  GITHUB_REPO="${repo}"
+  GITHUB_REF="${DEFAULT_GITHUB_REF}"
+  GITHUB_SKILLS_PATH="${path}"
+  REMOTE_REPO_RESOLVED="${repo}"
+  REMOTE_SKILLS_PATH_RESOLVED="${path}"
+  SKILLS_ROOT=""
+  SOURCE_LABEL="远程目录 ${repo}@${GITHUB_REF}:${path}（先读取 README 列表）"
 }
 
 fetch_remote_skills_root() {
   local repo="$1"
   local ref="$2"
   local path="$3"
-  local archive_url archive_file
+  local archive_url archive_file archive_extract_dir sparse_clone_dir
   local candidate extract_root
 
   TMP_FETCH_DIR="$(mktemp -d)"
+  archive_extract_dir="${TMP_FETCH_DIR}/archive"
+  sparse_clone_dir="${TMP_FETCH_DIR}/sparse-repo"
+  mkdir -p "${archive_extract_dir}"
 
   if ! command -v curl >/dev/null 2>&1; then
     echo "错误: 需要 curl 来拉取远程仓库压缩包。" >&2
@@ -172,26 +284,25 @@ fetch_remote_skills_root() {
   archive_url="https://codeload.github.com/${repo}/tar.gz/${ref}"
   archive_file="${TMP_FETCH_DIR}/repo.tar.gz"
   echo "正在使用 curl 拉取远程仓库压缩包: ${repo}@${ref}"
-  if ! curl -fsSL "${archive_url}" -o "${archive_file}" >/dev/null 2>&1; then
-    echo "错误: 无法下载远程仓库压缩包 ${archive_url}" >&2
-    exit 1
+
+  candidate=""
+  if curl_download_with_retry "${archive_url}" "${archive_file}" 2 5 25; then
+    if run_with_timeout_if_available 20 tar -xzf "${archive_file}" -C "${archive_extract_dir}"; then
+      extract_root="$(find "${archive_extract_dir}" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
+      if [[ -n "${extract_root}" ]]; then
+        candidate="${extract_root}/${path}"
+      fi
+    fi
   fi
 
-  if ! tar -xzf "${archive_file}" -C "${TMP_FETCH_DIR}" >/dev/null 2>&1; then
-    echo "错误: 无法解压远程仓库压缩包 ${archive_file}" >&2
-    exit 1
+  if [[ -z "${candidate}" || ! -d "${candidate}" ]]; then
+    echo "警告: 远程仓库压缩包下载较慢或失败，尝试按目录稀疏拉取: ${repo}@${ref}:${path}" >&2
+    candidate="$(git_sparse_checkout_repo_path "${repo}" "${ref}" "${path}" "${sparse_clone_dir}" 2>/dev/null || true)"
   fi
 
-  extract_root="$(find "${TMP_FETCH_DIR}" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
-  if [[ -z "${extract_root}" ]]; then
-    echo "错误: 压缩包解压后未找到仓库目录 ${repo}@${ref}" >&2
-    exit 1
-  fi
-
-  candidate="${extract_root}/${path}"
-  if [[ ! -d "${candidate}" ]]; then
-    echo "错误: 远程仓库中不存在 skills 路径: ${path}" >&2
-    echo "仓库: ${repo} 分支: ${ref}" >&2
+  if [[ -z "${candidate}" || ! -d "${candidate}" ]]; then
+    echo "错误: 无法获取远程 skills 目录 ${repo}@${ref}:${path}" >&2
+    echo "已尝试: codeload 压缩包、git sparse-checkout" >&2
     exit 1
   fi
 
@@ -219,48 +330,125 @@ read_frontmatter_field() {
 }
 
 discover_skills() {
-  if [[ -z "${SKILLS_ROOT}" || ! -d "${SKILLS_ROOT}" ]]; then
-    echo "错误: 未找到 skills 目录: ${SKILLS_ROOT}" >&2
-    exit 1
-  fi
-
-  local dir skill_file name desc
+  local dir skill_file name desc rel_path tmp_catalog_file
   declare -A seen_names=()
 
-  while IFS= read -r dir; do
-    skill_file=""
-    if [[ -f "${dir}/SKILL.md" ]]; then
-      skill_file="${dir}/SKILL.md"
-    elif [[ -f "${dir}/skill.md" ]]; then
-      skill_file="${dir}/skill.md"
-    else
-      continue
+  if [[ "${SOURCE_MODE}" == "github" ]]; then
+    TMP_FETCH_DIR="${TMP_FETCH_DIR:-$(mktemp -d)}"
+    tmp_catalog_file="${TMP_FETCH_DIR}/skills-readme.md"
+    fetch_raw_from_github "${REMOTE_REPO_RESOLVED}" "${GITHUB_REF}" "${REMOTE_SKILLS_PATH_RESOLVED}/README.md" "${tmp_catalog_file}"
+
+    while IFS=$'\t' read -r name rel_path desc; do
+      [[ -z "${name}" || -z "${rel_path}" ]] && continue
+      [[ -z "${desc}" ]] && desc="(无 description)"
+
+      if [[ -n "${seen_names[${name}]+x}" ]]; then
+        echo "警告: 发现重复 skill 名称 '${name}'，已忽略目录: ${rel_path}" >&2
+        continue
+      fi
+      seen_names["${name}"]=1
+
+      SKILL_DIRS+=("${rel_path}")
+      SKILL_NAMES+=("${name}")
+      SKILL_DESCS+=("${desc}")
+      SELECTED+=(0)
+    done < <(
+      awk '
+        function trim(s) {
+          gsub(/^[[:space:]]+/, "", s)
+          gsub(/[[:space:]]+$/, "", s)
+          return s
+        }
+
+        BEGIN { in_catalog = 0 }
+
+        /<!--[[:space:]]*SKILL_CATALOG_START[[:space:]]*-->/ { in_catalog = 1; next }
+        /<!--[[:space:]]*SKILL_CATALOG_END[[:space:]]*-->/ { in_catalog = 0; next }
+
+        {
+          if (in_catalog == 0) {
+            next
+          }
+          if ($0 !~ /^\|/) {
+            next
+          }
+
+          line = $0
+          sub(/^\|/, "", line)
+          sub(/\|[[:space:]]*$/, "", line)
+          split(line, raw_fields, /\|/)
+
+          field_count = 0
+          for (i = 1; i <= length(raw_fields); i++) {
+            field = trim(raw_fields[i])
+            if (field == "") {
+              continue
+            }
+            field_count++
+            fields[field_count] = field
+          }
+
+          if (field_count < 3) {
+            next
+          }
+
+          name = fields[1]
+          rel_path = fields[2]
+          desc = fields[3]
+
+          if (tolower(name) == "name" && tolower(rel_path) == "directory") {
+            next
+          }
+          if (name ~ /^-+$/ && rel_path ~ /^-+$/) {
+            next
+          }
+
+          gsub(/`/, "", rel_path)
+          print name "\t" rel_path "\t" desc
+        }
+      ' "${tmp_catalog_file}"
+    )
+  else
+    if [[ -z "${SKILLS_ROOT}" || ! -d "${SKILLS_ROOT}" ]]; then
+      echo "错误: 未找到 skills 目录: ${SKILLS_ROOT}" >&2
+      exit 1
     fi
 
-    name="$(read_frontmatter_field "${skill_file}" "name")"
-    desc="$(read_frontmatter_field "${skill_file}" "description")"
+    while IFS= read -r dir; do
+      skill_file=""
+      if [[ -f "${dir}/SKILL.md" ]]; then
+        skill_file="${dir}/SKILL.md"
+      elif [[ -f "${dir}/skill.md" ]]; then
+        skill_file="${dir}/skill.md"
+      else
+        continue
+      fi
 
-    if [[ -z "${name}" ]]; then
-      name="$(basename "${dir}")"
-    fi
-    if [[ -z "${desc}" ]]; then
-      desc="(无 description)"
-    fi
+      name="$(read_frontmatter_field "${skill_file}" "name")"
+      desc="$(read_frontmatter_field "${skill_file}" "description")"
 
-    if [[ -n "${seen_names[${name}]+x}" ]]; then
-      echo "警告: 发现重复 skill 名称 '${name}'，已忽略目录: ${dir}" >&2
-      continue
-    fi
-    seen_names["${name}"]=1
+      if [[ -z "${name}" ]]; then
+        name="$(basename "${dir}")"
+      fi
+      if [[ -z "${desc}" ]]; then
+        desc="(无 description)"
+      fi
 
-    SKILL_DIRS+=("${dir}")
-    SKILL_NAMES+=("${name}")
-    SKILL_DESCS+=("${desc}")
-    SELECTED+=(0)
-  done < <(find "${SKILLS_ROOT}" -mindepth 1 -maxdepth 1 -type d | sort)
+      if [[ -n "${seen_names[${name}]+x}" ]]; then
+        echo "警告: 发现重复 skill 名称 '${name}'，已忽略目录: ${dir}" >&2
+        continue
+      fi
+      seen_names["${name}"]=1
+
+      SKILL_DIRS+=("${dir}")
+      SKILL_NAMES+=("${name}")
+      SKILL_DESCS+=("${desc}")
+      SELECTED+=(0)
+    done < <(find "${SKILLS_ROOT}" -mindepth 1 -maxdepth 1 -type d | sort)
+  fi
 
   if [[ ${#SKILL_DIRS[@]} -eq 0 ]]; then
-    echo "错误: 未在 ${SKILLS_ROOT} 下找到可安装的 skill" >&2
+    echo "错误: 未找到可安装的 skill" >&2
     exit 1
   fi
 }
@@ -385,9 +573,24 @@ install_selected() {
   mkdir -p "${TARGET_ROOT}"
 
   local i name src dest installed overwritten skipped
+  local -a selected_sparse_paths=()
   installed=0
   overwritten=0
   skipped=0
+
+  if [[ "${SOURCE_MODE}" == "github" ]]; then
+    for i in "${!SKILL_NAMES[@]}"; do
+      [[ "${SELECTED[i]}" -ne 1 ]] && continue
+      selected_sparse_paths+=("${REMOTE_SKILLS_PATH_RESOLVED}/${SKILL_DIRS[i]}")
+    done
+
+    echo "已选择 ${#selected_sparse_paths[@]} 个 skill，开始按目录拉取远程仓库: ${REMOTE_REPO_RESOLVED}@${GITHUB_REF}"
+    REMOTE_SKILLS_ROOT="$(git_sparse_checkout_repo_path "${REMOTE_REPO_RESOLVED}" "${GITHUB_REF}" "${REMOTE_SKILLS_PATH_RESOLVED}" "${TMP_FETCH_DIR}/sparse-selected" "${selected_sparse_paths[@]}" 2>/dev/null || true)"
+    if [[ -z "${REMOTE_SKILLS_ROOT}" || ! -d "${REMOTE_SKILLS_ROOT}" ]]; then
+      echo "错误: 无法按目录拉取远程 skills ${REMOTE_REPO_RESOLVED}@${GITHUB_REF}:${REMOTE_SKILLS_PATH_RESOLVED}" >&2
+      exit 1
+    fi
+  fi
 
   echo
   echo "开始安装到: ${TARGET_ROOT}"
@@ -397,7 +600,11 @@ install_selected() {
     fi
 
     name="${SKILL_NAMES[i]}"
-    src="${SKILL_DIRS[i]}"
+    if [[ -n "${REMOTE_SKILLS_ROOT}" ]]; then
+      src="${REMOTE_SKILLS_ROOT}/${SKILL_DIRS[i]}"
+    else
+      src="${SKILL_DIRS[i]}"
+    fi
     dest="${TARGET_ROOT}/${name}"
 
     if [[ -e "${dest}" ]]; then
