@@ -219,6 +219,39 @@ normalize_github_repo() {
   printf "%s\n" "${repo}"
 }
 
+# 统一远程下载超时与重试，避免 GitHub 单次网络抖动让交互式安装看起来“卡死”。
+curl_download_with_retry() {
+  local url="$1"
+  local out_file="$2"
+  local max_attempts="${3:-2}"
+  local connect_timeout="${4:-5}"
+  local max_time="${5:-20}"
+  local timeout_window="$((max_time + 5))"
+  local attempt=1
+  local -a curl_cmd=(
+    curl -fsSL
+    --connect-timeout "${connect_timeout}"
+    --max-time "${max_time}"
+    "${url}"
+    -o "${out_file}"
+  )
+
+  while (( attempt <= max_attempts )); do
+    if command -v timeout >/dev/null 2>&1; then
+      if timeout "${timeout_window}s" "${curl_cmd[@]}" >/dev/null 2>&1; then
+        return 0
+      fi
+    else
+      if "${curl_cmd[@]}" >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  return 1
+}
+
 preview_file_head() {
   local file="$1"
   local lines="${2:-20}"
@@ -243,7 +276,10 @@ copy_local_or_url_to_file() {
       echo "错误: 需要 curl 来拉取 URL 源。" >&2
       exit 1
     fi
-    curl -fsSL "${source}" -o "${out_file}"
+    if ! curl_download_with_retry "${source}" "${out_file}"; then
+      echo "错误: 无法拉取 URL 源: ${source}" >&2
+      exit 1
+    fi
     return
   fi
 
@@ -267,7 +303,10 @@ fetch_raw_from_github() {
   fi
 
   raw_url="https://raw.githubusercontent.com/${repo}/${ref}/${path}"
-  curl -fsSL "${raw_url}" -o "${out_file}"
+  if ! curl_download_with_retry "${raw_url}" "${out_file}"; then
+    echo "错误: 无法拉取 GitHub 源: ${raw_url}" >&2
+    exit 1
+  fi
 }
 
 resolve_db_query_release_base_url_for_skills_install() {
@@ -1793,7 +1832,7 @@ install_mcp_main() {
     local manifest_file download_url file tmp_file count=0
 
     manifest_file="$(new_tmp_file)"
-    if ! curl -fsSL "https://api.github.com/repos/${repo}/contents/${path}?ref=${github_ref}" -o "${manifest_file}" >/dev/null 2>&1; then
+    if ! curl_download_with_retry "https://api.github.com/repos/${repo}/contents/${path}?ref=${github_ref}" "${manifest_file}" 2 5 15; then
       return 1
     fi
     : > "${tmp_source_file}"
@@ -1805,7 +1844,7 @@ install_mcp_main() {
       [[ "${file}" == "README.md" || "${file}" == "mcp.md" ]] && continue
 
       tmp_file="$(new_tmp_file)"
-      if ! curl -fsSL "${download_url}" -o "${tmp_file}" >/dev/null 2>&1; then
+      if ! curl_download_with_retry "${download_url}" "${tmp_file}" 2 5 15; then
         return 1
       fi
       mcp_append_source_file_to_bundle "${tmp_file}"
@@ -1821,7 +1860,7 @@ install_mcp_main() {
   }
 
   mcp_fetch_source_file() {
-    local repo raw_url
+    local repo raw_url bundle_path
     tmp_source_file="$(new_tmp_file)"
 
     if [[ "${source_mode}" == "source" ]]; then
@@ -1860,23 +1899,26 @@ install_mcp_main() {
     fi
 
     if [[ "${github_mcp_path}" != *.md ]]; then
+      bundle_path="${github_mcp_path%/}/mcp.md"
+      raw_url="https://raw.githubusercontent.com/${repo}/${github_ref}/${bundle_path}"
+      if curl_download_with_retry "${raw_url}" "${tmp_source_file}" 2 5 20; then
+        source_label="远程聚合文件 ${raw_url}"
+        return
+      fi
+
       if mcp_fetch_github_directory "${repo}" "${github_mcp_path}"; then
         source_label="远程目录 ${repo}@${github_ref}:${github_mcp_path}"
         return
       fi
+
+      raw_url="https://raw.githubusercontent.com/${repo}/${github_ref}/${bundle_path}"
+    else
+      raw_url="https://raw.githubusercontent.com/${repo}/${github_ref}/${github_mcp_path}"
     fi
 
-    raw_url="https://raw.githubusercontent.com/${repo}/${github_ref}/${github_mcp_path}"
-    if command -v timeout >/dev/null 2>&1; then
-      if timeout 30s curl -fsSL "${raw_url}" -o "${tmp_source_file}" >/dev/null 2>&1; then
-        source_label="远程文件 ${raw_url}"
-        return
-      fi
-    else
-      if curl -fsSL "${raw_url}" -o "${tmp_source_file}" >/dev/null 2>&1; then
-        source_label="远程文件 ${raw_url}"
-        return
-      fi
+    if curl_download_with_retry "${raw_url}" "${tmp_source_file}" 2 5 20; then
+      source_label="远程文件 ${raw_url}"
+      return
     fi
 
     if mcp_use_local_fallback; then

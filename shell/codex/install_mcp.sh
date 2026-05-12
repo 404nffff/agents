@@ -143,6 +143,39 @@ normalize_github_repo() {
   echo "${repo}"
 }
 
+# 统一远程下载超时与重试，避免 GitHub 单次网络抖动让交互式安装看起来“卡死”。
+curl_download_with_retry() {
+  local url="$1"
+  local out_file="$2"
+  local max_attempts="${3:-2}"
+  local connect_timeout="${4:-5}"
+  local max_time="${5:-20}"
+  local timeout_window="$((max_time + 5))"
+  local attempt=1
+  local -a curl_cmd=(
+    curl -fsSL
+    --connect-timeout "${connect_timeout}"
+    --max-time "${max_time}"
+    "${url}"
+    -o "${out_file}"
+  )
+
+  while (( attempt <= max_attempts )); do
+    if command -v timeout >/dev/null 2>&1; then
+      if timeout "${timeout_window}s" "${curl_cmd[@]}" >/dev/null 2>&1; then
+        return 0
+      fi
+    else
+      if "${curl_cmd[@]}" >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  return 1
+}
+
 append_source_file_to_bundle() {
   local file="$1"
   if [[ -s "${TMP_SOURCE_FILE}" ]]; then
@@ -192,7 +225,7 @@ fetch_github_directory() {
 
   manifest_file="$(mktemp)"
   TMP_FETCH_DIR="${TMP_FETCH_DIR:-$(mktemp -d)}"
-  if ! curl -fsSL "https://api.github.com/repos/${repo}/contents/${path}?ref=${GITHUB_REF}" -o "${manifest_file}" >/dev/null 2>&1; then
+  if ! curl_download_with_retry "https://api.github.com/repos/${repo}/contents/${path}?ref=${GITHUB_REF}" "${manifest_file}" 2 5 15; then
     rm -f "${manifest_file}"
     return 1
   fi
@@ -205,7 +238,7 @@ fetch_github_directory() {
     [[ "${file}" == "README.md" || "${file}" == "mcp.md" ]] && continue
 
     tmp_file="$(mktemp)"
-    if ! curl -fsSL "${download_url}" -o "${tmp_file}" >/dev/null 2>&1; then
+    if ! curl_download_with_retry "${download_url}" "${tmp_file}" 2 5 15; then
       rm -f "${manifest_file}" "${tmp_file}"
       return 1
     fi
@@ -239,7 +272,10 @@ fetch_source_file() {
         echo "错误: 需要 curl 来拉取 URL 源。" >&2
         exit 1
       fi
-      curl -fsSL "${SOURCE_INPUT}" -o "${TMP_SOURCE_FILE}"
+      if ! curl_download_with_retry "${SOURCE_INPUT}" "${TMP_SOURCE_FILE}"; then
+        echo "错误: 无法拉取 URL 源: ${SOURCE_INPUT}" >&2
+        exit 1
+      fi
       SOURCE_LABEL="URL ${SOURCE_INPUT}"
     else
       if [[ ! -f "${SOURCE_INPUT}" ]]; then
@@ -252,7 +288,7 @@ fetch_source_file() {
     return
   fi
 
-  local repo raw_url
+  local repo raw_url bundle_path
   repo="$(normalize_github_repo "${GITHUB_REPO}")"
 
   echo "正在拉取远程 MCP 清单: ${repo}@${GITHUB_REF}:${GITHUB_MCP_PATH}"
@@ -267,23 +303,26 @@ fetch_source_file() {
   fi
 
   if [[ "${GITHUB_MCP_PATH}" != *.md ]]; then
+    bundle_path="${GITHUB_MCP_PATH%/}/mcp.md"
+    raw_url="https://raw.githubusercontent.com/${repo}/${GITHUB_REF}/${bundle_path}"
+    if curl_download_with_retry "${raw_url}" "${TMP_SOURCE_FILE}" 2 5 20; then
+      SOURCE_LABEL="远程聚合文件 ${raw_url}"
+      return
+    fi
+
     if fetch_github_directory "${repo}" "${GITHUB_MCP_PATH}"; then
       SOURCE_LABEL="远程目录 ${repo}@${GITHUB_REF}:${GITHUB_MCP_PATH}"
       return
     fi
+
+    raw_url="https://raw.githubusercontent.com/${repo}/${GITHUB_REF}/${bundle_path}"
+  else
+    raw_url="https://raw.githubusercontent.com/${repo}/${GITHUB_REF}/${GITHUB_MCP_PATH}"
   fi
 
-  raw_url="https://raw.githubusercontent.com/${repo}/${GITHUB_REF}/${GITHUB_MCP_PATH}"
-  if command -v timeout >/dev/null 2>&1; then
-    if timeout 30s curl -fsSL "${raw_url}" -o "${TMP_SOURCE_FILE}" >/dev/null 2>&1; then
-      SOURCE_LABEL="远程文件 ${raw_url}"
-      return
-    fi
-  else
-    if curl -fsSL "${raw_url}" -o "${TMP_SOURCE_FILE}" >/dev/null 2>&1; then
-      SOURCE_LABEL="远程文件 ${raw_url}"
-      return
-    fi
+  if curl_download_with_retry "${raw_url}" "${TMP_SOURCE_FILE}" 2 5 20; then
+    SOURCE_LABEL="远程文件 ${raw_url}"
+    return
   fi
 
   if use_local_fallback; then
