@@ -463,7 +463,6 @@ build_error_summary_line() {
 build_summary_metric_line() {
   local label="$1"
   local -n items_ref="$2"
-  local sorted_output=""
   local details=""
   local count=0
   local value order name short_name
@@ -473,11 +472,6 @@ build_summary_metric_line() {
     return 0
   fi
 
-  sorted_output="$(
-    printf '%s\n' "${items_ref[@]}" \
-      | sort -t $'\t' -k1,1g -k2,2n
-  )"
-
   while IFS=$'\t' read -r value order name || [[ -n "${value}${order}${name}" ]]; do
     [[ -n "${name}" ]] || continue
     short_name="$(format_summary_name "${name}")"
@@ -486,7 +480,7 @@ build_summary_metric_line() {
     fi
     details+="${short_name} $(format_percent "${value}")"
     count=$((count + 1))
-  done <<< "${sorted_output}"
+  done < <(printf '%s\n' "${items_ref[@]}")
 
   printf '%s：%s' "${label}" "${count}"
   if [[ -n "${details}" ]]; then
@@ -543,14 +537,16 @@ print_usage_summary() {
     week_total="$(format_percent "${SUMMARY_SUM_WEEK}")"
   fi
 
-  printf '概要: %s个 。OK %s / ERR %s 。总 %s/%s\n' \
+  printf '概要: %s个 。OK %s / ERR %s 。总 %s/%s\n\n' \
     "${SUMMARY_TOTAL}" \
     "${SUMMARY_OK}" \
     "${SUMMARY_ERROR}" \
     "${five_hour_total}" \
     "${week_total}"
   build_summary_metric_line '5h剩余' SUMMARY_5H_ITEMS
+  printf '\n'
   build_summary_metric_line '周剩余' SUMMARY_WEEK_ITEMS
+  printf '\n'
   build_error_summary_line
 }
 
