@@ -256,6 +256,16 @@ format_percent() {
   fi
 }
 
+format_display_name() {
+  local value="${1:-"(未命名)"}"
+
+  if ((${#value} > 20)); then
+    printf '%s...' "${value:0:20}"
+  else
+    printf '%s' "${value}"
+  fi
+}
+
 format_reset_time() {
   local epoch="$1"
 
@@ -264,10 +274,10 @@ format_reset_time() {
     return 0
   fi
 
-  if date -d "@${epoch}" '+%Y-%m-%d %H:%M:%S' >/dev/null 2>&1; then
-    date -d "@${epoch}" '+%Y-%m-%d %H:%M:%S'
-  elif date -r "${epoch}" '+%Y-%m-%d %H:%M:%S' >/dev/null 2>&1; then
-    date -r "${epoch}" '+%Y-%m-%d %H:%M:%S'
+  if date -d "@${epoch}" '+%m-%d %H:%M:%S' >/dev/null 2>&1; then
+    date -d "@${epoch}" '+%m-%d %H:%M:%S'
+  elif date -r "${epoch}" '+%m-%d %H:%M:%S' >/dev/null 2>&1; then
+    date -r "${epoch}" '+%m-%d %H:%M:%S'
   else
     printf '%s' "${epoch}"
   fi
@@ -312,7 +322,7 @@ extract_usage_limits() {
 }
 
 print_usage_header() {
-  printf 'name\t5小时剩余\t5小时刷新时间\t周剩余\t周刷新时间\t状态/异常\n'
+  printf 'name\t5小时/周剩余\t5小时刷新时间\t周刷新时间\t状态/异常\n'
 }
 
 render_usage_table() {
@@ -396,34 +406,29 @@ record_success_summary() {
 }
 
 print_usage_summary() {
-  local five_hour_summary="N/A"
-  local week_summary="N/A"
   local five_hour_total="N/A"
   local week_total="N/A"
 
   if [[ -n "${SUMMARY_MIN_5H}" ]]; then
-    five_hour_summary="$(format_percent "${SUMMARY_MIN_5H}") (${SUMMARY_MIN_5H_NAME})"
     five_hour_total="$(format_percent "${SUMMARY_SUM_5H}")"
   fi
   if [[ -n "${SUMMARY_MIN_WEEK}" ]]; then
-    week_summary="$(format_percent "${SUMMARY_MIN_WEEK}") (${SUMMARY_MIN_WEEK_NAME})"
     week_total="$(format_percent "${SUMMARY_SUM_WEEK}")"
   fi
 
-  printf '\n概要: 总数 %s，正常 %s，异常 %s，5小时总量 %s，周总量 %s，5小时最低剩余 %s，周最低剩余 %s\n' \
+  printf '\n概要: %s个 | OK %s / ERR %s | 总 %s/%s\n' \
     "${SUMMARY_TOTAL}" \
     "${SUMMARY_OK}" \
     "${SUMMARY_ERROR}" \
     "${five_hour_total}" \
-    "${week_total}" \
-    "${five_hour_summary}" \
-    "${week_summary}"
+    "${week_total}"
 }
 
 query_usage_for_auth_entries() {
   local total="${#AUTH_INDEXES[@]}"
   local index=0
   local name
+  local display_name
   local auth_index
   local response
   local parsed
@@ -448,32 +453,33 @@ query_usage_for_auth_entries() {
 
   for auth_index in "${AUTH_INDEXES[@]}"; do
     name="${AUTH_NAMES[index]:-"(未命名)"}"
+    display_name="$(format_display_name "${name}")"
     index=$((index + 1))
     log "查询 usage (${index}/${total}): ${name}"
 
     if ! response="$(fetch_usage_response "${auth_index}" 2>&1)"; then
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
-      RESULT_ROWS+=("${name}"$'\t-\t-\t-\t-\t'"异常: ${response//$'\n'/ }")
+      RESULT_ROWS+=("${display_name}"$'\t-\t-\t-\t'"异常: ${response//$'\n'/ }")
       continue
     fi
 
     if ! parsed="$(extract_usage_limits "${response}" 2>&1)"; then
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
-      RESULT_ROWS+=("${name}"$'\t-\t-\t-\t-\t'"异常: ${parsed//$'\n'/ }")
+      RESULT_ROWS+=("${display_name}"$'\t-\t-\t-\t'"异常: ${parsed//$'\n'/ }")
       continue
     fi
 
     IFS=$'\t' read -r first second third fourth <<< "${parsed}"
     if [[ "${first}" == "ERROR" ]]; then
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
-      RESULT_ROWS+=("${name}"$'\t-\t-\t-\t-\t'"异常: ${second:-未知错误}")
+      RESULT_ROWS+=("${display_name}"$'\t-\t-\t-\t'"异常: ${second:-未知错误}")
       continue
     fi
 
     five_hour_reset="$(format_reset_time "${second}")"
     week_reset="$(format_reset_time "${fourth}")"
     record_success_summary "${name}" "${first}" "${third}"
-    RESULT_ROWS+=("${name}"$'\t'"$(format_percent "${first}")"$'\t'"${five_hour_reset}"$'\t'"$(format_percent "${third}")"$'\t'"${week_reset}"$'\tOK')
+    RESULT_ROWS+=("${display_name}"$'\t'"$(format_percent "${first}")/$(format_percent "${third}")"$'\t'"${five_hour_reset}"$'\t'"${week_reset}"$'\tOK')
   done
 
   render_usage_table
