@@ -34,15 +34,15 @@ declare -a AUTH_NOTES=()
 declare -a AUTH_PRIORITIES=()
 declare -a AUTH_INDEXES=()
 declare -a RESULT_ROWS=()
+declare -a SUMMARY_5H_ITEMS=()
+declare -a SUMMARY_WEEK_ITEMS=()
+declare -a SUMMARY_ERROR_NAMES=()
 SUMMARY_TOTAL=0
 SUMMARY_OK=0
 SUMMARY_ERROR=0
 SUMMARY_SUM_5H=0
 SUMMARY_SUM_WEEK=0
-SUMMARY_MIN_5H=""
-SUMMARY_MIN_5H_NAME=""
-SUMMARY_MIN_WEEK=""
-SUMMARY_MIN_WEEK_NAME=""
+SUMMARY_ITEM_ORDER=0
 
 usage() {
   cat <<EOF
@@ -412,36 +412,123 @@ number_less_than() {
   awk -v left="${left}" -v right="${right}" 'BEGIN { exit !(left + 0 < right + 0) }'
 }
 
+number_greater_than_zero() {
+  local value="$1"
+  awk -v value="${value}" 'BEGIN { exit !(value + 0 > 0) }'
+}
+
 number_add() {
   local left="$1"
   local right="$2"
   awk -v left="${left}" -v right="${right}" 'BEGIN { printf "%g", left + right }'
 }
 
+format_summary_name() {
+  local name="$1"
+  local display_name="$name"
+
+  if [[ "${display_name}" == *"@"* ]]; then
+    display_name="${display_name%.json}"
+    display_name="${display_name%%@*}"
+    if [[ "${display_name}" == codex-* ]]; then
+      display_name="${display_name#codex-}"
+    elif [[ "${display_name}" == code-* ]]; then
+      display_name="${display_name#code-}"
+    fi
+  fi
+
+  printf '%s' "${display_name}"
+}
+
+build_error_summary_line() {
+  local details=""
+  local name short_name
+
+  if [[ "${#SUMMARY_ERROR_NAMES[@]}" -eq 0 ]]; then
+    printf '异常：-\n'
+    return 0
+  fi
+
+  for name in "${SUMMARY_ERROR_NAMES[@]}"; do
+    short_name="$(format_summary_name "${name}")"
+    if [[ -n "${details}" ]]; then
+      details+="，"
+    fi
+    details+="${short_name}"
+  done
+
+  printf '异常：%s\n' "${details}"
+}
+
+build_summary_metric_line() {
+  local label="$1"
+  local -n items_ref="$2"
+  local sorted_output=""
+  local details=""
+  local count=0
+  local value order name short_name
+
+  if [[ "${#items_ref[@]}" -eq 0 ]]; then
+    printf '%s：0\n' "${label}"
+    return 0
+  fi
+
+  sorted_output="$(
+    printf '%s\n' "${items_ref[@]}" \
+      | sort -t $'\t' -k1,1g -k2,2n
+  )"
+
+  while IFS=$'\t' read -r value order name || [[ -n "${value}${order}${name}" ]]; do
+    [[ -n "${name}" ]] || continue
+    short_name="$(format_summary_name "${name}")"
+    if [[ -n "${details}" ]]; then
+      details+="，"
+    fi
+    details+="${short_name} $(format_percent "${value}")"
+    count=$((count + 1))
+  done <<< "${sorted_output}"
+
+  printf '%s：%s' "${label}" "${count}"
+  if [[ -n "${details}" ]]; then
+    printf '（%s）' "${details}"
+  fi
+  printf '\n'
+}
+
 record_success_summary() {
   local name="$1"
   local five_hour="$2"
   local week="$3"
+  local entry_order=""
+  local five_hour_positive="false"
+  local week_positive="false"
 
   SUMMARY_OK=$((SUMMARY_OK + 1))
+  printf -v entry_order '%06d' "${SUMMARY_ITEM_ORDER}"
+  SUMMARY_ITEM_ORDER=$((SUMMARY_ITEM_ORDER + 1))
+
+  if [[ "${week}" =~ ^[0-9]+([.][0-9]+)?$ ]] && number_greater_than_zero "${week}"; then
+    week_positive="true"
+  fi
 
   if [[ "${five_hour}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-    # 周剩余为 0 时，该账号的 5 小时额度实际不可用，不计入 5 小时总量。
-    if [[ ! "${week}" =~ ^[0-9]+([.][0-9]+)?$ ]] || number_less_than 0 "${week}"; then
-      SUMMARY_SUM_5H="$(number_add "${SUMMARY_SUM_5H}" "${five_hour}")"
+    if number_greater_than_zero "${five_hour}"; then
+      five_hour_positive="true"
     fi
-    if [[ -z "${SUMMARY_MIN_5H}" ]] || number_less_than "${five_hour}" "${SUMMARY_MIN_5H}"; then
-      SUMMARY_MIN_5H="${five_hour}"
-      SUMMARY_MIN_5H_NAME="${name}"
+    if [[ "${five_hour_positive}" == "true" && "${week_positive}" == "true" ]]; then
+      SUMMARY_5H_ITEMS+=("${five_hour}"$'\t'"${entry_order}"$'\t'"${name}")
+    fi
+    # 周剩余为 0 时，该账号的 5 小时额度实际不可用，不计入 5 小时总量。
+    if [[ ! "${week}" =~ ^[0-9]+([.][0-9]+)?$ ]] || [[ "${week_positive}" == "true" ]]; then
+      SUMMARY_SUM_5H="$(number_add "${SUMMARY_SUM_5H}" "${five_hour}")"
     fi
   fi
 
   if [[ "${week}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-    SUMMARY_SUM_WEEK="$(number_add "${SUMMARY_SUM_WEEK}" "${week}")"
-    if [[ -z "${SUMMARY_MIN_WEEK}" ]] || number_less_than "${week}" "${SUMMARY_MIN_WEEK}"; then
-      SUMMARY_MIN_WEEK="${week}"
-      SUMMARY_MIN_WEEK_NAME="${name}"
+    if [[ "${week_positive}" == "true" ]]; then
+      SUMMARY_WEEK_ITEMS+=("${week}"$'\t'"${entry_order}"$'\t'"${name}")
     fi
+    SUMMARY_SUM_WEEK="$(number_add "${SUMMARY_SUM_WEEK}" "${week}")"
   fi
 }
 
@@ -449,19 +536,22 @@ print_usage_summary() {
   local five_hour_total="N/A"
   local week_total="N/A"
 
-  if [[ -n "${SUMMARY_MIN_5H}" ]]; then
+  if [[ "${#SUMMARY_5H_ITEMS[@]}" -gt 0 ]]; then
     five_hour_total="$(format_percent "${SUMMARY_SUM_5H}")"
   fi
-  if [[ -n "${SUMMARY_MIN_WEEK}" ]]; then
+  if [[ "${#SUMMARY_WEEK_ITEMS[@]}" -gt 0 ]]; then
     week_total="$(format_percent "${SUMMARY_SUM_WEEK}")"
   fi
 
-  printf '概要: %s个 | OK %s / ERR %s | 总 %s/%s\n' \
+  printf '概要: %s个 。OK %s / ERR %s 。总 %s/%s\n' \
     "${SUMMARY_TOTAL}" \
     "${SUMMARY_OK}" \
     "${SUMMARY_ERROR}" \
     "${five_hour_total}" \
     "${week_total}"
+  build_summary_metric_line '5h剩余' SUMMARY_5H_ITEMS
+  build_summary_metric_line '周剩余' SUMMARY_WEEK_ITEMS
+  build_error_summary_line
 }
 
 query_usage_for_auth_entries() {
@@ -485,10 +575,10 @@ query_usage_for_auth_entries() {
   SUMMARY_ERROR=0
   SUMMARY_SUM_5H=0
   SUMMARY_SUM_WEEK=0
-  SUMMARY_MIN_5H=""
-  SUMMARY_MIN_5H_NAME=""
-  SUMMARY_MIN_WEEK=""
-  SUMMARY_MIN_WEEK_NAME=""
+  SUMMARY_5H_ITEMS=()
+  SUMMARY_WEEK_ITEMS=()
+  SUMMARY_ERROR_NAMES=()
+  SUMMARY_ITEM_ORDER=0
 
   [[ "${total}" -gt 0 ]] || die "没有可查询的 authIndex，请检查 auth-files 响应"
 
@@ -501,12 +591,14 @@ query_usage_for_auth_entries() {
 
     if ! response="$(fetch_usage_response "${auth_index}" 2>&1)"; then
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
+      SUMMARY_ERROR_NAMES+=("${name}")
       RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t-\t-\t-\t'"异常: ${response//$'\n'/ }")
       continue
     fi
 
     if ! parsed="$(extract_usage_limits "${response}" 2>&1)"; then
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
+      SUMMARY_ERROR_NAMES+=("${name}")
       RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t-\t-\t-\t'"异常: ${parsed//$'\n'/ }")
       continue
     fi
@@ -514,6 +606,7 @@ query_usage_for_auth_entries() {
     IFS=$'\t' read -r first second third fourth <<< "${parsed}"
     if [[ "${first}" == "ERROR" ]]; then
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
+      SUMMARY_ERROR_NAMES+=("${name}")
       RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t-\t-\t-\t'"异常: ${second:-未知错误}")
       continue
     fi
@@ -524,9 +617,9 @@ query_usage_for_auth_entries() {
     RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"$(format_percent "${first}")/$(format_percent "${third}")"$'\t'"${five_hour_reset}"$'\t'"${week_reset}"$'\tOK')
   done
 
-  print_usage_summary
-  printf '\n'
   render_usage_table
+  printf '\n'
+  print_usage_summary
 }
 
 main() {
