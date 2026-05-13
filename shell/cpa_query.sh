@@ -224,6 +224,52 @@ resolve_auth_entries_from_auth_files() {
   done < <(extract_auth_entries "${response}")
 
   [[ "${#AUTH_INDEXES[@]}" -gt 0 ]] || die "无法从 auth-files 响应中提取 authIndex"
+  sort_auth_entries_by_priority
+}
+
+sort_auth_entries_by_priority() {
+  local count="${#AUTH_INDEXES[@]}"
+  local index=0
+  local name note priority auth_index sort_priority
+
+  [[ "${count}" -le 1 ]] && return 0
+  command -v sort >/dev/null 2>&1 || return 0
+
+  local sorted_output=""
+  sorted_output="$(
+    while [[ "${index}" -lt "${count}" ]]; do
+      name="${AUTH_NAMES[index]:-"(未命名)"}"
+      note="${AUTH_NOTES[index]:-"-"}"
+      priority="${AUTH_PRIORITIES[index]:-"-"}"
+      auth_index="${AUTH_INDEXES[index]}"
+      if [[ "${priority}" =~ ^-?[0-9]+$ ]]; then
+        sort_priority="${priority}"
+      else
+        sort_priority="-1"
+      fi
+      printf '%s\t%06d\t%s\t%s\t%s\t%s\n' \
+        "${sort_priority}" \
+        "${index}" \
+        "${name}" \
+        "${note}" \
+        "${priority}" \
+        "${auth_index}"
+      index=$((index + 1))
+    done | sort -t $'\t' -k1,1nr -k2,2n
+  )"
+
+  AUTH_NAMES=()
+  AUTH_NOTES=()
+  AUTH_PRIORITIES=()
+  AUTH_INDEXES=()
+
+  while IFS=$'\t' read -r _sort_priority _order name note priority auth_index || [[ -n "${_sort_priority}${_order}${name}${note}${priority}${auth_index}" ]]; do
+    [[ -z "${auth_index}" ]] && continue
+    AUTH_NAMES+=("${name}")
+    AUTH_NOTES+=("${note}")
+    AUTH_PRIORITIES+=("${priority}")
+    AUTH_INDEXES+=("${auth_index}")
+  done <<< "${sorted_output}"
 }
 
 build_usage_payload() {
@@ -337,14 +383,24 @@ print_usage_header() {
 render_usage_table() {
   local row
   local row_number=0
+  local total_rows="${#RESULT_ROWS[@]}"
   local name note priority limits five_hour_reset week_reset status
+  local status_display
 
   for row in "${RESULT_ROWS[@]}"; do
     row_number=$((row_number + 1))
     IFS=$'\t' read -r name note priority limits five_hour_reset week_reset status <<< "${row}"
-    printf '%s. %s (%s)\n' "${row_number}" "${name}" "${status}"
-    printf '   备注: %s | 优先级: %s | 剩余: %s\n' "${note}" "${priority}" "${limits}"
+    status_display="${status}"
+    if [[ "${status}" == "OK" ]]; then
+      status_display="ok"
+    fi
+    printf '%s. %s %s %s\n' "${row_number}" "${name}" "${limits}" "${status_display}"
+    printf '   备注: %s\n' "${note}"
+    printf '   优先级: %s\n' "${priority}"
     printf '   刷新: %s / %s\n' "${five_hour_reset}" "${week_reset}"
+    if [[ "${row_number}" -lt "${total_rows}" ]]; then
+      printf '\n'
+    fi
   done
 }
 
@@ -398,7 +454,7 @@ print_usage_summary() {
     week_total="$(format_percent "${SUMMARY_SUM_WEEK}")"
   fi
 
-  printf '\n概要: %s个 | OK %s / ERR %s | 总 %s/%s\n' \
+  printf '概要: %s个 | OK %s / ERR %s | 总 %s/%s\n' \
     "${SUMMARY_TOTAL}" \
     "${SUMMARY_OK}" \
     "${SUMMARY_ERROR}" \
