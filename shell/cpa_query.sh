@@ -267,16 +267,6 @@ format_percent() {
   fi
 }
 
-format_display_name() {
-  local value="${1:-"(未命名)"}"
-
-  if ((${#value} > 20)); then
-    printf '%s...' "${value:0:20}"
-  else
-    printf '%s' "${value}"
-  fi
-}
-
 format_md_cell() {
   local value="${1:-"-"}"
   value="${value//$'\r'/ }"
@@ -346,20 +336,15 @@ print_usage_header() {
 
 render_usage_table() {
   local row
+  local row_number=0
   local name note priority limits five_hour_reset week_reset status
 
-  printf '| name | note | 优先级 | 5小时/周剩余 | 5小时刷新时间 | 周刷新时间 | 状态/异常 |\n'
-  printf '| --- | --- | --- | --- | --- | --- | --- |\n'
   for row in "${RESULT_ROWS[@]}"; do
+    row_number=$((row_number + 1))
     IFS=$'\t' read -r name note priority limits five_hour_reset week_reset status <<< "${row}"
-    printf '| %s | %s | %s | %s | %s | %s | %s |\n' \
-      "$(format_md_cell "${name}")" \
-      "$(format_md_cell "${note}")" \
-      "$(format_md_cell "${priority}")" \
-      "$(format_md_cell "${limits}")" \
-      "$(format_md_cell "${five_hour_reset}")" \
-      "$(format_md_cell "${week_reset}")" \
-      "$(format_md_cell "${status}")"
+    printf '%s. %s (%s)\n' "${row_number}" "${name}" "${status}"
+    printf '   备注: %s | 优先级: %s | 剩余: %s\n' "${note}" "${priority}" "${limits}"
+    printf '   刷新: %s / %s\n' "${five_hour_reset}" "${week_reset}"
   done
 }
 
@@ -427,7 +412,6 @@ query_usage_for_auth_entries() {
   local name
   local note
   local priority
-  local display_name
   local auth_index
   local response
   local parsed
@@ -454,33 +438,32 @@ query_usage_for_auth_entries() {
     name="${AUTH_NAMES[index]:-"(未命名)"}"
     note="${AUTH_NOTES[index]:-"-"}"
     priority="${AUTH_PRIORITIES[index]:-"-"}"
-    display_name="$(format_display_name "${name}")"
     index=$((index + 1))
     log "查询 usage (${index}/${total}): ${name}"
 
     if ! response="$(fetch_usage_response "${auth_index}" 2>&1)"; then
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
-      RESULT_ROWS+=("${display_name}"$'\t'"${note}"$'\t'"${priority}"$'\t-\t-\t-\t'"异常: ${response//$'\n'/ }")
+      RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t-\t-\t-\t'"异常: ${response//$'\n'/ }")
       continue
     fi
 
     if ! parsed="$(extract_usage_limits "${response}" 2>&1)"; then
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
-      RESULT_ROWS+=("${display_name}"$'\t'"${note}"$'\t'"${priority}"$'\t-\t-\t-\t'"异常: ${parsed//$'\n'/ }")
+      RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t-\t-\t-\t'"异常: ${parsed//$'\n'/ }")
       continue
     fi
 
     IFS=$'\t' read -r first second third fourth <<< "${parsed}"
     if [[ "${first}" == "ERROR" ]]; then
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
-      RESULT_ROWS+=("${display_name}"$'\t'"${note}"$'\t'"${priority}"$'\t-\t-\t-\t'"异常: ${second:-未知错误}")
+      RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t-\t-\t-\t'"异常: ${second:-未知错误}")
       continue
     fi
 
     five_hour_reset="$(format_reset_time "${second}")"
     week_reset="$(format_reset_time "${fourth}")"
     record_success_summary "${name}" "${first}" "${third}"
-    RESULT_ROWS+=("${display_name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"$(format_percent "${first}")/$(format_percent "${third}")"$'\t'"${five_hour_reset}"$'\t'"${week_reset}"$'\tOK')
+    RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"$(format_percent "${first}")/$(format_percent "${third}")"$'\t'"${five_hour_reset}"$'\t'"${week_reset}"$'\tOK')
   done
 
   render_usage_table
