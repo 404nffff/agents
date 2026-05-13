@@ -280,7 +280,7 @@ git_sparse_checkout_repo_path() {
     sparse_paths=("${root_path}")
   fi
 
-  if ! run_with_timeout_if_available 40 git clone --depth 1 --branch "${ref}" --filter=blob:none --sparse "${repo_url}" "${clone_dir}"; then
+  if ! run_with_timeout_if_available 90 git clone --depth 1 --branch "${ref}" --filter=blob:none --sparse "${repo_url}" "${clone_dir}"; then
     return 1
   fi
 
@@ -288,7 +288,15 @@ git_sparse_checkout_repo_path() {
     cd "${clone_dir}" &&
     run_with_timeout_if_available 20 git sparse-checkout set "${sparse_paths[@]}"
   ); then
-    return 1
+    if ! (
+      cd "${clone_dir}" &&
+      run_with_timeout_if_available 20 git sparse-checkout set "${sparse_paths[0]}" &&
+      for ((i = 1; i < ${#sparse_paths[@]}; i++)); do
+        run_with_timeout_if_available 20 git sparse-checkout add "${sparse_paths[i]}" || exit 1
+      done
+    ); then
+      return 1
+    fi
   fi
 
   if [[ ! -d "${clone_dir}/${root_path}" ]]; then
@@ -341,18 +349,29 @@ fetch_raw_from_github() {
   local ref="$2"
   local path="$3"
   local out_file="$4"
-  local raw_url
-
-  if ! command -v curl >/dev/null 2>&1; then
-    echo "错误: 需要 curl 来拉取 GitHub 源。" >&2
-    exit 1
-  fi
+  local raw_url root_path clone_dir checkout_root file_name
 
   raw_url="https://raw.githubusercontent.com/${repo}/${ref}/${path}"
-  if ! curl_download_with_retry "${raw_url}" "${out_file}"; then
-    echo "错误: 无法拉取 GitHub 源: ${raw_url}" >&2
-    exit 1
+  if command -v curl >/dev/null 2>&1; then
+    if curl_download_with_retry "${raw_url}" "${out_file}" 1 5 8; then
+      return 0
+    fi
+    echo "警告: GitHub Raw 拉取失败，尝试 git sparse-checkout 回退: ${raw_url}" >&2
   fi
+
+  if command -v git >/dev/null 2>&1; then
+    root_path="$(dirname "${path}")"
+    file_name="$(basename "${path}")"
+    clone_dir="$(new_tmp_dir)/raw-sparse"
+    checkout_root="$(git_sparse_checkout_repo_path "${repo}" "${ref}" "${root_path}" "${clone_dir}" "${root_path}" 2>/dev/null || true)"
+    if [[ -n "${checkout_root}" && -f "${checkout_root}/${file_name}" ]]; then
+      cp "${checkout_root}/${file_name}" "${out_file}"
+      return 0
+    fi
+  fi
+
+  echo "错误: 无法拉取 GitHub 源: ${raw_url}" >&2
+  return 1
 }
 
 resolve_db_query_release_base_url_for_skills_install() {
@@ -1156,7 +1175,7 @@ install_agents_main() {
     remote_repo="$(normalize_github_repo "${github_repo:-${DEFAULT_GITHUB_REPO}}")"
     remote_path="${github_agents_path}"
     tmp_catalog_file="$(new_tmp_file)"
-    if ! fetch_raw_from_github "${remote_repo}" "${github_ref}" "${remote_path}/README.md" "${tmp_catalog_file}" >/dev/null 2>&1; then
+    if ! fetch_raw_from_github "${remote_repo}" "${github_ref}" "${remote_path}/README.md" "${tmp_catalog_file}"; then
       echo "错误: 无法读取远程 agents 目录清单 README.md" >&2
       echo "地址: https://raw.githubusercontent.com/${remote_repo}/${github_ref}/${remote_path}/README.md" >&2
       return 1
@@ -1390,11 +1409,16 @@ install_skills_main() {
   local installed overwritten skipped selected_count
   local src dest preserve_dir cfg rel
   local release_source_mode=""
+  local skills_menu_filter=""
+  local skills_menu_selected_only="false"
+  local skills_menu_page=0
+  local skills_menu_page_size=12
   local -a skill_names=()
   local -a skill_descs=()
   local -a skill_paths=()
   local -a selected=()
   local -a selected_sparse_paths=()
+  local -a visible_skill_indices=()
   declare -A seen_names=()
   declare -A seen_dirs=()
 
@@ -1567,24 +1591,178 @@ install_skills_main() {
     source_label="远程目录 ${remote_repo}@${github_ref}:${remote_path}（先读取 README 列表）"
   fi
 
+  skills_string_contains_ci() {
+    local haystack="$1"
+    local needle="$2"
+    haystack="$(printf "%s" "${haystack}" | tr '[:upper:]' '[:lower:]')"
+    needle="$(printf "%s" "${needle}" | tr '[:upper:]' '[:lower:]')"
+    [[ "${haystack}" == *"${needle}"* ]]
+  }
+
+  skills_menu_is_visible() {
+    local i="$1"
+    local haystack
+
+    if [[ "${skills_menu_selected_only}" == "true" && "${selected[i]}" -ne 1 ]]; then
+      return 1
+    fi
+
+    if [[ -n "${skills_menu_filter}" ]]; then
+      haystack="${skill_names[i]} ${skill_paths[i]} ${skill_descs[i]}"
+      skills_string_contains_ci "${haystack}" "${skills_menu_filter}" || return 1
+    fi
+
+    return 0
+  }
+
+  skills_collect_visible_indices() {
+    local i
+    visible_skill_indices=()
+    for i in "${!skill_names[@]}"; do
+      if skills_menu_is_visible "${i}"; then
+        visible_skill_indices+=("${i}")
+      fi
+    done
+  }
+
+  skills_apply_to_visible() {
+    local action="$1"
+    local i
+
+    skills_collect_visible_indices
+    for i in "${visible_skill_indices[@]}"; do
+      case "${action}" in
+        select)
+          selected[i]=1
+          ;;
+        clear)
+          selected[i]=0
+          ;;
+        invert)
+          if [[ "${selected[i]}" -eq 1 ]]; then
+            selected[i]=0
+          else
+            selected[i]=1
+          fi
+          ;;
+      esac
+    done
+  }
+
+  skills_render_menu() {
+    local i mark total_visible selected_total total_pages start end pos
+
+    skills_collect_visible_indices
+    total_visible="${#visible_skill_indices[@]}"
+    selected_total=0
+    for i in "${!selected[@]}"; do
+      [[ "${selected[i]}" -eq 1 ]] && ((selected_total += 1))
+    done
+
+    total_pages=$(( (total_visible + skills_menu_page_size - 1) / skills_menu_page_size ))
+    (( total_pages < 1 )) && total_pages=1
+    (( skills_menu_page >= total_pages )) && skills_menu_page=$((total_pages - 1))
+    (( skills_menu_page < 0 )) && skills_menu_page=0
+    start=$((skills_menu_page * skills_menu_page_size))
+    end=$((start + skills_menu_page_size))
+    (( end > total_visible )) && end="${total_visible}"
+
+    echo
+    echo "可安装的 skills（来源: ${source_label}）"
+    printf "已选 %d/%d，当前显示 %d 项，页 %d/%d" "${selected_total}" "${#skill_names[@]}" "${total_visible}" "$((skills_menu_page + 1))" "${total_pages}"
+    [[ -n "${skills_menu_filter}" ]] && printf "，搜索: %s" "${skills_menu_filter}"
+    [[ "${skills_menu_selected_only}" == "true" ]] && printf "，仅看已选"
+    printf "\n"
+
+    if (( total_visible == 0 )); then
+      echo "  当前筛选无匹配项。"
+    else
+      for ((pos = start; pos < end; pos++)); do
+        i="${visible_skill_indices[pos]}"
+        mark="[ ]"
+        if [[ "${selected[i]}" -eq 1 ]]; then
+          mark="[x]"
+        fi
+        printf "%2d. %s %s (%s)\n" "$((i + 1))" "${mark}" "${skill_names[i]}" "${skill_paths[i]}"
+        printf "    %s\n" "${skill_descs[i]}"
+      done
+    fi
+
+    echo
+    echo "操作: 编号/范围(1-3)/名称切换，s 关键词=搜索，c=清搜索，l=仅看已选，</>=翻页，a/n/i=对当前筛选全选/全不选/反选，d=安装，q=退出"
+  }
+
+  skills_toggle_single_token() {
+    local token="$1"
+    local i matched_idx match_count haystack
+
+    if [[ "${token}" =~ ^[0-9]+$ ]]; then
+      if (( token >= 1 && token <= ${#skill_names[@]} )); then
+        i=$((token - 1))
+        if [[ "${selected[i]}" -eq 1 ]]; then
+          selected[i]=0
+        else
+          selected[i]=1
+        fi
+      else
+        echo "无效编号: ${token}"
+      fi
+      return
+    fi
+
+    matched_idx=-1
+    match_count=0
+    for i in "${!skill_names[@]}"; do
+      haystack="${skill_names[i]} ${skill_paths[i]}"
+      if skills_string_contains_ci "${haystack}" "${token}"; then
+        matched_idx="${i}"
+        ((match_count += 1))
+      fi
+    done
+
+    if (( match_count == 1 )); then
+      if [[ "${selected[matched_idx]}" -eq 1 ]]; then
+        selected[matched_idx]=0
+      else
+        selected[matched_idx]=1
+      fi
+    elif (( match_count > 1 )); then
+      echo "名称匹配不唯一: ${token}，请先用 s ${token} 搜索后再按编号选择。"
+    else
+      echo "无效输入: ${token}"
+    fi
+  }
+
+  skills_toggle_input() {
+    local input="$1"
+    local token start end n
+
+    input="${input//,/ }"
+    for token in ${input}; do
+      if [[ "${token}" =~ ^[0-9]+-[0-9]+$ ]]; then
+        start="${token%-*}"
+        end="${token#*-}"
+        if (( start > end )); then
+          n="${start}"
+          start="${end}"
+          end="${n}"
+        fi
+        for ((n = start; n <= end; n++)); do
+          skills_toggle_single_token "${n}"
+        done
+      else
+        skills_toggle_single_token "${token}"
+      fi
+    done
+  }
+
   tty_opened="false"
   if [[ -t 1 && -r /dev/tty ]] && exec 9<>/dev/tty 2>/dev/null; then
     tty_opened="true"
   fi
 
   while true; do
-    echo
-    echo "可安装的 skills（来源: ${source_label}）"
-    for idx in "${!skill_names[@]}"; do
-      if [[ "${selected[idx]}" -eq 1 ]]; then
-        printf "%2d. [x] %s\n" "$((idx + 1))" "${skill_names[idx]}"
-      else
-        printf "%2d. [ ] %s\n" "$((idx + 1))" "${skill_names[idx]}"
-      fi
-      printf "    %s\n" "${skill_descs[idx]}"
-    done
-    echo
-    echo "操作: 输入编号切换勾选（支持空格/逗号），a=全选，n=全不选，i=反选，d=开始安装，q=退出"
+    skills_render_menu
 
     if [[ "${tty_opened}" == "true" ]]; then
       printf "> " >&9
@@ -1594,19 +1772,40 @@ install_skills_main() {
     fi
     case "${cmd}" in
       a|A)
-        for idx in "${!selected[@]}"; do selected[idx]=1; done
+        skills_apply_to_visible select
         ;;
       n|N)
-        for idx in "${!selected[@]}"; do selected[idx]=0; done
+        skills_apply_to_visible clear
         ;;
       i|I)
-        for idx in "${!selected[@]}"; do
-          if [[ "${selected[idx]}" -eq 1 ]]; then
-            selected[idx]=0
-          else
-            selected[idx]=1
-          fi
-        done
+        skills_apply_to_visible invert
+        ;;
+      s\ *|S\ *)
+        skills_menu_filter="${cmd#* }"
+        skills_menu_page=0
+        ;;
+      /*)
+        skills_menu_filter="${cmd#/}"
+        skills_menu_page=0
+        ;;
+      c|C)
+        skills_menu_filter=""
+        skills_menu_selected_only="false"
+        skills_menu_page=0
+        ;;
+      l|L)
+        if [[ "${skills_menu_selected_only}" == "true" ]]; then
+          skills_menu_selected_only="false"
+        else
+          skills_menu_selected_only="true"
+        fi
+        skills_menu_page=0
+        ;;
+      ">"|f|F)
+        skills_menu_page=$((skills_menu_page + 1))
+        ;;
+      "<"|b|B)
+        skills_menu_page=$((skills_menu_page - 1))
         ;;
       d|D)
         selected_count=0
@@ -1626,23 +1825,7 @@ install_skills_main() {
       "")
         ;;
       *)
-        cmd="${cmd//,/ }"
-        for token in ${cmd}; do
-          if [[ "${token}" =~ ^[0-9]+$ ]]; then
-            if (( token >= 1 && token <= ${#skill_names[@]} )); then
-              idx=$((token - 1))
-              if [[ "${selected[idx]}" -eq 1 ]]; then
-                selected[idx]=0
-              else
-                selected[idx]=1
-              fi
-            else
-              echo "无效编号: ${token}"
-            fi
-          else
-            echo "无效输入: ${token}"
-          fi
-        done
+        skills_toggle_input "${cmd}"
         ;;
     esac
   done
@@ -1719,7 +1902,7 @@ install_skills_main() {
         selected_sparse_paths+=("${remote_path}/${skill_paths[idx]}")
       done
       echo "警告: 远程仓库压缩包下载较慢或失败，尝试按目录稀疏拉取: ${remote_repo}@${github_ref}:${remote_path}" >&2
-      candidate="$(git_sparse_checkout_repo_path "${remote_repo}" "${github_ref}" "${remote_path}" "${sparse_clone_dir}" "${selected_sparse_paths[@]}" 2>/dev/null || true)"
+      candidate="$(git_sparse_checkout_repo_path "${remote_repo}" "${github_ref}" "${remote_path}" "${sparse_clone_dir}" "${selected_sparse_paths[@]}" || true)"
     fi
 
     if [[ -z "${candidate}" || ! -d "${candidate}" ]]; then

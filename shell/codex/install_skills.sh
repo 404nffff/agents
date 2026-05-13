@@ -49,6 +49,10 @@ declare -a SKILL_DIRS=()
 declare -a SKILL_NAMES=()
 declare -a SKILL_DESCS=()
 declare -a SELECTED=()
+MENU_FILTER=""
+MENU_SELECTED_ONLY="false"
+MENU_PAGE=0
+MENU_PAGE_SIZE=12
 
 cleanup() {
   if [[ -n "${TMP_FETCH_DIR}" && -d "${TMP_FETCH_DIR}" ]]; then
@@ -189,7 +193,7 @@ git_sparse_checkout_repo_path() {
     sparse_paths=("${root_path}")
   fi
 
-  if ! run_with_timeout_if_available 40 git clone --depth 1 --branch "${ref}" --filter=blob:none --sparse "${repo_url}" "${clone_dir}"; then
+  if ! run_with_timeout_if_available 90 git clone --depth 1 --branch "${ref}" --filter=blob:none --sparse "${repo_url}" "${clone_dir}"; then
     return 1
   fi
 
@@ -197,7 +201,15 @@ git_sparse_checkout_repo_path() {
     cd "${clone_dir}" &&
     run_with_timeout_if_available 20 git sparse-checkout set "${sparse_paths[@]}"
   ); then
-    return 1
+    if ! (
+      cd "${clone_dir}" &&
+      run_with_timeout_if_available 20 git sparse-checkout set "${sparse_paths[0]}" &&
+      for ((i = 1; i < ${#sparse_paths[@]}; i++)); do
+        run_with_timeout_if_available 20 git sparse-checkout add "${sparse_paths[i]}" || exit 1
+      done
+    ); then
+      return 1
+    fi
   fi
 
   if [[ ! -d "${clone_dir}/${root_path}" ]]; then
@@ -213,16 +225,29 @@ fetch_raw_from_github() {
   local path="$3"
   local out_file="$4"
   local raw_url="https://raw.githubusercontent.com/${repo}/${ref}/${path}"
+  local root_path clone_dir checkout_root file_name
 
-  if ! command -v curl >/dev/null 2>&1; then
-    echo "错误: 需要 curl 来拉取 GitHub 源。" >&2
-    exit 1
+  if command -v curl >/dev/null 2>&1; then
+    if curl_download_with_retry "${raw_url}" "${out_file}" 2 5 15; then
+      return 0
+    fi
+    echo "警告: GitHub Raw 拉取失败，尝试 git sparse-checkout 回退: ${raw_url}" >&2
   fi
 
-  if ! curl_download_with_retry "${raw_url}" "${out_file}" 2 5 15; then
-    echo "错误: 无法拉取 GitHub 源: ${raw_url}" >&2
-    exit 1
+  if command -v git >/dev/null 2>&1; then
+    TMP_FETCH_DIR="${TMP_FETCH_DIR:-$(mktemp -d)}"
+    root_path="$(dirname "${path}")"
+    file_name="$(basename "${path}")"
+    clone_dir="${TMP_FETCH_DIR}/raw-sparse-${RANDOM}-${RANDOM}"
+    checkout_root="$(git_sparse_checkout_repo_path "${repo}" "${ref}" "${root_path}" "${clone_dir}" "${root_path}" 2>/dev/null || true)"
+    if [[ -n "${checkout_root}" && -f "${checkout_root}/${file_name}" ]]; then
+      cp "${checkout_root}/${file_name}" "${out_file}"
+      return 0
+    fi
   fi
+
+  echo "错误: 无法拉取 GitHub 源: ${raw_url}" >&2
+  return 1
 }
 
 resolve_skills_root() {
@@ -453,41 +478,166 @@ discover_skills() {
   fi
 }
 
+string_contains_ci() {
+  local haystack="$1"
+  local needle="$2"
+  haystack="$(printf "%s" "${haystack}" | tr '[:upper:]' '[:lower:]')"
+  needle="$(printf "%s" "${needle}" | tr '[:upper:]' '[:lower:]')"
+  [[ "${haystack}" == *"${needle}"* ]]
+}
+
+skill_is_visible() {
+  local i="$1"
+  local haystack
+
+  if [[ "${MENU_SELECTED_ONLY}" == "true" && "${SELECTED[i]}" -ne 1 ]]; then
+    return 1
+  fi
+
+  if [[ -n "${MENU_FILTER}" ]]; then
+    haystack="${SKILL_NAMES[i]} ${SKILL_DIRS[i]} ${SKILL_DESCS[i]}"
+    string_contains_ci "${haystack}" "${MENU_FILTER}" || return 1
+  fi
+
+  return 0
+}
+
+collect_visible_skill_indices() {
+  local i
+  VISIBLE_SKILL_INDICES=()
+  for i in "${!SKILL_NAMES[@]}"; do
+    if skill_is_visible "${i}"; then
+      VISIBLE_SKILL_INDICES+=("${i}")
+    fi
+  done
+}
+
+apply_to_visible_skills() {
+  local action="$1"
+  local i
+
+  collect_visible_skill_indices
+  for i in "${VISIBLE_SKILL_INDICES[@]}"; do
+    case "${action}" in
+      select)
+        SELECTED[i]=1
+        ;;
+      clear)
+        SELECTED[i]=0
+        ;;
+      invert)
+        if [[ "${SELECTED[i]}" -eq 1 ]]; then
+          SELECTED[i]=0
+        else
+          SELECTED[i]=1
+        fi
+        ;;
+    esac
+  done
+}
+
 render_menu() {
-  local i mark
+  local i mark total_visible selected_count total_pages start end pos
+  collect_visible_skill_indices
+  total_visible="${#VISIBLE_SKILL_INDICES[@]}"
+  selected_count=0
+  for i in "${!SELECTED[@]}"; do
+    [[ "${SELECTED[i]}" -eq 1 ]] && ((selected_count += 1))
+  done
+
+  total_pages=$(( (total_visible + MENU_PAGE_SIZE - 1) / MENU_PAGE_SIZE ))
+  (( total_pages < 1 )) && total_pages=1
+  (( MENU_PAGE >= total_pages )) && MENU_PAGE=$((total_pages - 1))
+  (( MENU_PAGE < 0 )) && MENU_PAGE=0
+  start=$((MENU_PAGE * MENU_PAGE_SIZE))
+  end=$((start + MENU_PAGE_SIZE))
+  (( end > total_visible )) && end="${total_visible}"
+
   echo
   echo "可安装的 skills（来源: ${SOURCE_LABEL}）"
-  for i in "${!SKILL_NAMES[@]}"; do
-    mark="[ ]"
-    if [[ "${SELECTED[i]}" -eq 1 ]]; then
-      mark="[x]"
-    fi
-    printf "%2d. %s %s\n" "$((i + 1))" "${mark}" "${SKILL_NAMES[i]}"
-    printf "    %s\n" "${SKILL_DESCS[i]}"
-  done
+  printf "已选 %d/%d，当前显示 %d 项，页 %d/%d" "${selected_count}" "${#SKILL_NAMES[@]}" "${total_visible}" "$((MENU_PAGE + 1))" "${total_pages}"
+  [[ -n "${MENU_FILTER}" ]] && printf "，搜索: %s" "${MENU_FILTER}"
+  [[ "${MENU_SELECTED_ONLY}" == "true" ]] && printf "，仅看已选"
+  printf "\n"
+
+  if (( total_visible == 0 )); then
+    echo "  当前筛选无匹配项。"
+  else
+    for ((pos = start; pos < end; pos++)); do
+      i="${VISIBLE_SKILL_INDICES[pos]}"
+      mark="[ ]"
+      if [[ "${SELECTED[i]}" -eq 1 ]]; then
+        mark="[x]"
+      fi
+      printf "%2d. %s %s (%s)\n" "$((i + 1))" "${mark}" "${SKILL_NAMES[i]}" "${SKILL_DIRS[i]}"
+      printf "    %s\n" "${SKILL_DESCS[i]}"
+    done
+  fi
+
   echo
-  echo "操作: 输入编号切换勾选（支持空格/逗号），a=全选，n=全不选，i=反选，d=开始安装，q=退出"
+  echo "操作: 编号/范围(1-3)/名称切换，s 关键词=搜索，c=清搜索，l=仅看已选，</>=翻页，a/n/i=对当前筛选全选/全不选/反选，d=安装，q=退出"
+}
+
+toggle_single_skill_token() {
+  local token="$1"
+  local i matched_idx match_count haystack
+
+  if [[ "${token}" =~ ^[0-9]+$ ]]; then
+    if (( token >= 1 && token <= ${#SKILL_NAMES[@]} )); then
+      i=$((token - 1))
+      if [[ "${SELECTED[i]}" -eq 1 ]]; then
+        SELECTED[i]=0
+      else
+        SELECTED[i]=1
+      fi
+    else
+      echo "无效编号: ${token}"
+    fi
+    return
+  fi
+
+  matched_idx=-1
+  match_count=0
+  for i in "${!SKILL_NAMES[@]}"; do
+    haystack="${SKILL_NAMES[i]} ${SKILL_DIRS[i]}"
+    if string_contains_ci "${haystack}" "${token}"; then
+      matched_idx="${i}"
+      ((match_count += 1))
+    fi
+  done
+
+  if (( match_count == 1 )); then
+    if [[ "${SELECTED[matched_idx]}" -eq 1 ]]; then
+      SELECTED[matched_idx]=0
+    else
+      SELECTED[matched_idx]=1
+    fi
+  elif (( match_count > 1 )); then
+    echo "名称匹配不唯一: ${token}，请先用 s ${token} 搜索后再按编号选择。"
+  else
+    echo "无效输入: ${token}"
+  fi
 }
 
 toggle_by_indices() {
   local input="$1"
-  local token idx
+  local token start end n
 
   input="${input//,/ }"
   for token in ${input}; do
-    if [[ "${token}" =~ ^[0-9]+$ ]]; then
-      if (( token >= 1 && token <= ${#SKILL_NAMES[@]} )); then
-        idx=$((token - 1))
-        if [[ "${SELECTED[idx]}" -eq 1 ]]; then
-          SELECTED[idx]=0
-        else
-          SELECTED[idx]=1
-        fi
-      else
-        echo "无效编号: ${token}"
+    if [[ "${token}" =~ ^[0-9]+-[0-9]+$ ]]; then
+      start="${token%-*}"
+      end="${token#*-}"
+      if (( start > end )); then
+        n="${start}"
+        start="${end}"
+        end="${n}"
       fi
+      for ((n = start; n <= end; n++)); do
+        toggle_single_skill_token "${n}"
+      done
     else
-      echo "无效输入: ${token}"
+      toggle_single_skill_token "${token}"
     fi
   done
 }
@@ -513,23 +663,40 @@ interactive_select() {
 
     case "${cmd}" in
       a|A)
-        for i in "${!SELECTED[@]}"; do
-          SELECTED[i]=1
-        done
+        apply_to_visible_skills select
         ;;
       n|N)
-        for i in "${!SELECTED[@]}"; do
-          SELECTED[i]=0
-        done
+        apply_to_visible_skills clear
         ;;
       i|I)
-        for i in "${!SELECTED[@]}"; do
-          if [[ "${SELECTED[i]}" -eq 1 ]]; then
-            SELECTED[i]=0
-          else
-            SELECTED[i]=1
-          fi
-        done
+        apply_to_visible_skills invert
+        ;;
+      s\ *|S\ *)
+        MENU_FILTER="${cmd#* }"
+        MENU_PAGE=0
+        ;;
+      /*)
+        MENU_FILTER="${cmd#/}"
+        MENU_PAGE=0
+        ;;
+      c|C)
+        MENU_FILTER=""
+        MENU_SELECTED_ONLY="false"
+        MENU_PAGE=0
+        ;;
+      l|L)
+        if [[ "${MENU_SELECTED_ONLY}" == "true" ]]; then
+          MENU_SELECTED_ONLY="false"
+        else
+          MENU_SELECTED_ONLY="true"
+        fi
+        MENU_PAGE=0
+        ;;
+      ">"|f|F)
+        MENU_PAGE=$((MENU_PAGE + 1))
+        ;;
+      "<"|b|B)
+        MENU_PAGE=$((MENU_PAGE - 1))
         ;;
       d|D)
         selected_count=0
