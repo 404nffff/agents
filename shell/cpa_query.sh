@@ -30,6 +30,8 @@ BROWSER_USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 TARGET_USER_AGENT="${CPA_TARGET_USER_AGENT:-codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal}"
 declare -a CURL_ARGS=()
 declare -a AUTH_NAMES=()
+declare -a AUTH_NOTES=()
+declare -a AUTH_PRIORITIES=()
 declare -a AUTH_INDEXES=()
 declare -a RESULT_ROWS=()
 SUMMARY_TOTAL=0
@@ -195,20 +197,29 @@ extract_auth_entries() {
     .. | objects
     | ((.auth_index? // .authIndex? // "") | tostring) as $auth_index
     | select($auth_index != "")
-    | [(.name? // .label? // .email? // .id? // "(未命名)"), $auth_index]
+    | [
+        (.name? // .label? // .email? // .id? // "(未命名)"),
+        (.note? // "-"),
+        ((.priority? // "-") | tostring),
+        $auth_index
+      ]
     | @tsv
-  ' | awk -F '\t' 'NF >= 2 && !seen[$2]++'
+  ' | awk -F '\t' 'NF >= 4 && !seen[$4]++'
 }
 
 resolve_auth_entries_from_auth_files() {
   local response="$1"
-  local name auth_index
+  local name note priority auth_index
   AUTH_NAMES=()
+  AUTH_NOTES=()
+  AUTH_PRIORITIES=()
   AUTH_INDEXES=()
 
-  while IFS=$'\t' read -r name auth_index || [[ -n "${name}${auth_index}" ]]; do
+  while IFS=$'\t' read -r name note priority auth_index || [[ -n "${name}${note}${priority}${auth_index}" ]]; do
     [[ -z "${auth_index}" ]] && continue
     AUTH_NAMES+=("${name:-"(未命名)"}")
+    AUTH_NOTES+=("${note:-"-"}")
+    AUTH_PRIORITIES+=("${priority:-"-"}")
     AUTH_INDEXES+=("${auth_index}")
   done < <(extract_auth_entries "${response}")
 
@@ -264,6 +275,14 @@ format_display_name() {
   else
     printf '%s' "${value}"
   fi
+}
+
+format_md_cell() {
+  local value="${1:-"-"}"
+  value="${value//$'\r'/ }"
+  value="${value//$'\n'/ }"
+  value="${value//|/\\|}"
+  printf '%s' "${value:-"-"}"
 }
 
 format_reset_time() {
@@ -322,48 +341,26 @@ extract_usage_limits() {
 }
 
 print_usage_header() {
-  printf 'name\t5小时/周剩余\t5小时刷新时间\t周刷新时间\t状态/异常\n'
+  printf 'name\tnote\t优先级\t5小时/周剩余\t5小时刷新时间\t周刷新时间\t状态/异常\n'
 }
 
 render_usage_table() {
-  if command -v column >/dev/null 2>&1; then
-    {
-      print_usage_header
-      printf '%s\n' "${RESULT_ROWS[@]}"
-    } | column -t -s $'\t'
-    return 0
-  fi
+  local row
+  local name note priority limits five_hour_reset week_reset status
 
-  {
-    print_usage_header
-    printf '%s\n' "${RESULT_ROWS[@]}"
-  } | awk -F '\t' '
-    {
-      rows[NR] = $0
-      for (i = 1; i <= NF; i++) {
-        cells[NR, i] = $i
-        if (length($i) > widths[i]) {
-          widths[i] = length($i)
-        }
-      }
-      if (NF > max_nf) {
-        max_nf = NF
-      }
-    }
-    END {
-      for (row = 1; row <= NR; row++) {
-        for (col = 1; col <= max_nf; col++) {
-          value = cells[row, col]
-          if (col == max_nf) {
-            printf "%s", value
-          } else {
-            printf "%-*s  ", widths[col], value
-          }
-        }
-        printf "\n"
-      }
-    }
-  '
+  printf '| name | note | 优先级 | 5小时/周剩余 | 5小时刷新时间 | 周刷新时间 | 状态/异常 |\n'
+  printf '| --- | --- | --- | --- | --- | --- | --- |\n'
+  for row in "${RESULT_ROWS[@]}"; do
+    IFS=$'\t' read -r name note priority limits five_hour_reset week_reset status <<< "${row}"
+    printf '| %s | %s | %s | %s | %s | %s | %s |\n' \
+      "$(format_md_cell "${name}")" \
+      "$(format_md_cell "${note}")" \
+      "$(format_md_cell "${priority}")" \
+      "$(format_md_cell "${limits}")" \
+      "$(format_md_cell "${five_hour_reset}")" \
+      "$(format_md_cell "${week_reset}")" \
+      "$(format_md_cell "${status}")"
+  done
 }
 
 number_less_than() {
@@ -428,6 +425,8 @@ query_usage_for_auth_entries() {
   local total="${#AUTH_INDEXES[@]}"
   local index=0
   local name
+  local note
+  local priority
   local display_name
   local auth_index
   local response
@@ -453,33 +452,35 @@ query_usage_for_auth_entries() {
 
   for auth_index in "${AUTH_INDEXES[@]}"; do
     name="${AUTH_NAMES[index]:-"(未命名)"}"
+    note="${AUTH_NOTES[index]:-"-"}"
+    priority="${AUTH_PRIORITIES[index]:-"-"}"
     display_name="$(format_display_name "${name}")"
     index=$((index + 1))
     log "查询 usage (${index}/${total}): ${name}"
 
     if ! response="$(fetch_usage_response "${auth_index}" 2>&1)"; then
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
-      RESULT_ROWS+=("${display_name}"$'\t-\t-\t-\t'"异常: ${response//$'\n'/ }")
+      RESULT_ROWS+=("${display_name}"$'\t'"${note}"$'\t'"${priority}"$'\t-\t-\t-\t'"异常: ${response//$'\n'/ }")
       continue
     fi
 
     if ! parsed="$(extract_usage_limits "${response}" 2>&1)"; then
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
-      RESULT_ROWS+=("${display_name}"$'\t-\t-\t-\t'"异常: ${parsed//$'\n'/ }")
+      RESULT_ROWS+=("${display_name}"$'\t'"${note}"$'\t'"${priority}"$'\t-\t-\t-\t'"异常: ${parsed//$'\n'/ }")
       continue
     fi
 
     IFS=$'\t' read -r first second third fourth <<< "${parsed}"
     if [[ "${first}" == "ERROR" ]]; then
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
-      RESULT_ROWS+=("${display_name}"$'\t-\t-\t-\t'"异常: ${second:-未知错误}")
+      RESULT_ROWS+=("${display_name}"$'\t'"${note}"$'\t'"${priority}"$'\t-\t-\t-\t'"异常: ${second:-未知错误}")
       continue
     fi
 
     five_hour_reset="$(format_reset_time "${second}")"
     week_reset="$(format_reset_time "${fourth}")"
     record_success_summary "${name}" "${first}" "${third}"
-    RESULT_ROWS+=("${display_name}"$'\t'"$(format_percent "${first}")/$(format_percent "${third}")"$'\t'"${five_hour_reset}"$'\t'"${week_reset}"$'\tOK')
+    RESULT_ROWS+=("${display_name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"$(format_percent "${first}")/$(format_percent "${third}")"$'\t'"${five_hour_reset}"$'\t'"${week_reset}"$'\tOK')
   done
 
   render_usage_table
