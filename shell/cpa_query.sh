@@ -394,7 +394,9 @@ render_usage_table() {
     if [[ "${status}" == "OK" ]]; then
       status_display="ok"
     fi
-    printf '%s. %s %s %s\n' "${row_number}" "${name}" "${limits}" "${status_display}"
+    printf '%s. %s\n' "${row_number}" "${name}"
+    printf '   5h/week：%s\n' "${limits}"
+    printf '   状态：%s\n' "${status_display}"
     printf '   备注: %s\n' "${note}"
     printf '   优先级: %s\n' "${priority}"
     printf '   刷新: %s / %s\n' "${five_hour_reset}" "${week_reset}"
@@ -522,8 +524,9 @@ query_usage_for_auth_entries() {
     RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"$(format_percent "${first}")/$(format_percent "${third}")"$'\t'"${five_hour_reset}"$'\t'"${week_reset}"$'\tOK')
   done
 
-  render_usage_table
   print_usage_summary
+  printf '\n'
+  render_usage_table
 }
 
 main() {
