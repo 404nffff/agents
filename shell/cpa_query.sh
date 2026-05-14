@@ -11,8 +11,23 @@ set -euo pipefail
 #     --base-url 'http://<管理服务地址>:<端口>' \
 #     --management-token '<remote-management token>'
 #
+# 更新字段（显式 fields）：
+#   ./shell/cpa_query.sh fields \
+#     --base-url 'http://<管理服务地址>:<端口>' \
+#     --management-token '<remote-management token>' \
+#     --field-name '3块钱.json' \
+#     --field-priority 8
+#
+# 更新字段（省略 action，检测到 --field-* 后自动切到 fields）：
+#   ./shell/cpa_query.sh \
+#     --base-url 'http://<管理服务地址>:<端口>' \
+#     --management-token '<remote-management token>' \
+#     --field-name '3块钱.json' \
+#     --field-priority 8
+#
 # api-call 目标固定为 ChatGPT usage 地址。
-# 可选：追加 `usage` 只输出用量查询；追加 `auth-files` 只输出 auth-files 原始响应。
+# 可选：追加 `usage` 只输出用量查询；追加 `auth-files` 只输出 auth-files 原始响应；
+#      追加 `fields` 更新单个 auth-file 的字段（当前支持 priority）。
 
 SCRIPT_NAME="$(basename "$0")"
 
@@ -22,9 +37,12 @@ TARGET_URL="https://chatgpt.com/backend-api/wham/usage"
 TARGET_METHOD="${CPA_TARGET_METHOD:-GET}"
 TARGET_AUTH_HEADER="${CPA_TARGET_AUTH_HEADER:-Bearer \$TOKEN\$}"
 CHATGPT_ACCOUNT_ID="${CPA_CHATGPT_ACCOUNT_ID:-}"
+FIELD_NAME="${CPA_FIELD_NAME:-}"
+FIELD_PRIORITY="${CPA_FIELD_PRIORITY:-}"
 TIMEOUT="${CPA_TIMEOUT:-30}"
 INSECURE="true"
 ACTION="all"
+ACTION_EXPLICIT="false"
 
 BROWSER_USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 TARGET_USER_AGENT="${CPA_TARGET_USER_AGENT:-codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal}"
@@ -51,11 +69,13 @@ SUMMARY_ITEM_ORDER=0
 usage() {
   cat <<EOF
 用法:
-  ./${SCRIPT_NAME} [all|auth-files|usage] [选项]
+  ./${SCRIPT_NAME} [all|auth-files|usage|fields] [选项]
 
 说明:
   查询 cliproxyapi remote management 接口。
   默认执行 all：先查询 auth-files，再按 name/authIndex 逐个查询 ChatGPT usage。
+  fields：调用 PATCH /v0/management/auth-files/fields 更新单个账号字段。
+  若未显式指定动作，但传入了 --field-name/--field-priority，则会自动切到 fields。
 
 必填:
   --base-url <url>                 管理接口地址，也可用 CPA_BASE_URL
@@ -65,6 +85,8 @@ usage() {
   --target-method <method>         api-call 目标方法，默认 ${TARGET_METHOD}
   --target-auth-header <value>     目标请求 Authorization，默认保留 Bearer \$TOKEN\$ 占位
   --account-id <id>                Chatgpt-Account-Id，也可用 CPA_CHATGPT_ACCOUNT_ID
+  --field-name <name>              fields 动作必填，目标账号名，也可用 CPA_FIELD_NAME
+  --field-priority <int>           fields 动作必填，目标优先级，也可用 CPA_FIELD_PRIORITY
   --timeout <seconds>              curl 超时时间，默认 ${TIMEOUT}
   --no-insecure                    不向 curl 传递 --insecure
   -h, --help                       显示帮助
@@ -72,6 +94,7 @@ usage() {
 示例:
   CPA_BASE_URL='http://127.0.0.1:3318' CPA_MANAGEMENT_TOKEN='***' ./${SCRIPT_NAME}
   ./${SCRIPT_NAME} usage --base-url 'http://127.0.0.1:3318' --management-token '***'
+  ./${SCRIPT_NAME} fields --base-url 'http://127.0.0.1:3318' --management-token '***' --field-name '3块钱.json' --field-priority 8
 EOF
 }
 
@@ -97,6 +120,7 @@ json_escape() {
 parse_args() {
   if [[ $# -gt 0 && "$1" != -* ]]; then
     ACTION="$1"
+    ACTION_EXPLICIT="true"
     shift
   fi
 
@@ -127,6 +151,16 @@ parse_args() {
         CHATGPT_ACCOUNT_ID="$2"
         shift 2
         ;;
+      --field-name)
+        [[ $# -ge 2 && -n "${2:-}" ]] || die "--field-name 需要参数"
+        FIELD_NAME="$2"
+        shift 2
+        ;;
+      --field-priority)
+        [[ $# -ge 2 && "${2:-}" =~ ^-?[0-9]+$ ]] || die "--field-priority 需要整数"
+        FIELD_PRIORITY="$2"
+        shift 2
+        ;;
       --timeout)
         [[ $# -ge 2 && "${2:-}" =~ ^[0-9]+$ ]] || die "--timeout 需要整数秒数"
         TIMEOUT="$2"
@@ -145,6 +179,10 @@ parse_args() {
         ;;
     esac
   done
+
+  if [[ "${ACTION_EXPLICIT}" == "false" ]] && [[ -n "${FIELD_NAME}" || -n "${FIELD_PRIORITY}" ]]; then
+    ACTION="fields"
+  fi
 }
 
 ensure_requirements() {
@@ -152,15 +190,20 @@ ensure_requirements() {
   [[ -n "${BASE_URL}" ]] || die "缺少管理接口地址，请通过 --base-url 或 CPA_BASE_URL 传入"
   [[ -n "${MANAGEMENT_TOKEN}" ]] || die "缺少管理 Token，请通过 --management-token 或 CPA_MANAGEMENT_TOKEN 传入"
   case "${ACTION}" in
-    all|auth-files|usage)
+    all|auth-files|usage|fields)
       ;;
     *)
-      die "未知动作: ${ACTION}，请使用 all/auth-files/usage"
+      die "未知动作: ${ACTION}，请使用 all/auth-files/usage/fields"
       ;;
   esac
 
   if [[ "${ACTION}" == "all" || "${ACTION}" == "usage" ]]; then
     command -v jq >/dev/null 2>&1 || die "usage/all 需要 jq 来解析 auth-files 和 api-call 响应"
+  fi
+
+  if [[ "${ACTION}" == "fields" ]]; then
+    [[ -n "${FIELD_NAME}" ]] || die "fields 动作缺少 --field-name 或 CPA_FIELD_NAME"
+    [[ "${FIELD_PRIORITY}" =~ ^-?[0-9]+$ ]] || die "fields 动作缺少合法的 --field-priority 或 CPA_FIELD_PRIORITY"
   fi
 }
 
@@ -188,9 +231,34 @@ fetch_auth_files() {
   curl "${CURL_ARGS[@]}" "${BASE_URL}/v0/management/auth-files"
 }
 
+build_auth_fields_payload() {
+  printf '{"name":"%s","priority":%s}' \
+    "$(json_escape "${FIELD_NAME}")" \
+    "${FIELD_PRIORITY}"
+}
+
+patch_auth_fields() {
+  local payload
+  build_curl_common_args
+  payload="$(build_auth_fields_payload)"
+
+  curl "${CURL_ARGS[@]}" \
+    -X PATCH \
+    -H "Content-Type: application/json" \
+    -H "Origin: ${BASE_URL}" \
+    --data-raw "${payload}" \
+    "${BASE_URL}/v0/management/auth-files/fields"
+}
+
 query_auth_files() {
   log "查询 auth-files"
   fetch_auth_files
+  printf '\n'
+}
+
+update_auth_fields() {
+  log "更新 auth-fields: ${FIELD_NAME} -> priority ${FIELD_PRIORITY}"
+  patch_auth_fields
   printf '\n'
 }
 
@@ -703,6 +771,9 @@ main() {
       auth_files_response="$(fetch_auth_files)"
       resolve_auth_entries_from_auth_files "${auth_files_response}"
       query_usage_for_auth_entries
+      ;;
+    fields)
+      update_auth_fields
       ;;
   esac
 }
