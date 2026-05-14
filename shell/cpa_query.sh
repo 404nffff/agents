@@ -33,6 +33,10 @@ declare -a AUTH_NAMES=()
 declare -a AUTH_NOTES=()
 declare -a AUTH_PRIORITIES=()
 declare -a AUTH_INDEXES=()
+declare -a AUTH_ACCOUNT_IDS=()
+declare -a AUTH_PLAN_TYPES=()
+declare -a AUTH_SUBSCRIPTION_STARTS=()
+declare -a AUTH_SUBSCRIPTION_UNTILS=()
 declare -a RESULT_ROWS=()
 declare -a SUMMARY_5H_ITEMS=()
 declare -a SUMMARY_WEEK_ITEMS=()
@@ -201,7 +205,11 @@ extract_auth_entries() {
         (.name? // .label? // .email? // .id? // "(未命名)"),
         (.note? // "-"),
         ((.priority? // "-") | tostring),
-        $auth_index
+        $auth_index,
+        (.id_token?.chatgpt_account_id? // "-"),
+        (.id_token?.plan_type? // "-"),
+        (.id_token?.chatgpt_subscription_active_start? // "-"),
+        (.id_token?.chatgpt_subscription_active_until? // "-")
       ]
     | @tsv
   ' | awk -F '\t' 'NF >= 4 && !seen[$4]++'
@@ -209,18 +217,26 @@ extract_auth_entries() {
 
 resolve_auth_entries_from_auth_files() {
   local response="$1"
-  local name note priority auth_index
+  local name note priority auth_index account_id plan_type subscription_start subscription_until
   AUTH_NAMES=()
   AUTH_NOTES=()
   AUTH_PRIORITIES=()
   AUTH_INDEXES=()
+  AUTH_ACCOUNT_IDS=()
+  AUTH_PLAN_TYPES=()
+  AUTH_SUBSCRIPTION_STARTS=()
+  AUTH_SUBSCRIPTION_UNTILS=()
 
-  while IFS=$'\t' read -r name note priority auth_index || [[ -n "${name}${note}${priority}${auth_index}" ]]; do
+  while IFS=$'\t' read -r name note priority auth_index account_id plan_type subscription_start subscription_until || [[ -n "${name}${note}${priority}${auth_index}${account_id}${plan_type}${subscription_start}${subscription_until}" ]]; do
     [[ -z "${auth_index}" ]] && continue
     AUTH_NAMES+=("${name:-"(未命名)"}")
     AUTH_NOTES+=("${note:-"-"}")
     AUTH_PRIORITIES+=("${priority:-"-"}")
     AUTH_INDEXES+=("${auth_index}")
+    AUTH_ACCOUNT_IDS+=("${account_id:-"-"}")
+    AUTH_PLAN_TYPES+=("${plan_type:-"-"}")
+    AUTH_SUBSCRIPTION_STARTS+=("${subscription_start:-"-"}")
+    AUTH_SUBSCRIPTION_UNTILS+=("${subscription_until:-"-"}")
   done < <(extract_auth_entries "${response}")
 
   [[ "${#AUTH_INDEXES[@]}" -gt 0 ]] || die "无法从 auth-files 响应中提取 authIndex"
@@ -230,7 +246,7 @@ resolve_auth_entries_from_auth_files() {
 sort_auth_entries_by_priority() {
   local count="${#AUTH_INDEXES[@]}"
   local index=0
-  local name note priority auth_index sort_priority
+  local name note priority auth_index account_id plan_type subscription_start subscription_until sort_priority
 
   [[ "${count}" -le 1 ]] && return 0
   command -v sort >/dev/null 2>&1 || return 0
@@ -242,18 +258,26 @@ sort_auth_entries_by_priority() {
       note="${AUTH_NOTES[index]:-"-"}"
       priority="${AUTH_PRIORITIES[index]:-"-"}"
       auth_index="${AUTH_INDEXES[index]}"
+      account_id="${AUTH_ACCOUNT_IDS[index]:-"-"}"
+      plan_type="${AUTH_PLAN_TYPES[index]:-"-"}"
+      subscription_start="${AUTH_SUBSCRIPTION_STARTS[index]:-"-"}"
+      subscription_until="${AUTH_SUBSCRIPTION_UNTILS[index]:-"-"}"
       if [[ "${priority}" =~ ^-?[0-9]+$ ]]; then
         sort_priority="${priority}"
       else
         sort_priority="-1"
       fi
-      printf '%s\t%06d\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%06d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "${sort_priority}" \
         "${index}" \
         "${name}" \
         "${note}" \
         "${priority}" \
-        "${auth_index}"
+        "${auth_index}" \
+        "${account_id}" \
+        "${plan_type}" \
+        "${subscription_start}" \
+        "${subscription_until}"
       index=$((index + 1))
     done | sort -t $'\t' -k1,1nr -k2,2n
   )"
@@ -262,13 +286,21 @@ sort_auth_entries_by_priority() {
   AUTH_NOTES=()
   AUTH_PRIORITIES=()
   AUTH_INDEXES=()
+  AUTH_ACCOUNT_IDS=()
+  AUTH_PLAN_TYPES=()
+  AUTH_SUBSCRIPTION_STARTS=()
+  AUTH_SUBSCRIPTION_UNTILS=()
 
-  while IFS=$'\t' read -r _sort_priority _order name note priority auth_index || [[ -n "${_sort_priority}${_order}${name}${note}${priority}${auth_index}" ]]; do
+  while IFS=$'\t' read -r _sort_priority _order name note priority auth_index account_id plan_type subscription_start subscription_until || [[ -n "${_sort_priority}${_order}${name}${note}${priority}${auth_index}${account_id}${plan_type}${subscription_start}${subscription_until}" ]]; do
     [[ -z "${auth_index}" ]] && continue
     AUTH_NAMES+=("${name}")
     AUTH_NOTES+=("${note}")
     AUTH_PRIORITIES+=("${priority}")
     AUTH_INDEXES+=("${auth_index}")
+    AUTH_ACCOUNT_IDS+=("${account_id:-"-"}")
+    AUTH_PLAN_TYPES+=("${plan_type:-"-"}")
+    AUTH_SUBSCRIPTION_STARTS+=("${subscription_start:-"-"}")
+    AUTH_SUBSCRIPTION_UNTILS+=("${subscription_until:-"-"}")
   done <<< "${sorted_output}"
 }
 
@@ -338,6 +370,23 @@ format_reset_time() {
   fi
 }
 
+format_subscription_time() {
+  local value="$1"
+
+  if [[ -z "${value}" || "${value}" == "-" ]]; then
+    printf '-'
+    return 0
+  fi
+
+  if date -d "${value}" '+%m-%d %H:%M:%S' >/dev/null 2>&1; then
+    date -d "${value}" '+%m-%d %H:%M:%S'
+  elif date -j -f '%Y-%m-%dT%H:%M:%S%z' "${value}" '+%m-%d %H:%M:%S' >/dev/null 2>&1; then
+    date -j -f '%Y-%m-%dT%H:%M:%S%z' "${value}" '+%m-%d %H:%M:%S'
+  else
+    printf '%s' "${value}"
+  fi
+}
+
 extract_usage_limits() {
   local response="$1"
 
@@ -384,12 +433,12 @@ render_usage_table() {
   local row
   local row_number=0
   local total_rows="${#RESULT_ROWS[@]}"
-  local name note priority limits five_hour_reset week_reset status
+  local name note priority plan_info subscription_info limits five_hour_reset week_reset status
   local status_display
 
   for row in "${RESULT_ROWS[@]}"; do
     row_number=$((row_number + 1))
-    IFS=$'\t' read -r name note priority limits five_hour_reset week_reset status <<< "${row}"
+    IFS=$'\t' read -r name note priority plan_info subscription_info limits five_hour_reset week_reset status <<< "${row}"
     status_display="${status}"
     if [[ "${status}" == "OK" ]]; then
       status_display="ok"
@@ -399,6 +448,8 @@ render_usage_table() {
     printf '   状态：%s\n' "${status_display}"
     printf '   备注: %s\n' "${note}"
     printf '   优先级: %s\n' "${priority}"
+    printf '   套餐: %s\n' "${plan_info}"
+    printf '   订阅: %s\n' "${subscription_info}"
     printf '   刷新: %s / %s\n' "${five_hour_reset}" "${week_reset}"
     if [[ "${row_number}" -lt "${total_rows}" ]]; then
       printf '\n'
@@ -556,6 +607,12 @@ query_usage_for_auth_entries() {
   local name
   local note
   local priority
+  local account_id
+  local plan_type
+  local subscription_start
+  local subscription_until
+  local plan_info
+  local subscription_info
   local auth_index
   local response
   local parsed
@@ -582,20 +639,26 @@ query_usage_for_auth_entries() {
     name="${AUTH_NAMES[index]:-"(未命名)"}"
     note="${AUTH_NOTES[index]:-"-"}"
     priority="${AUTH_PRIORITIES[index]:-"-"}"
+    account_id="${AUTH_ACCOUNT_IDS[index]:-"-"}"
+    plan_type="${AUTH_PLAN_TYPES[index]:-"-"}"
+    subscription_start="${AUTH_SUBSCRIPTION_STARTS[index]:-"-"}"
+    subscription_until="${AUTH_SUBSCRIPTION_UNTILS[index]:-"-"}"
+    plan_info="${plan_type} | 账号ID: ${account_id}"
+    subscription_info="$(format_subscription_time "${subscription_start}") -> $(format_subscription_time "${subscription_until}")"
     index=$((index + 1))
     log "查询 usage (${index}/${total}): ${name}"
 
     if ! response="$(fetch_usage_response "${auth_index}" 2>&1)"; then
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
       SUMMARY_ERROR_NAMES+=("${name}")
-      RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t-\t-\t-\t'"异常: ${response//$'\n'/ }")
+      RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${plan_info}"$'\t'"${subscription_info}"$'\t-\t-\t-\t'"异常: ${response//$'\n'/ }")
       continue
     fi
 
     if ! parsed="$(extract_usage_limits "${response}" 2>&1)"; then
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
       SUMMARY_ERROR_NAMES+=("${name}")
-      RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t-\t-\t-\t'"异常: ${parsed//$'\n'/ }")
+      RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${plan_info}"$'\t'"${subscription_info}"$'\t-\t-\t-\t'"异常: ${parsed//$'\n'/ }")
       continue
     fi
 
@@ -603,14 +666,14 @@ query_usage_for_auth_entries() {
     if [[ "${first}" == "ERROR" ]]; then
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
       SUMMARY_ERROR_NAMES+=("${name}")
-      RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t-\t-\t-\t'"异常: ${second:-未知错误}")
+      RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${plan_info}"$'\t'"${subscription_info}"$'\t-\t-\t-\t'"异常: ${second:-未知错误}")
       continue
     fi
 
     five_hour_reset="$(format_reset_time "${second}")"
     week_reset="$(format_reset_time "${fourth}")"
     record_success_summary "${name}" "${first}" "${third}"
-    RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"$(format_percent "${first}")/$(format_percent "${third}")"$'\t'"${five_hour_reset}"$'\t'"${week_reset}"$'\tOK')
+    RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${plan_info}"$'\t'"${subscription_info}"$'\t'"$(format_percent "${first}")/$(format_percent "${third}")"$'\t'"${five_hour_reset}"$'\t'"${week_reset}"$'\tOK')
   done
 
   render_usage_table
