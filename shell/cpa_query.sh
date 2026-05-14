@@ -25,11 +25,20 @@ set -euo pipefail
 #     --field-name '3块钱.json' \
 #     --field-priority 8
 #
+# 自动处理订阅临近账号的优先级：
+#   ./shell/cpa_query.sh auto-priority \
+#     --base-url 'http://<管理服务地址>:<端口>' \
+#     --management-token '<remote-management token>'
+#
 # api-call 目标固定为 ChatGPT usage 地址。
 # 可选：追加 `usage` 只输出用量查询；追加 `auth-files` 只输出 auth-files 原始响应；
-#      追加 `fields` 更新单个 auth-file 的字段（当前支持 priority）。
+#      追加 `fields` 更新单个 auth-file 的字段（当前支持 priority）；
+#      追加 `auto-priority` 按订阅剩余时间自动调整并恢复 priority。
+#      规则：当前 priority < 8 时，订阅剩余 < 3 天才提权；一旦账号已经 >= 8，
+#           订阅结束前不再继续调高，只在结束后按状态文件恢复原 priority。
 
 SCRIPT_NAME="$(basename "$0")"
+SCRIPT_DIR="$(cd -- "$(dirname "$0")" && pwd)"
 
 BASE_URL="${CPA_BASE_URL:-}"
 MANAGEMENT_TOKEN="${CPA_MANAGEMENT_TOKEN:-}"
@@ -39,6 +48,7 @@ TARGET_AUTH_HEADER="${CPA_TARGET_AUTH_HEADER:-Bearer \$TOKEN\$}"
 CHATGPT_ACCOUNT_ID="${CPA_CHATGPT_ACCOUNT_ID:-}"
 FIELD_NAME="${CPA_FIELD_NAME:-}"
 FIELD_PRIORITY="${CPA_FIELD_PRIORITY:-}"
+STATE_FILE="${CPA_STATE_FILE:-${SCRIPT_DIR}/../cpa_query.json}"
 TIMEOUT="${CPA_TIMEOUT:-30}"
 INSECURE="true"
 ACTION="all"
@@ -69,12 +79,14 @@ SUMMARY_ITEM_ORDER=0
 usage() {
   cat <<EOF
 用法:
-  ./${SCRIPT_NAME} [all|auth-files|usage|fields] [选项]
+  ./${SCRIPT_NAME} [all|auth-files|usage|fields|auto-priority] [选项]
 
 说明:
   查询 cliproxyapi remote management 接口。
   默认执行 all：先查询 auth-files，再按 name/authIndex 逐个查询 ChatGPT usage。
   fields：调用 PATCH /v0/management/auth-files/fields 更新单个账号字段。
+  auto-priority：当前 priority < 8 且订阅剩余 < 3 天时自动提升优先级到 8~11；
+                 一旦账号已在 >= 8 区间，订阅结束前不再继续调整，只在结束后恢复原优先级。
   若未显式指定动作，但传入了 --field-name/--field-priority，则会自动切到 fields。
 
 必填:
@@ -87,6 +99,7 @@ usage() {
   --account-id <id>                Chatgpt-Account-Id，也可用 CPA_CHATGPT_ACCOUNT_ID
   --field-name <name>              fields 动作必填，目标账号名，也可用 CPA_FIELD_NAME
   --field-priority <int>           fields 动作必填，目标优先级，也可用 CPA_FIELD_PRIORITY
+  --state-file <path>              auto-priority 状态文件路径，默认 ${STATE_FILE}
   --timeout <seconds>              curl 超时时间，默认 ${TIMEOUT}
   --no-insecure                    不向 curl 传递 --insecure
   -h, --help                       显示帮助
@@ -95,6 +108,7 @@ usage() {
   CPA_BASE_URL='http://127.0.0.1:3318' CPA_MANAGEMENT_TOKEN='***' ./${SCRIPT_NAME}
   ./${SCRIPT_NAME} usage --base-url 'http://127.0.0.1:3318' --management-token '***'
   ./${SCRIPT_NAME} fields --base-url 'http://127.0.0.1:3318' --management-token '***' --field-name '3块钱.json' --field-priority 8
+  ./${SCRIPT_NAME} auto-priority --base-url 'http://127.0.0.1:3318' --management-token '***'
 EOF
 }
 
@@ -161,6 +175,11 @@ parse_args() {
         FIELD_PRIORITY="$2"
         shift 2
         ;;
+      --state-file)
+        [[ $# -ge 2 && -n "${2:-}" ]] || die "--state-file 需要参数"
+        STATE_FILE="$2"
+        shift 2
+        ;;
       --timeout)
         [[ $# -ge 2 && "${2:-}" =~ ^[0-9]+$ ]] || die "--timeout 需要整数秒数"
         TIMEOUT="$2"
@@ -190,14 +209,14 @@ ensure_requirements() {
   [[ -n "${BASE_URL}" ]] || die "缺少管理接口地址，请通过 --base-url 或 CPA_BASE_URL 传入"
   [[ -n "${MANAGEMENT_TOKEN}" ]] || die "缺少管理 Token，请通过 --management-token 或 CPA_MANAGEMENT_TOKEN 传入"
   case "${ACTION}" in
-    all|auth-files|usage|fields)
+    all|auth-files|usage|fields|auto-priority)
       ;;
     *)
-      die "未知动作: ${ACTION}，请使用 all/auth-files/usage/fields"
+      die "未知动作: ${ACTION}，请使用 all/auth-files/usage/fields/auto-priority"
       ;;
   esac
 
-  if [[ "${ACTION}" == "all" || "${ACTION}" == "usage" ]]; then
+  if [[ "${ACTION}" == "all" || "${ACTION}" == "usage" || "${ACTION}" == "auto-priority" ]]; then
     command -v jq >/dev/null 2>&1 || die "usage/all 需要 jq 来解析 auth-files 和 api-call 响应"
   fi
 
@@ -232,15 +251,19 @@ fetch_auth_files() {
 }
 
 build_auth_fields_payload() {
+  local field_name="$1"
+  local field_priority="$2"
   printf '{"name":"%s","priority":%s}' \
-    "$(json_escape "${FIELD_NAME}")" \
-    "${FIELD_PRIORITY}"
+    "$(json_escape "${field_name}")" \
+    "${field_priority}"
 }
 
 patch_auth_fields() {
+  local field_name="$1"
+  local field_priority="$2"
   local payload
   build_curl_common_args
-  payload="$(build_auth_fields_payload)"
+  payload="$(build_auth_fields_payload "${field_name}" "${field_priority}")"
 
   curl "${CURL_ARGS[@]}" \
     -X PATCH \
@@ -258,8 +281,243 @@ query_auth_files() {
 
 update_auth_fields() {
   log "更新 auth-fields: ${FIELD_NAME} -> priority ${FIELD_PRIORITY}"
-  patch_auth_fields
+  patch_auth_fields "${FIELD_NAME}" "${FIELD_PRIORITY}"
   printf '\n'
+}
+
+current_timestamp_utc() {
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+normalize_iso_timezone() {
+  local value="$1"
+  printf '%s' "${value}" | sed -E 's/([+-][0-9]{2}):([0-9]{2})$/\1\2/'
+}
+
+parse_datetime_to_epoch() {
+  local value="$1"
+  local normalized_value
+
+  if [[ -z "${value}" || "${value}" == "-" ]]; then
+    return 1
+  fi
+
+  if date -d "${value}" '+%s' >/dev/null 2>&1; then
+    date -d "${value}" '+%s'
+    return 0
+  fi
+
+  normalized_value="$(normalize_iso_timezone "${value}")"
+  if date -j -f '%Y-%m-%dT%H:%M:%S%z' "${normalized_value}" '+%s' >/dev/null 2>&1; then
+    date -j -f '%Y-%m-%dT%H:%M:%S%z' "${normalized_value}" '+%s'
+    return 0
+  fi
+
+  return 1
+}
+
+ensure_state_file() {
+  # 状态文件只记录“被自动提权托管过”的账号及其原始 priority，用于后续恢复。
+  if [[ ! -f "${STATE_FILE}" ]]; then
+    mkdir -p "$(dirname "${STATE_FILE}")"
+    printf '{\n  "managed_priorities": {}\n}\n' > "${STATE_FILE}"
+    return 0
+  fi
+
+  jq -e '.managed_priorities? | type == "object"' "${STATE_FILE}" >/dev/null 2>&1 || die "状态文件 ${STATE_FILE} 不是合法的 cpa_query.json 结构"
+}
+
+state_get_original_priority() {
+  local name="$1"
+  jq -r --arg name "${name}" '.managed_priorities[$name].original_priority // empty' "${STATE_FILE}"
+}
+
+state_set_managed_priority() {
+  local name="$1"
+  local original_priority="$2"
+  local last_applied_priority="$3"
+  local subscription_until="$4"
+  local tmp_file
+
+  tmp_file="$(mktemp "${STATE_FILE}.XXXXXX")"
+  jq \
+    --arg name "${name}" \
+    --argjson original_priority "${original_priority}" \
+    --argjson last_applied_priority "${last_applied_priority}" \
+    --arg subscription_until "${subscription_until}" \
+    --arg updated_at "$(current_timestamp_utc)" \
+    '.managed_priorities[$name] = {
+      original_priority: $original_priority,
+      last_applied_priority: $last_applied_priority,
+      subscription_until: $subscription_until,
+      updated_at: $updated_at
+    }' \
+    "${STATE_FILE}" > "${tmp_file}" || {
+      rm -f "${tmp_file}"
+      die "写入状态文件失败: ${STATE_FILE}"
+    }
+
+  mv "${tmp_file}" "${STATE_FILE}"
+}
+
+state_remove_managed_priority() {
+  local name="$1"
+  local tmp_file
+
+  tmp_file="$(mktemp "${STATE_FILE}.XXXXXX")"
+  jq --arg name "${name}" 'del(.managed_priorities[$name])' "${STATE_FILE}" > "${tmp_file}" || {
+    rm -f "${tmp_file}"
+    die "清理状态文件失败: ${STATE_FILE}"
+  }
+
+  mv "${tmp_file}" "${STATE_FILE}"
+}
+
+compute_auto_priority() {
+  local subscription_until_epoch="$1"
+  local now_epoch="$2"
+  local remaining_seconds
+
+  [[ -n "${subscription_until_epoch}" ]] || return 0
+
+  remaining_seconds=$((subscription_until_epoch - now_epoch))
+  # 只对“尚未过期且剩余不足 3 天”的账号分配自动提权档位。
+  if (( remaining_seconds <= 0 || remaining_seconds >= 259200 )); then
+    return 0
+  elif (( remaining_seconds >= 172800 )); then
+    printf '8'
+  elif (( remaining_seconds >= 86400 )); then
+    printf '9'
+  elif (( remaining_seconds >= 43200 )); then
+    printf '10'
+  else
+    printf '11'
+  fi
+}
+
+format_remaining_duration() {
+  local remaining_seconds="$1"
+  local abs_seconds days hours
+
+  abs_seconds="${remaining_seconds}"
+  if (( abs_seconds < 0 )); then
+    abs_seconds=$(( -abs_seconds ))
+  fi
+
+  days=$((abs_seconds / 86400))
+  hours=$(((abs_seconds % 86400) / 3600))
+
+  if (( remaining_seconds < 0 )); then
+    printf '已过期 %s天%s小时' "${days}" "${hours}"
+  else
+    printf '%s天%s小时' "${days}" "${hours}"
+  fi
+}
+
+auto_manage_priorities() {
+  local auth_files_response
+  local total
+  local index=0
+  local now_epoch
+  local name priority subscription_until original_priority target_priority subscription_until_epoch remaining_seconds
+  local is_expired="false"
+  local managed_count=0
+  local restored_count=0
+  local unchanged_count=0
+
+  ensure_state_file
+  log "从 auth-files 自动处理 priority"
+  auth_files_response="$(fetch_auth_files)"
+  resolve_auth_entries_from_auth_files "${auth_files_response}"
+  total="${#AUTH_INDEXES[@]}"
+  now_epoch="$(date '+%s')"
+
+  [[ "${total}" -gt 0 ]] || die "没有可处理的 auth-files"
+
+  while [[ "${index}" -lt "${total}" ]]; do
+    name="${AUTH_NAMES[index]:-"(未命名)"}"
+    priority="${AUTH_PRIORITIES[index]:-"-"}"
+    subscription_until="${AUTH_SUBSCRIPTION_UNTILS[index]:-"-"}"
+    original_priority="$(state_get_original_priority "${name}")"
+    subscription_until_epoch=""
+    is_expired="false"
+    target_priority=""
+    if subscription_until_epoch="$(parse_datetime_to_epoch "${subscription_until}")"; then
+      remaining_seconds=$((subscription_until_epoch - now_epoch))
+      if (( remaining_seconds <= 0 )); then
+        is_expired="true"
+      fi
+      target_priority="$(compute_auto_priority "${subscription_until_epoch}" "${now_epoch}")"
+    fi
+
+    if [[ "${is_expired}" == "true" ]]; then
+      if [[ -n "${original_priority}" ]]; then
+        # 订阅结束后才恢复原始 priority；如果之前没有托管记录，则不擅自改动。
+        if [[ "${priority}" != "${original_priority}" ]]; then
+          log "恢复优先级: ${name} ${priority} -> ${original_priority}"
+          patch_auth_fields "${name}" "${original_priority}" >/dev/null
+        else
+          unchanged_count=$((unchanged_count + 1))
+        fi
+        state_remove_managed_priority "${name}"
+        restored_count=$((restored_count + 1))
+        printf '恢复: %s | 恢复到原始优先级 %s\n' "${name}" "${original_priority}"
+      else
+        unchanged_count=$((unchanged_count + 1))
+      fi
+      index=$((index + 1))
+      continue
+    fi
+
+    if [[ "${priority}" =~ ^-?[0-9]+$ ]] && (( priority >= 8 )); then
+      # 账号已经在高优先级区间时，不再按剩余时间继续上调，只保留恢复记录等待订阅结束。
+      if [[ -n "${original_priority}" ]]; then
+        state_set_managed_priority "${name}" "${original_priority}" "${priority}" "${subscription_until}"
+      fi
+      unchanged_count=$((unchanged_count + 1))
+      index=$((index + 1))
+      continue
+    fi
+
+    if [[ -n "${target_priority}" ]]; then
+      if [[ -z "${original_priority}" ]]; then
+        # 首次进入托管区间时，锁定当时的原始 priority，后续不再覆盖。
+        [[ "${priority}" =~ ^-?[0-9]+$ ]] || die "账号 ${name} 的当前 priority 非法: ${priority}"
+        original_priority="${priority}"
+      fi
+
+      if [[ "${priority}" != "${target_priority}" ]]; then
+        remaining_seconds=$((subscription_until_epoch - now_epoch))
+        log "自动提权: ${name} ${priority} -> ${target_priority}（剩余 $(format_remaining_duration "${remaining_seconds}")）"
+        patch_auth_fields "${name}" "${target_priority}" >/dev/null
+        priority="${target_priority}"
+        managed_count=$((managed_count + 1))
+      else
+        unchanged_count=$((unchanged_count + 1))
+      fi
+
+      state_set_managed_priority "${name}" "${original_priority}" "${priority}" "${subscription_until}"
+      printf '托管: %s | 当前优先级 %s | 原始优先级 %s | 到期 %s\n' \
+        "${name}" \
+        "${priority}" \
+        "${original_priority}" \
+        "$(format_subscription_time "${subscription_until}")"
+    elif [[ -n "${original_priority}" ]]; then
+      state_set_managed_priority "${name}" "${original_priority}" "${priority}" "${subscription_until}"
+      unchanged_count=$((unchanged_count + 1))
+    else
+      unchanged_count=$((unchanged_count + 1))
+    fi
+
+    index=$((index + 1))
+  done
+
+  printf '\n'
+  printf '概要: 调整 %s 个 | 恢复 %s 个 | 未变更 %s 个 | 状态文件 %s\n' \
+    "${managed_count}" \
+    "${restored_count}" \
+    "${unchanged_count}" \
+    "${STATE_FILE}"
 }
 
 extract_auth_entries() {
@@ -774,6 +1032,9 @@ main() {
       ;;
     fields)
       update_auth_fields
+      ;;
+    auto-priority)
+      auto_manage_priorities
       ;;
   esac
 }
