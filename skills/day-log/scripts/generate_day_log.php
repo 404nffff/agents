@@ -281,7 +281,20 @@ function resolveOutputDir(string $outputDir): string
         }
         $outputDir = $cwd . DIRECTORY_SEPARATOR . $outputDir;
     }
-    return rtrim($outputDir, "/\\");
+    $outputDir = rtrim($outputDir, "/\\");
+
+    $normalizedPath = str_replace('\\', '/', $outputDir);
+    if (preg_match('#/docs/day-log$#u', $normalizedPath) === 1) {
+        return $outputDir;
+    }
+    if (preg_match('#/docs$#u', $normalizedPath) === 1) {
+        return $outputDir . DIRECTORY_SEPARATOR . 'day-log';
+    }
+    if (preg_match('#/day-log$#u', $normalizedPath) === 1) {
+        return $outputDir;
+    }
+
+    return $outputDir . DIRECTORY_SEPARATOR . 'docs' . DIRECTORY_SEPARATOR . 'day-log';
 }
 
 $options = getopt('', [

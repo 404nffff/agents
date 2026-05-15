@@ -1057,7 +1057,8 @@ format_subscription_status() {
 build_refresh_focus_line() {
   local label="$1"
   local reset_kind="$2"
-  local row details=""
+  local row details="" items=""
+  local order=0
   local name note priority plan_info subscription_info limits five_hour_reset week_reset status reset_value
 
   for row in "${RESULT_ROWS[@]}"; do
@@ -1068,11 +1069,17 @@ build_refresh_focus_line() {
       reset_value="${week_reset}"
     fi
     [[ -n "${reset_value}" && "${reset_value}" != "-" && "${reset_value}" != "N/A" ]] || continue
+    items+="${reset_value}"$'\t'"$(printf '%06d' "${order}")"$'\t'"${name}"$'\n'
+    order=$((order + 1))
+  done
+
+  while IFS=$'\t' read -r reset_value _order name || [[ -n "${reset_value}${_order}${name}" ]]; do
+    [[ -n "${name}" ]] || continue
     if [[ -n "${details}" ]]; then
       details+="，"
     fi
     details+="${name} ${reset_value}"
-  done
+  done < <(printf '%s' "${items}" | sort -t $'\t' -k1,1 -k2,2n)
 
   printf '%s：%s\n' "${label}" "${details:-"-"}"
 }
