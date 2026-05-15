@@ -69,6 +69,7 @@ declare -a AUTH_SUBSCRIPTION_UNTILS=()
 declare -a RESULT_ROWS=()
 declare -a SUMMARY_5H_ITEMS=()
 declare -a SUMMARY_WEEK_ITEMS=()
+declare -a SUMMARY_EXPIRY_ITEMS=()
 declare -a SUMMARY_ERROR_NAMES=()
 declare -a AUTO_PRIORITY_LINES=()
 SUMMARY_TOTAL=0
@@ -416,6 +417,27 @@ format_remaining_duration() {
     printf '已过期 %s天%s小时' "${days}" "${hours}"
   else
     printf '%s天%s小时' "${days}" "${hours}"
+  fi
+}
+
+format_precise_duration() {
+  local remaining_seconds="$1"
+  local abs_seconds days hours minutes seconds
+
+  abs_seconds="${remaining_seconds}"
+  if (( abs_seconds < 0 )); then
+    abs_seconds=$(( -abs_seconds ))
+  fi
+
+  days=$((abs_seconds / 86400))
+  hours=$(((abs_seconds % 86400) / 3600))
+  minutes=$(((abs_seconds % 3600) / 60))
+  seconds=$((abs_seconds % 60))
+
+  if (( remaining_seconds < 0 )); then
+    printf '已过期%s天%02d时%02d分%02d秒' "${days}" "${hours}" "${minutes}" "${seconds}"
+  else
+    printf '剩余%s天%02d时%02d分%02d秒' "${days}" "${hours}" "${minutes}" "${seconds}"
   fi
 }
 
@@ -964,6 +986,184 @@ build_summary_metric_line() {
   printf '\n'
 }
 
+record_expiry_summary() {
+  local name="$1"
+  local subscription_until="$2"
+  local order="$3"
+  local subscription_until_epoch
+  local remaining_seconds
+
+  subscription_until_epoch="$(parse_datetime_to_epoch "${subscription_until}")" || return 0
+  remaining_seconds=$((subscription_until_epoch - $(date '+%s')))
+  SUMMARY_EXPIRY_ITEMS+=("${remaining_seconds}"$'\t'"${order}"$'\t'"${name}")
+}
+
+build_expiry_summary_line() {
+  local details=""
+  local count=0
+  local remaining_seconds order name short_name
+
+  if [[ "${#SUMMARY_EXPIRY_ITEMS[@]}" -eq 0 ]]; then
+    printf '过期提醒：0\n'
+    return 0
+  fi
+
+  while IFS=$'\t' read -r remaining_seconds order name || [[ -n "${remaining_seconds}${order}${name}" ]]; do
+    [[ -n "${name}" ]] || continue
+    short_name="$(format_summary_name "${name}")"
+    if [[ -n "${details}" ]]; then
+      details+="，"
+    fi
+    details+="${short_name} $(format_precise_duration "${remaining_seconds}")"
+    count=$((count + 1))
+  done < <(printf '%s\n' "${SUMMARY_EXPIRY_ITEMS[@]}" | sort -t $'\t' -k1,1n -k2,2n)
+
+  printf '过期提醒：%s' "${count}"
+  if [[ -n "${details}" ]]; then
+    printf '（%s）' "${details}"
+  fi
+  printf '\n'
+}
+
+format_subscription_status() {
+  local subscription_until="$1"
+  local subscription_until_epoch
+  local remaining_seconds
+  local abs_seconds days hours minutes seconds
+
+  subscription_until_epoch="$(parse_datetime_to_epoch "${subscription_until}")" || {
+    printf '-'
+    return 0
+  }
+  remaining_seconds=$((subscription_until_epoch - $(date '+%s')))
+  if (( remaining_seconds < 0 )); then
+    printf '已过期'
+    return 0
+  fi
+
+  days=$((remaining_seconds / 86400))
+  if (( days >= 1 )); then
+    printf '剩余%s天' "${days}"
+    return 0
+  fi
+
+  abs_seconds="${remaining_seconds}"
+  hours=$((abs_seconds / 3600))
+  minutes=$(((abs_seconds % 3600) / 60))
+  seconds=$((abs_seconds % 60))
+  printf '剩余%02d时%02d分%02d秒' "${hours}" "${minutes}" "${seconds}"
+}
+
+build_refresh_focus_line() {
+  local label="$1"
+  local reset_kind="$2"
+  local row details=""
+  local name note priority plan_info subscription_info limits five_hour_reset week_reset status reset_value
+
+  for row in "${RESULT_ROWS[@]}"; do
+    IFS=$'\t' read -r name note priority plan_info subscription_info limits five_hour_reset week_reset status <<< "${row}"
+    if [[ "${reset_kind}" == "5h" ]]; then
+      reset_value="${five_hour_reset}"
+    else
+      reset_value="${week_reset}"
+    fi
+    [[ -n "${reset_value}" && "${reset_value}" != "-" && "${reset_value}" != "N/A" ]] || continue
+    if [[ -n "${details}" ]]; then
+      details+="，"
+    fi
+    details+="${name} ${reset_value}"
+  done
+
+  printf '%s：%s\n' "${label}" "${details:-"-"}"
+}
+
+build_account_info_lines() {
+  local total="${#AUTH_INDEXES[@]}"
+  local index=0
+  local name note plan_type subscription_start subscription_until subscription_info subscription_status
+
+  while [[ "${index}" -lt "${total}" ]]; do
+    name="${AUTH_NAMES[index]:-"(未命名)"}"
+    note="${AUTH_NOTES[index]:-"-"}"
+    plan_type="${AUTH_PLAN_TYPES[index]:-"-"}"
+    subscription_start="${AUTH_SUBSCRIPTION_STARTS[index]:-"-"}"
+    subscription_until="${AUTH_SUBSCRIPTION_UNTILS[index]:-"-"}"
+    subscription_info="$(format_subscription_time "${subscription_start}") -> $(format_subscription_time "${subscription_until}")"
+    subscription_status="$(format_subscription_status "${subscription_until}")"
+    printf '%s；套餐 %s；订阅 %s；订阅状态 %s；备注 %s\n' \
+      "${name}" \
+      "${plan_type}" \
+      "${subscription_info}" \
+      "${subscription_status}" \
+      "${note}"
+    index=$((index + 1))
+  done
+}
+
+build_expiry_focus_line() {
+  local details=""
+  local remaining_seconds order name short_name subscription_until display_until
+
+  if [[ "${#SUMMARY_EXPIRY_ITEMS[@]}" -eq 0 ]]; then
+    printf '订阅到期重点：-\n'
+    return 0
+  fi
+
+  while IFS=$'\t' read -r remaining_seconds order name || [[ -n "${remaining_seconds}${order}${name}" ]]; do
+    [[ -n "${name}" ]] || continue
+    subscription_until="${AUTH_SUBSCRIPTION_UNTILS[10#${order}]:-"-"}"
+    display_until="$(format_subscription_time "${subscription_until}")"
+    short_name="${name}"
+    if [[ -n "${details}" ]]; then
+      details+="，"
+    fi
+    details+="${short_name} ${display_until}（$(format_precise_duration "${remaining_seconds}")）"
+  done < <(printf '%s\n' "${SUMMARY_EXPIRY_ITEMS[@]}" | sort -t $'\t' -k1,1n -k2,2n)
+
+  printf '订阅到期重点：%s\n' "${details}"
+}
+
+print_dashboard_image_prompt() {
+  local five_hour_total="N/A"
+  local week_total="N/A"
+
+  if [[ "${#SUMMARY_5H_ITEMS[@]}" -gt 0 ]]; then
+    five_hour_total="$(format_percent "${SUMMARY_SUM_5H}")"
+  fi
+  if [[ "${#SUMMARY_WEEK_ITEMS[@]}" -gt 0 ]]; then
+    week_total="$(format_percent "${SUMMARY_SUM_WEEK}")"
+  fi
+
+  printf '\n'
+  printf '看板图片提示词：\n'
+  cat <<'EOF'
+企业运营看板 / SaaS BI dashboard / 业务汇报面板风格。
+整体要求：现代企业后台、运营周报、经营分析看板视觉；信息分区明确、卡片化布局、模块清晰、可读性高；强调业务汇报感，不要赛博朋克，不要强烈霓虹，不要海报式夸张光效。
+配色要求：蓝白商务风或稳重深蓝商务风；低风险/高剩余用蓝绿系，预警/低剩余用橙红系；整体干净、专业、可信。
+版式要求：顶部为标题与概要卡片；中部为 5h 剩余、周剩余两大重点模块；刷新时间信息分别内嵌到 5h剩余 和 周剩余 模块下方；底部保留异常、总结，以及“订阅时间快到期”板块。
+严格约束：不要显示编造的日期、年份、时钟、时间戳；右上角、标题栏、页眉位置禁止出现任何时间、日期、最近更新时间、current time、last updated；不要杜撰数据，不要改写数字；只根据输入数据做可视化整理。
+请生成一张中文运营看板图片，标题为“账号额度监控摘要”。
+以下是必须严格使用的实时数据，请不要改写数字，不要添加不存在的项目：
+EOF
+  printf '概要: %s个 。OK %s / ERR %s 。总 %s/%s\n' \
+    "${SUMMARY_TOTAL}" \
+    "${SUMMARY_OK}" \
+    "${SUMMARY_ERROR}" \
+    "${five_hour_total}" \
+    "${week_total}"
+  build_summary_metric_line '5h剩余' SUMMARY_5H_ITEMS
+  build_summary_metric_line '周剩余' SUMMARY_WEEK_ITEMS
+  build_error_summary_line
+  build_refresh_focus_line '5h刷新重点' '5h'
+  build_refresh_focus_line '周刷新重点' 'week'
+  printf '账号补充信息：\n'
+  build_account_info_lines
+  build_expiry_focus_line
+  cat <<'EOF'
+补充要求：5h剩余、周剩余、异常都要可视化展示；刷新时间不要单独做大模块，必须归属于对应模块。套餐必须显示在账号名右侧并使用 tag/标签样式；订阅与备注展示在账号名称下方。订阅到期颜色规则：小于等于 7 天用红色；小于等于 15 天但大于 7 天用黄色；其余保持普通样式。刷新重点必须完整展示给定条目，不允许截断、漏项或删除。输出特征：operations dashboard, business analytics board, enterprise SaaS admin UI, Chinese infographic, clean layout, highly readable.
+EOF
+}
+
 record_success_summary() {
   local name="$1"
   local five_hour="$2"
@@ -1025,7 +1225,10 @@ print_usage_summary() {
   printf '\n'
   build_summary_metric_line '周剩余' SUMMARY_WEEK_ITEMS
   printf '\n'
+  build_expiry_summary_line
+  printf '\n'
   build_error_summary_line
+  print_dashboard_image_prompt
 }
 
 query_usage_for_auth_entries() {
@@ -1058,6 +1261,7 @@ query_usage_for_auth_entries() {
   SUMMARY_SUM_WEEK=0
   SUMMARY_5H_ITEMS=()
   SUMMARY_WEEK_ITEMS=()
+  SUMMARY_EXPIRY_ITEMS=()
   SUMMARY_ERROR_NAMES=()
   SUMMARY_ITEM_ORDER=0
 
@@ -1073,6 +1277,7 @@ query_usage_for_auth_entries() {
     subscription_until="${AUTH_SUBSCRIPTION_UNTILS[index]:-"-"}"
     plan_info="${plan_type} | 账号ID: ${account_id}"
     subscription_info="$(format_subscription_time "${subscription_start}") -> $(format_subscription_time "${subscription_until}")"
+    record_expiry_summary "${name}" "${subscription_until}" "${index}"
     index=$((index + 1))
     log "查询 usage (${index}/${total}): ${name}"
 
