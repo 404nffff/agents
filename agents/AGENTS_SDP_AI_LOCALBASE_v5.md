@@ -50,7 +50,7 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
 ### 4.2 外部工具 (MCP) 与降级策略
 | 类别 | MCP 工具名 | 规范与降级策略 |
 | :--- | :--- | :--- |
-| **项目知识库 / 记忆优先检索** | `ai_localbase` | 优先使用：`knowledge_base_create`、`knowledge_base_search`、`chat_ask`、`document_upload`、`document_append`、`document_update`、`document_delete`；知识库列表资源（如 `ai-localbase://knowledge-bases`）仅作为兜底确认入口。启动时必须先通过 create/get-or-create 确认真实 `kb_id`，再进行检索、问答或写入；用于项目文档沉淀、历史方案检索与知识复用。 |
+| **项目知识库优先检索** | `ai_localbase` | 优先使用：`knowledge_base_create`、`knowledge_base_search`、`chat_ask`、`document_upload`、`document_append`、`document_update`、`document_delete`；知识库列表资源（如 `ai-localbase://knowledge-bases`）仅作为兜底确认入口。启动时必须先通过 create/get-or-create 确认真实 `kb_id`，再进行检索、问答或写入；用于项目文档沉淀、历史方案检索与知识复用。 |
 | **语义检索 / 代码定位** | `codebase-retrieval` / `code-index` | 任何需要理解代码上下文、探索性搜索必须优先调用 `codebase-retrieval`。若出现不可用、限流、超时、鉴权失败或连续失败，必须先重试 1 次；仍不可用时，**强制**降级到 `code-index`，先完成 `set_project_path` / `build_deep_index`，再使用 `search_code_advanced`、`get_file_summary`、`get_symbol_body` 等能力做文件定位、符号提取与上下文补全。仅当 `code-index` 也不可用时，才允许继续降级为原生 `Grep`/`Glob`/`Read`。 |
 | **数据库查询** | `skill[db-query]` / `skill[mysql-query]` | 只要代码中涉及数据库查询（包含 MySQL、Redis、Mongo、PGSQL），必须先使用 `db-query` skill；若为 MySQL 查询且 `db-query` 连续重试 3 次仍不可用、不存在或执行失败，才允许降级使用 `mysql-query` skill；禁止绕过该流程直接执行数据库查询。 |
 | **在线检索** | `exa` MCP | 发起通用网络事实补充、官方页面定位、产品/价格/新闻等实时信息查询时，首选使用 `exa` MCP（如 `web_search_exa`、`web_fetch_exa`）。若 `exa` MCP 不可用、超时或连续失败，再降级为原生 web search / `web_search_request`。 |
@@ -58,10 +58,10 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
 | **深度思考** | `sequential-thinking` | 复杂问题分析、风险识别必须强制使用。 |
 | **任务规划** | `shrimp-task-manager` | 复杂任务必须使用 `plan_task`, `analyze_task`, `reflect_task`, `split_tasks` 做规模评估与任务拆解。 |
 
-## 5. 项目知识库 / 记忆
+## 5. 项目知识库
 ### 5.1 ai_localbase 知识库优先规范
 
-`ai_localbase` 是本项目的**主知识库与主记忆入口**，用于沉淀设计文档、施工文档、问题清单、排查记录与阶段结论。对项目历史经验、需求背景、方案对比、上下文追溯，均优先走 `ai_localbase`。
+`ai_localbase` 是本项目的**主知识库入口**，用于沉淀设计文档、施工文档、问题清单、排查记录与阶段结论。对项目历史经验、需求背景、方案对比、上下文追溯，均优先走 `ai_localbase`。
 
 *   **启动协议与知识库命名**：每一轮新会话或项目启动时的首要动作，**必须优先读取 `docs/index.md` 文件了解项目全局上下文和历史工作留痕**；若该文件不存在，必须记录缺失并继续完成知识库握手，禁止因索引缺失跳过 `ai_localbase`。知识库名称（`kb_name`）必须按当前启动目录名命名（例如当前目录是 `/www/agents` 时，`kb_name=agents`），但 `kb_name` 只用于匹配，不能直接当作 `knowledgeBaseId` 使用。
 *   **kb_id 确认握手（仅首次会话执行）**：每轮新会话启动时执行一次，后续会话中直接使用已确认的 `kb_id`。具体流程：调用 `knowledge_base_create` 传入当前 `kb_name` 和项目描述，让 `ai_localbase` 通过 create/get-or-create 语义创建或确认项目知识库，并从返回结果中提取真实 `kb_id`（例如 `kb-3`）。只有确认 `kb_id` 后，才允许调用 `knowledge_base_search`、`chat_ask`、`document_upload`、`document_append`、`document_update`、`document_delete`。如果 `knowledge_base_create` 未返回 `kb_id`、返回信息不完整，或提示同名库已存在但未给出 ID，再读取 `ai_localbase` 的知识库列表资源（如 `ai-localbase://knowledge-bases`）或等价列表能力，按 `name == kb_name` 精确匹配取得 `kb_id`；禁止在未复核列表前重复创建同名知识库。
@@ -81,7 +81,7 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
 1. **指令触发**：必须通过 `sdlc-design-1`, `sdlc-design-2`, `sdlc-implement`, `sdlc-test`, `sdlc-debug`, `sdlc-solo` 触发对应阶段。
 2. **阶段选角起步**：进入阶段后，先依据 `software-dev-process-roles` 的阶段选角计划确定候选角色，再通过 `skills/who/SKILL.md` 选择当前阶段主角色；仅在天然跨域时补 1 个辅助角色。
 3. **目录确认**：简单任务可直接进入上下文收集；复杂任务必须先确认任务目录，并统一使用 `docs/[任务目录]/`。
-4. **知识库归属记录**：首次创建 `status.md` 时，必须在文件头部明确记录所属的知识库名称（必须为当前启动目录名，如：`知识库：agents`），并同步记录当前阶段主角色、辅助角色（如有）；后续所有文档同步和记忆回写必须强制写入该知识库中。
+4. **知识库归属记录**：首次创建 `status.md` 时，必须在文件头部明确记录所属的知识库名称（必须为当前启动目录名，如：`知识库：agents`），并同步记录当前阶段主角色、辅助角色（如有）；后续所有文档同步和知识库回写必须强制写入该知识库中。
 5. **结构化工作文件**：仅供 AI 读取和维护的工作文件必须统一存放在 `docs/[任务目录]/onlyAI/`，包括：
    - `structured-request.json`（必须包含系统名称、本阶段主角色）
    - `context-scan.json`
@@ -142,23 +142,24 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
 13. **代码注释强制同步**：所有新增、修改的代码必须在施工阶段同步补齐中文注释，明确实现意图、约束条件和使用方式；禁止把注释补写拖到交付后。
 14. **小步修改**：每次变更都必须保持可编译、可验证。
 15. **SQL 目录约束**：所有数据库相关产物（DDL、DML、查询语句、修复脚本、回填脚本）必须统一落到 `docs/[任务目录]/sql/`，禁止继续写入 `docs/db/` 或任务目录外位置。
-16. **Swagger doc 注释规范**：凡是接口、路由、控制器、Handler 或其他对外提供服务的代码，必须在函数或方法头部使用 Swagger doc 注释规范，至少声明接口用途、请求参数、返回结构、状态码与必要说明，保证生成文档时可直接识别。
+16. **注释规范**：凡是接口、路由、控制器、Handler 或其他对外提供服务的代码，必须优先遵循所在文件已有的注释规则；若文件内没有可参考的注释规则，再在函数或方法头部使用 Swagger doc 注释规范，至少声明接口用途、请求参数、返回结构、状态码与必要说明，保证生成文档时可直接识别。
 17. **数据库查询执行约束**：执行阶段凡涉及 MySQL、Redis、Mongo、PGSQL 查询，必须先使用 `db-query` skill；仅当 MySQL 查询场景下 `db-query` 连续重试 3 次仍不可用、不存在或执行失败时，才允许降级使用 `mysql-query` skill；禁止绕过该流程直接执行数据库查询。
 
 ### 阶段 4：质量验证与收尾
 
 1. **阶段测试选角**：进入 `sdlc-test` 或 `sdlc-debug` 前，必须先按阶段选角计划重新确定主角色；测试阶段主角色通常为 `Code Reviewer` 或 `Senior Developer`，调试阶段主角色通常为 `Senior Developer` 或 `Incident Response Commander`。
 2. **测试执行**：测试过程与结果记录到 `docs/[任务目录]/onlyAI/testing.md` 和 `docs/[任务目录]/onlyAI/verification.md`。
-3. **审查报告**：自我审查结论统一写入 `docs/[任务目录]/onlyAI/review-report.md`。
-4. **专项复核**：若 `003-施工文档.md` 中为高风险任务指定了 `Security Engineer`、`SRE`、`Code Reviewer` 等复核角色，收尾阶段必须明确对应复核结论或未执行原因。
-5. **强制更新与知识库瘦身**：任务完成后必须优先将设计结论、施工结果、测试结论同步到 `ai_localbase`。必须对沉淀的零散文档进行合并、提炼和瘦身，提取最终的 API 契约和架构设计更新到主文档（使用 `document_update`），清理开发过程中的废弃方案。**同步时必须强制写入当前启动目录对应的知识库中**。
-6. **全局索引强制更新（收尾检查点）**：每个任务完成收尾前，**必须**执行以下流程，这是任务交付的强制前置条件：
+3. **数据库链路验证补充**：质量验证默认以项目现有测试体系下的单元测试、冒烟测试和功能测试为主；若验证目标涉及真实数据库状态、跨服务链路、数据一致性或线上等价只读核验，必须额外生成待确认验证方案，经用户确认后再执行数据库链路验证。数据库链路验证脚本必须放入 `docs/[任务目录]/sql/`，按业务正向调用链路组织，只允许只读核验，优先使用 `db-query`；仅当 MySQL 场景下 `db-query` 连续 3 次不可用或执行失败，才允许降级为 `mysql-query`。链路脚本不得内嵌凭证、不得执行写操作、不得替代自动化测试。
+4. **审查报告**：自我审查结论统一写入 `docs/[任务目录]/onlyAI/review-report.md`。
+5. **专项复核**：若 `003-施工文档.md` 中为高风险任务指定了 `Security Engineer`、`SRE`、`Code Reviewer` 等复核角色，收尾阶段必须明确对应复核结论或未执行原因。
+6. **强制更新与知识库瘦身**：任务完成后必须优先将设计结论、施工结果、测试结论同步到 `ai_localbase`。必须对沉淀的零散文档进行合并、提炼和瘦身，提取最终的 API 契约和架构设计更新到主文档（使用 `document_update`），清理开发过程中的废弃方案。**同步时必须强制写入当前启动目录对应的知识库中**。
+7. **全局索引强制更新（收尾检查点）**：每个任务完成收尾前，**必须**执行以下流程，这是任务交付的强制前置条件：
    - 读取 `docs/index.md`（不存在则创建）
    - 新增/更新当前任务条目：任务名称、任务目录路径、核心交付物、当前状态、完成日期
    - 若涉及架构变更、新增核心模块、重要 API 契约，在"架构变更记录"区块追加摘要
    - 在 `status.md` 标记"已同步全局索引"
    - **禁止跳过**：未完成索引更新不得声称任务收尾完成
-7. **项目状态汇报**：当用户询问整体进度时，必须读取所有 `docs/*/status.md`，按任务目录汇总状态、当前阶段、阻塞项与下一步。
+8. **项目状态汇报**：当用户询问整体进度时，必须读取所有 `docs/*/status.md`，按任务目录汇总状态、当前阶段、阻塞项与下一步。
 
 ## 7. 测试与验证策略 (Testing & Validation)
 
