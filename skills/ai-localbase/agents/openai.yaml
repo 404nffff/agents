@@ -1,0 +1,7 @@
+interface:
+  display_name: "AI LocalBase"
+  short_description: "会话启动即初始化 ai_localbase 项目知识库"
+  default_prompt: "在启用 ai_localbase 的项目中，每次会话启动先使用 $ai-localbase 初始化当前目录对应的知识库，再按统一入口执行检索、问答和文档同步。"
+
+policy:
+  allow_implicit_invocation: true

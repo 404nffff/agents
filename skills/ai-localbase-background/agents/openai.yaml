@@ -1,0 +1,7 @@
+interface:
+  display_name: "AI LocalBase Background"
+  short_description: "会话启动即加载；同步检索，写入可走后台队列或自动回退同步"
+  default_prompt: "使用 $ai-localbase-background 时，进入启用 ai_localbase 的项目后应立即加载本 skill，并先执行 init 确认知识库 ID；需要立即写入时直接用 upload/append/update/delete，需要异步写入时用 queue-* 按需启动后台 worker；search/chat 继续同步执行；若当前环境没有 Python，则 queue-* 自动回退同步写入。"
+
+policy:
+  allow_implicit_invocation: false

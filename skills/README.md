@@ -61,6 +61,8 @@
 | --- | --- | --- |
 | grok-search | grok-skill | 实时网络搜索，输出 JSON 格式结果 |
 | exa-search | exa-search | 语义 Web 搜索，适合官方文档、API 参考、产品规格等高质量来源 |
+| ai-localbase | ai-localbase | 通过单文件 Bash / PowerShell 入口调用 ai_localbase 的 MCP HTTP 接口，支持按目录自动管理知识库并执行检索与问答 |
+| ai-localbase-background | ai-localbase-background | 在启用 ai_localbase 的项目里会话启动即加载；同步检索，写入可按需走后台队列，无 Python 时自动回退同步 |
 
 ### 角色选择
 

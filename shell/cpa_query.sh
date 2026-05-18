@@ -30,6 +30,17 @@ set -euo pipefail
 #     --base-url 'http://<管理服务地址>:<端口>' \
 #     --management-token '<remote-management token>'
 #
+# 默认查询后写入提示词快照 cp_query.json：
+#   ./shell/cpa_query.sh \
+#     --base-url 'http://<管理服务地址>:<端口>' \
+#     --management-token '<remote-management token>'
+#
+# 读取本地 cp_query.json 生成图片提示词：
+#   ./shell/cpa_query.sh --prompt
+#
+# 读取指定提示词快照文件：
+#   ./shell/cpa_query.sh --prompt --prompt-file '/path/to/cp_query.json'
+#
 # api-call 目标固定为 ChatGPT usage 地址。
 # 可选：追加 `usage` 只输出用量查询；追加 `auth-files` 只输出 auth-files 原始响应；
 #      追加 `fields` 更新单个 auth-file 的字段（当前支持 priority）；
@@ -50,6 +61,7 @@ CHATGPT_ACCOUNT_ID="${CPA_CHATGPT_ACCOUNT_ID:-}"
 FIELD_NAME="${CPA_FIELD_NAME:-}"
 FIELD_PRIORITY="${CPA_FIELD_PRIORITY:-}"
 STATE_FILE="${CPA_STATE_FILE:-${SCRIPT_DIR}/../cpa_query.json}"
+PROMPT_FILE="${CPA_PROMPT_FILE:-${SCRIPT_DIR}/../cp_query.json}"
 TIMEOUT="${CPA_TIMEOUT:-30}"
 INSECURE="true"
 ACTION="all"
@@ -66,10 +78,12 @@ declare -a AUTH_ACCOUNT_IDS=()
 declare -a AUTH_PLAN_TYPES=()
 declare -a AUTH_SUBSCRIPTION_STARTS=()
 declare -a AUTH_SUBSCRIPTION_UNTILS=()
+declare -a AUTH_DISABLED_FLAGS=()
 declare -a RESULT_ROWS=()
 declare -a SUMMARY_5H_ITEMS=()
 declare -a SUMMARY_WEEK_ITEMS=()
 declare -a SUMMARY_EXPIRY_ITEMS=()
+declare -a SUMMARY_FREE_ITEMS=()
 declare -a SUMMARY_ERROR_NAMES=()
 declare -a AUTO_PRIORITY_LINES=()
 SUMMARY_TOTAL=0
@@ -90,9 +104,11 @@ usage() {
 说明:
   查询 cliproxyapi remote management 接口。
   默认执行 all：先查询 auth-files，自动处理 priority，再按 name/authIndex 逐个查询 ChatGPT usage。
+  默认查询不会输出看板图片提示词，而是把本次结果写入 ${PROMPT_FILE}。
   fields：调用 PATCH /v0/management/auth-files/fields 更新单个账号字段。
   auto-priority：plan_type=free 的账号临期提权；订阅已过期且 plan_type 不是 free 时 10 天内调到 11；
                  free 账号已在 >= 8 区间时，订阅结束前不再继续调整，只在结束后恢复原优先级。
+  --prompt：不发起查询，直接读取 ${PROMPT_FILE} 并生成看板图片提示词。
   若未显式指定动作，但传入了 --field-name/--field-priority，则会自动切到 fields。
 
 必填:
@@ -106,6 +122,8 @@ usage() {
   --field-name <name>              fields 动作必填，目标账号名，也可用 CPA_FIELD_NAME
   --field-priority <int>           fields 动作必填，目标优先级，也可用 CPA_FIELD_PRIORITY
   --state-file <path>              auto-priority 状态文件路径，默认 ${STATE_FILE}
+  --prompt                         读取本地提示词快照并输出看板图片提示词
+  --prompt-file <path>             提示词快照文件路径，默认 ${PROMPT_FILE}
   --timeout <seconds>              curl 超时时间，默认 ${TIMEOUT}
   --no-insecure                    不向 curl 传递 --insecure
   -h, --help                       显示帮助
@@ -115,6 +133,7 @@ usage() {
   ./${SCRIPT_NAME} usage --base-url 'http://127.0.0.1:3318' --management-token '***'
   ./${SCRIPT_NAME} fields --base-url 'http://127.0.0.1:3318' --management-token '***' --field-name '3块钱.json' --field-priority 8
   ./${SCRIPT_NAME} auto-priority --base-url 'http://127.0.0.1:3318' --management-token '***'
+  ./${SCRIPT_NAME} --prompt
 EOF
 }
 
@@ -125,6 +144,35 @@ die() {
 
 log() {
   printf '[%s] %s\n' "${SCRIPT_NAME}" "$*" >&2
+}
+
+truncate_text() {
+  local value="${1:-}"
+  local max_length="${2:-20}"
+
+  if (( ${#value} <= max_length )); then
+    printf '%s' "${value}"
+  else
+    printf '%s...' "${value:0:max_length}"
+  fi
+}
+
+compact_error_reason() {
+  local reason="${1:-未知错误}"
+  local prefix=""
+  local message=""
+
+  reason="${reason//$'\r'/ }"
+  reason="${reason//$'\n'/ }"
+
+  if [[ "${reason}" =~ ^(HTTP[[:space:]][0-9]+:[[:space:]]+)(.*)$ ]]; then
+    prefix="${BASH_REMATCH[1]}"
+    message="${BASH_REMATCH[2]}"
+    printf '%s%s' "${prefix}" "$(truncate_text "${message}" 20)"
+    return 0
+  fi
+
+  printf '%s' "$(truncate_text "${reason}" 20)"
 }
 
 json_escape() {
@@ -186,6 +234,16 @@ parse_args() {
         STATE_FILE="$2"
         shift 2
         ;;
+      --prompt)
+        ACTION="prompt"
+        ACTION_EXPLICIT="true"
+        shift
+        ;;
+      --prompt-file)
+        [[ $# -ge 2 && -n "${2:-}" ]] || die "--prompt-file 需要参数"
+        PROMPT_FILE="$2"
+        shift 2
+        ;;
       --timeout)
         [[ $# -ge 2 && "${2:-}" =~ ^[0-9]+$ ]] || die "--timeout 需要整数秒数"
         TIMEOUT="$2"
@@ -211,16 +269,23 @@ parse_args() {
 }
 
 ensure_requirements() {
+  case "${ACTION}" in
+    all|auth-files|usage|fields|auto-priority|prompt)
+      ;;
+    *)
+      die "未知动作: ${ACTION}，请使用 all/auth-files/usage/fields/auto-priority 或 --prompt"
+      ;;
+  esac
+
+  if [[ "${ACTION}" == "prompt" ]]; then
+    command -v jq >/dev/null 2>&1 || die "--prompt 需要 jq 来解析 ${PROMPT_FILE}"
+    [[ -f "${PROMPT_FILE}" ]] || die "提示词快照不存在: ${PROMPT_FILE}"
+    return 0
+  fi
+
   command -v curl >/dev/null 2>&1 || die "未找到 curl"
   [[ -n "${BASE_URL}" ]] || die "缺少管理接口地址，请通过 --base-url 或 CPA_BASE_URL 传入"
   [[ -n "${MANAGEMENT_TOKEN}" ]] || die "缺少管理 Token，请通过 --management-token 或 CPA_MANAGEMENT_TOKEN 传入"
-  case "${ACTION}" in
-    all|auth-files|usage|fields|auto-priority)
-      ;;
-    *)
-      die "未知动作: ${ACTION}，请使用 all/auth-files/usage/fields/auto-priority"
-      ;;
-  esac
 
   if [[ "${ACTION}" == "all" || "${ACTION}" == "usage" || "${ACTION}" == "auto-priority" ]]; then
     command -v jq >/dev/null 2>&1 || die "usage/all 需要 jq 来解析 auth-files 和 api-call 响应"
@@ -264,6 +329,14 @@ build_auth_fields_payload() {
     "${field_priority}"
 }
 
+build_auth_status_payload() {
+  local field_name="$1"
+  local disabled="$2"
+  printf '{"name":"%s","disabled":%s}' \
+    "$(json_escape "${field_name}")" \
+    "${disabled}"
+}
+
 patch_auth_fields() {
   local field_name="$1"
   local field_priority="$2"
@@ -277,6 +350,36 @@ patch_auth_fields() {
     -H "Origin: ${BASE_URL}" \
     --data-raw "${payload}" \
     "${BASE_URL}/v0/management/auth-files/fields"
+}
+
+patch_auth_status() {
+  local field_name="$1"
+  local disabled="$2"
+  local payload
+  build_curl_common_args
+  payload="$(build_auth_status_payload "${field_name}" "${disabled}")"
+
+  curl "${CURL_ARGS[@]}" \
+    -X PATCH \
+    -H "Content-Type: application/json" \
+    -H "Origin: ${BASE_URL}" \
+    --data-raw "${payload}" \
+    "${BASE_URL}/v0/management/auth-files/status"
+}
+
+disable_auth_entry_if_needed() {
+  local field_name="$1"
+  local index="$2"
+  local reason="${3:-异常}"
+  local disabled_flag="${AUTH_DISABLED_FLAGS[index]:-"false"}"
+
+  if [[ "${disabled_flag}" == "true" ]]; then
+    return 0
+  fi
+
+  log "自动禁用账号: ${field_name}（${reason}）"
+  patch_auth_status "${field_name}" "true" >/dev/null
+  AUTH_DISABLED_FLAGS[index]="true"
 }
 
 query_auth_files() {
@@ -293,6 +396,10 @@ update_auth_fields() {
 
 current_timestamp_utc() {
   date -u '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+current_timestamp_local() {
+  date '+%Y-%m-%dT%H:%M:%S%z' | sed -E 's/([+-][0-9]{2})([0-9]{2})$/\1:\2/'
 }
 
 normalize_iso_timezone() {
@@ -471,6 +578,16 @@ print_auto_priority_report() {
     "${STATE_FILE}"
 }
 
+print_auto_priority_rules() {
+  printf '优先级处理规则：\n'
+  printf '1. free 账号仅在订阅未过期且剩余不足 3 天时自动提权：48~72h => 8，24~48h => 9，12~24h => 10，<12h => 11。\n'
+  printf '2. free 账号当前优先级已 >= 8 时，订阅结束前不再继续上调，只保留状态文件等待到期后恢复原优先级。\n'
+  printf '3. 非 free 账号在订阅未过期时不参与自动提权。\n'
+  printf '4. 非 free 账号订阅已过期且未超过 10 天时，直接调整到最高优先级 11；过期超过 10 天不处理。\n'
+  printf '5. 已记录在 %s 的托管账号，到期后会按记录自动恢复原 priority。\n' "${STATE_FILE}"
+  printf '\n'
+}
+
 auto_manage_priorities_for_current_entries() {
   local total
   local index=0
@@ -480,6 +597,7 @@ auto_manage_priorities_for_current_entries() {
 
   ensure_state_file
   reset_auto_priority_report
+  print_auto_priority_rules
   total="${#AUTH_INDEXES[@]}"
   now_epoch="$(date '+%s')"
 
@@ -624,7 +742,8 @@ extract_auth_entries() {
         (.id_token?.chatgpt_account_id? // "-"),
         (.id_token?.plan_type? // "-"),
         (.id_token?.chatgpt_subscription_active_start? // "-"),
-        (.id_token?.chatgpt_subscription_active_until? // "-")
+        (.id_token?.chatgpt_subscription_active_until? // "-"),
+        ((.disabled? // false) | tostring)
       ]
     | @tsv
   ' | awk -F '\t' 'NF >= 4 && !seen[$4]++'
@@ -632,7 +751,7 @@ extract_auth_entries() {
 
 resolve_auth_entries_from_auth_files() {
   local response="$1"
-  local name note priority auth_index account_id plan_type subscription_start subscription_until
+  local name note priority auth_index account_id plan_type subscription_start subscription_until disabled
   AUTH_NAMES=()
   AUTH_NOTES=()
   AUTH_PRIORITIES=()
@@ -641,8 +760,9 @@ resolve_auth_entries_from_auth_files() {
   AUTH_PLAN_TYPES=()
   AUTH_SUBSCRIPTION_STARTS=()
   AUTH_SUBSCRIPTION_UNTILS=()
+  AUTH_DISABLED_FLAGS=()
 
-  while IFS=$'\t' read -r name note priority auth_index account_id plan_type subscription_start subscription_until || [[ -n "${name}${note}${priority}${auth_index}${account_id}${plan_type}${subscription_start}${subscription_until}" ]]; do
+  while IFS=$'\t' read -r name note priority auth_index account_id plan_type subscription_start subscription_until disabled || [[ -n "${name}${note}${priority}${auth_index}${account_id}${plan_type}${subscription_start}${subscription_until}${disabled}" ]]; do
     [[ -z "${auth_index}" ]] && continue
     AUTH_NAMES+=("${name:-"(未命名)"}")
     AUTH_NOTES+=("${note:-"-"}")
@@ -652,6 +772,7 @@ resolve_auth_entries_from_auth_files() {
     AUTH_PLAN_TYPES+=("${plan_type:-"-"}")
     AUTH_SUBSCRIPTION_STARTS+=("${subscription_start:-"-"}")
     AUTH_SUBSCRIPTION_UNTILS+=("${subscription_until:-"-"}")
+    AUTH_DISABLED_FLAGS+=("${disabled:-"false"}")
   done < <(extract_auth_entries "${response}")
 
   [[ "${#AUTH_INDEXES[@]}" -gt 0 ]] || die "无法从 auth-files 响应中提取 authIndex"
@@ -661,7 +782,7 @@ resolve_auth_entries_from_auth_files() {
 sort_auth_entries_by_priority() {
   local count="${#AUTH_INDEXES[@]}"
   local index=0
-  local name note priority auth_index account_id plan_type subscription_start subscription_until sort_priority
+  local name note priority auth_index account_id plan_type subscription_start subscription_until disabled sort_priority
 
   [[ "${count}" -le 1 ]] && return 0
   command -v sort >/dev/null 2>&1 || return 0
@@ -677,12 +798,13 @@ sort_auth_entries_by_priority() {
       plan_type="${AUTH_PLAN_TYPES[index]:-"-"}"
       subscription_start="${AUTH_SUBSCRIPTION_STARTS[index]:-"-"}"
       subscription_until="${AUTH_SUBSCRIPTION_UNTILS[index]:-"-"}"
+      disabled="${AUTH_DISABLED_FLAGS[index]:-"false"}"
       if [[ "${priority}" =~ ^-?[0-9]+$ ]]; then
         sort_priority="${priority}"
       else
         sort_priority="-1"
       fi
-      printf '%s\t%06d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%06d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "${sort_priority}" \
         "${index}" \
         "${name}" \
@@ -692,7 +814,8 @@ sort_auth_entries_by_priority() {
         "${account_id}" \
         "${plan_type}" \
         "${subscription_start}" \
-        "${subscription_until}"
+        "${subscription_until}" \
+        "${disabled}"
       index=$((index + 1))
     done | sort -t $'\t' -k1,1nr -k2,2n
   )"
@@ -705,8 +828,9 @@ sort_auth_entries_by_priority() {
   AUTH_PLAN_TYPES=()
   AUTH_SUBSCRIPTION_STARTS=()
   AUTH_SUBSCRIPTION_UNTILS=()
+  AUTH_DISABLED_FLAGS=()
 
-  while IFS=$'\t' read -r _sort_priority _order name note priority auth_index account_id plan_type subscription_start subscription_until || [[ -n "${_sort_priority}${_order}${name}${note}${priority}${auth_index}${account_id}${plan_type}${subscription_start}${subscription_until}" ]]; do
+  while IFS=$'\t' read -r _sort_priority _order name note priority auth_index account_id plan_type subscription_start subscription_until disabled || [[ -n "${_sort_priority}${_order}${name}${note}${priority}${auth_index}${account_id}${plan_type}${subscription_start}${subscription_until}${disabled}" ]]; do
     [[ -z "${auth_index}" ]] && continue
     AUTH_NAMES+=("${name}")
     AUTH_NOTES+=("${note}")
@@ -716,6 +840,7 @@ sort_auth_entries_by_priority() {
     AUTH_PLAN_TYPES+=("${plan_type:-"-"}")
     AUTH_SUBSCRIPTION_STARTS+=("${subscription_start:-"-"}")
     AUTH_SUBSCRIPTION_UNTILS+=("${subscription_until:-"-"}")
+    AUTH_DISABLED_FLAGS+=("${disabled:-"false"}")
   done <<< "${sorted_output}"
 }
 
@@ -854,7 +979,8 @@ extract_usage_limits() {
           else
             "N/A"
           end),
-          ($body.rate_limit.secondary_window.reset_at // "N/A")
+          ($body.rate_limit.secondary_window.reset_at // "N/A"),
+          (($body.plan_type // "-") | tostring)
         ] | @tsv
       end
   '
@@ -930,6 +1056,8 @@ record_error_summary() {
   local name="$1"
   local reason="${2:-}"
 
+  reason="$(compact_error_reason "${reason}")"
+
   SUMMARY_ERROR_NAMES+=("${name}"$'\t'"${reason}")
 }
 
@@ -944,6 +1072,7 @@ build_error_summary_line() {
 
   for item in "${SUMMARY_ERROR_NAMES[@]}"; do
     IFS=$'\t' read -r name reason <<< "${item}"
+    reason="$(compact_error_reason "${reason}")"
     short_name="$(format_summary_name "${name}")"
     if [[ -n "${details}" ]]; then
       details+="，"
@@ -980,6 +1109,61 @@ build_summary_metric_line() {
   done < <(printf '%s\n' "${items_ref[@]}")
 
   printf '%s：%s' "${label}" "${count}"
+  if [[ -n "${details}" ]]; then
+    printf '（%s）' "${details}"
+  fi
+  printf '\n'
+}
+
+build_free_summary_line() {
+  local details=""
+  local count=0
+  local order name short_name
+
+  if [[ "${#SUMMARY_FREE_ITEMS[@]}" -eq 0 ]]; then
+    printf 'free账号：0\n'
+    return 0
+  fi
+
+  while IFS=$'\t' read -r order name || [[ -n "${order}${name}" ]]; do
+    [[ -n "${name}" ]] || continue
+    short_name="$(format_summary_name "${name}")"
+    if [[ -n "${details}" ]]; then
+      details+="，"
+    fi
+    details+="${short_name}"
+    count=$((count + 1))
+  done < <(printf '%s\n' "${SUMMARY_FREE_ITEMS[@]}" | sort -t $'\t' -k1,1n)
+
+  printf 'free账号：%s' "${count}"
+  if [[ -n "${details}" ]]; then
+    printf '（%s）' "${details}"
+  fi
+  printf '\n'
+}
+
+build_disabled_summary_line() {
+  local details=""
+  local count=0
+  local total="${#AUTH_NAMES[@]}"
+  local index=0
+  local name disabled short_name
+
+  while [[ "${index}" -lt "${total}" ]]; do
+    disabled="${AUTH_DISABLED_FLAGS[index]:-"false"}"
+    if [[ "${disabled}" == "true" ]]; then
+      name="${AUTH_NAMES[index]:-"(未命名)"}"
+      short_name="$(format_summary_name "${name}")"
+      if [[ -n "${details}" ]]; then
+        details+="，"
+      fi
+      details+="${short_name}"
+      count=$((count + 1))
+    fi
+    index=$((index + 1))
+  done
+
+  printf '已禁用：%s' "${count}"
   if [[ -n "${details}" ]]; then
     printf '（%s）' "${details}"
   fi
@@ -1023,6 +1207,65 @@ build_expiry_summary_line() {
     printf '（%s）' "${details}"
   fi
   printf '\n'
+}
+
+count_disabled_summary_items() {
+  local count=0
+  local total="${#AUTH_NAMES[@]}"
+  local index=0
+  local disabled
+
+  while [[ "${index}" -lt "${total}" ]]; do
+    disabled="${AUTH_DISABLED_FLAGS[index]:-"false"}"
+    if [[ "${disabled}" == "true" ]]; then
+      count=$((count + 1))
+    fi
+    index=$((index + 1))
+  done
+
+  printf '%s' "${count}"
+}
+
+count_expiring_soon_summary_items() {
+  local threshold_days="${1:-7}"
+  local threshold_seconds=$((threshold_days * 86400))
+  local count=0
+  local remaining_seconds order name
+
+  while IFS=$'\t' read -r remaining_seconds order name || [[ -n "${remaining_seconds}${order}${name}" ]]; do
+    [[ "${remaining_seconds}" =~ ^-?[0-9]+$ ]] || continue
+    if (( remaining_seconds > 0 && remaining_seconds <= threshold_seconds )); then
+      count=$((count + 1))
+    fi
+  done < <(printf '%s\n' "${SUMMARY_EXPIRY_ITEMS[@]}")
+
+  printf '%s' "${count}"
+}
+
+print_overview_summary_block() {
+  local five_hour_total="$1"
+  local week_total="$2"
+  local free_count="${#SUMMARY_FREE_ITEMS[@]}"
+  local disabled_count
+  local error_count="${#SUMMARY_ERROR_NAMES[@]}"
+  local expiring_soon_count
+
+  disabled_count="$(count_disabled_summary_items)"
+  expiring_soon_count="$(count_expiring_soon_summary_items 7)"
+
+  printf '概要\n'
+  printf -- '- 基础：%s个 | OK %s | ERR %s\n' \
+    "${SUMMARY_TOTAL}" \
+    "${SUMMARY_OK}" \
+    "${SUMMARY_ERROR}"
+  printf -- '- 额度：5h总剩余 %s | 周总剩余 %s\n' \
+    "${five_hour_total}" \
+    "${week_total}"
+  printf -- '- 风险：free %s | 已禁用 %s | 异常 %s | 7天内到期 %s\n' \
+    "${free_count}" \
+    "${disabled_count}" \
+    "${error_count}" \
+    "${expiring_soon_count}"
 }
 
 format_subscription_status() {
@@ -1130,6 +1373,242 @@ build_expiry_focus_line() {
   printf '订阅到期重点：%s\n' "${details}"
 }
 
+save_prompt_snapshot() {
+  local tmp_file
+  local auth_json result_rows_json summary_5h_json summary_week_json summary_expiry_json summary_free_json error_json
+
+  auth_json="$(
+    local count="${#AUTH_NAMES[@]}"
+    local index=0
+    local name note priority auth_index account_id plan_type subscription_start subscription_until disabled
+    while [[ "${index}" -lt "${count}" ]]; do
+      name="${AUTH_NAMES[index]:-"(未命名)"}"
+      note="${AUTH_NOTES[index]:-"-"}"
+      priority="${AUTH_PRIORITIES[index]:-"-"}"
+      auth_index="${AUTH_INDEXES[index]:-"-"}"
+      account_id="${AUTH_ACCOUNT_IDS[index]:-"-"}"
+      plan_type="${AUTH_PLAN_TYPES[index]:-"-"}"
+      subscription_start="${AUTH_SUBSCRIPTION_STARTS[index]:-"-"}"
+      subscription_until="${AUTH_SUBSCRIPTION_UNTILS[index]:-"-"}"
+      disabled="${AUTH_DISABLED_FLAGS[index]:-"false"}"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "${name}" \
+        "${note}" \
+        "${priority}" \
+        "${auth_index}" \
+        "${account_id}" \
+        "${plan_type}" \
+        "${subscription_start}" \
+        "${subscription_until}" \
+        "${disabled}"
+      index=$((index + 1))
+    done | jq -Rsc '
+      split("\n")
+      | map(select(length > 0) | split("\t"))
+      | map({
+          name: .[0],
+          note: .[1],
+          priority: .[2],
+          auth_index: .[3],
+          account_id: .[4],
+          plan_type: .[5],
+          subscription_start: .[6],
+          subscription_until: .[7],
+          disabled: .[8]
+        })
+    '
+  )"
+
+  result_rows_json="$(
+    printf '%s\n' "${RESULT_ROWS[@]}" | jq -Rsc '
+      split("\n")
+      | map(select(length > 0) | split("\t"))
+      | map({
+          name: .[0],
+          note: .[1],
+          priority: .[2],
+          plan_info: .[3],
+          subscription_info: .[4],
+          limits: .[5],
+          five_hour_reset: .[6],
+          week_reset: .[7],
+          status: .[8]
+        })
+    '
+  )"
+
+  summary_5h_json="$(
+    printf '%s\n' "${SUMMARY_5H_ITEMS[@]}" | jq -Rsc '
+      split("\n")
+      | map(select(length > 0) | split("\t"))
+      | map({value: .[0], order: .[1], name: .[2]})
+    '
+  )"
+
+  summary_week_json="$(
+    printf '%s\n' "${SUMMARY_WEEK_ITEMS[@]}" | jq -Rsc '
+      split("\n")
+      | map(select(length > 0) | split("\t"))
+      | map({value: .[0], order: .[1], name: .[2]})
+    '
+  )"
+
+  summary_expiry_json="$(
+    printf '%s\n' "${SUMMARY_EXPIRY_ITEMS[@]}" | jq -Rsc '
+      split("\n")
+      | map(select(length > 0) | split("\t"))
+      | map({remaining_seconds: .[0], order: .[1], name: .[2]})
+    '
+  )"
+
+  summary_free_json="$(
+    printf '%s\n' "${SUMMARY_FREE_ITEMS[@]}" | jq -Rsc '
+      split("\n")
+      | map(select(length > 0) | split("\t"))
+      | map({order: .[0], name: .[1]})
+    '
+  )"
+
+  error_json="$(
+    printf '%s\n' "${SUMMARY_ERROR_NAMES[@]}" | jq -Rsc '
+      split("\n")
+      | map(select(length > 0) | split("\t"))
+      | map({name: .[0], reason: (.[1] // "")})
+    '
+  )"
+
+  mkdir -p "$(dirname "${PROMPT_FILE}")"
+  tmp_file="$(mktemp "${PROMPT_FILE}.XXXXXX")"
+  jq -n \
+    --arg generated_at "$(current_timestamp_local)" \
+    --arg summary_total "${SUMMARY_TOTAL}" \
+    --arg summary_ok "${SUMMARY_OK}" \
+    --arg summary_error "${SUMMARY_ERROR}" \
+    --arg summary_sum_5h "${SUMMARY_SUM_5H}" \
+    --arg summary_sum_week "${SUMMARY_SUM_WEEK}" \
+    --argjson auth "${auth_json}" \
+    --argjson result_rows "${result_rows_json}" \
+    --argjson summary_5h_items "${summary_5h_json}" \
+    --argjson summary_week_items "${summary_week_json}" \
+    --argjson summary_expiry_items "${summary_expiry_json}" \
+    --argjson summary_free_items "${summary_free_json}" \
+    --argjson summary_error_items "${error_json}" \
+    '{
+      generated_at: $generated_at,
+      auth: $auth,
+      summary: {
+        total: $summary_total,
+        ok: $summary_ok,
+        error: $summary_error,
+        sum_5h: $summary_sum_5h,
+        sum_week: $summary_sum_week,
+        five_hour_items: $summary_5h_items,
+        week_items: $summary_week_items,
+        expiry_items: $summary_expiry_items,
+        free_items: $summary_free_items,
+        error_items: $summary_error_items
+      },
+      result_rows: $result_rows
+    }' > "${tmp_file}" || {
+      rm -f "${tmp_file}"
+      die "写入提示词快照失败: ${PROMPT_FILE}"
+    }
+  mv "${tmp_file}" "${PROMPT_FILE}"
+  log "已写入提示词快照: ${PROMPT_FILE}"
+}
+
+load_prompt_snapshot() {
+  AUTH_NAMES=()
+  AUTH_NOTES=()
+  AUTH_PRIORITIES=()
+  AUTH_INDEXES=()
+  AUTH_ACCOUNT_IDS=()
+  AUTH_PLAN_TYPES=()
+  AUTH_SUBSCRIPTION_STARTS=()
+  AUTH_SUBSCRIPTION_UNTILS=()
+  AUTH_DISABLED_FLAGS=()
+  RESULT_ROWS=()
+  SUMMARY_5H_ITEMS=()
+  SUMMARY_WEEK_ITEMS=()
+  SUMMARY_EXPIRY_ITEMS=()
+  SUMMARY_FREE_ITEMS=()
+  SUMMARY_ERROR_NAMES=()
+
+  while IFS=$'\t' read -r name note priority auth_index account_id plan_type subscription_start subscription_until disabled || [[ -n "${name}${note}${priority}${auth_index}${account_id}${plan_type}${subscription_start}${subscription_until}${disabled}" ]]; do
+    [[ -n "${name}" ]] || continue
+    AUTH_NAMES+=("${name}")
+    AUTH_NOTES+=("${note:-"-"}")
+    AUTH_PRIORITIES+=("${priority:-"-"}")
+    AUTH_INDEXES+=("${auth_index:-"-"}")
+    AUTH_ACCOUNT_IDS+=("${account_id:-"-"}")
+    AUTH_PLAN_TYPES+=("${plan_type:-"-"}")
+    AUTH_SUBSCRIPTION_STARTS+=("${subscription_start:-"-"}")
+    AUTH_SUBSCRIPTION_UNTILS+=("${subscription_until:-"-"}")
+    AUTH_DISABLED_FLAGS+=("${disabled:-"false"}")
+  done < <(
+    jq -r '.auth[]? | [
+      (.name // "(未命名)"),
+      (.note // "-"),
+      (.priority // "-"),
+      (.auth_index // "-"),
+      (.account_id // "-"),
+      (.plan_type // "-"),
+      (.subscription_start // "-"),
+      (.subscription_until // "-"),
+      (.disabled // "false")
+    ] | @tsv' "${PROMPT_FILE}"
+  )
+
+  while IFS=$'\t' read -r value order name || [[ -n "${value}${order}${name}" ]]; do
+    [[ -n "${name}" ]] || continue
+    SUMMARY_5H_ITEMS+=("${value}"$'\t'"${order}"$'\t'"${name}")
+  done < <(jq -r '.summary.five_hour_items[]? | [(.value // ""), (.order // ""), (.name // "")] | @tsv' "${PROMPT_FILE}")
+
+  while IFS=$'\t' read -r value order name || [[ -n "${value}${order}${name}" ]]; do
+    [[ -n "${name}" ]] || continue
+    SUMMARY_WEEK_ITEMS+=("${value}"$'\t'"${order}"$'\t'"${name}")
+  done < <(jq -r '.summary.week_items[]? | [(.value // ""), (.order // ""), (.name // "")] | @tsv' "${PROMPT_FILE}")
+
+  while IFS=$'\t' read -r remaining_seconds order name || [[ -n "${remaining_seconds}${order}${name}" ]]; do
+    [[ -n "${name}" ]] || continue
+    SUMMARY_EXPIRY_ITEMS+=("${remaining_seconds}"$'\t'"${order}"$'\t'"${name}")
+  done < <(jq -r '.summary.expiry_items[]? | [(.remaining_seconds // ""), (.order // ""), (.name // "")] | @tsv' "${PROMPT_FILE}")
+
+  while IFS=$'\t' read -r order name || [[ -n "${order}${name}" ]]; do
+    [[ -n "${name}" ]] || continue
+    SUMMARY_FREE_ITEMS+=("${order}"$'\t'"${name}")
+  done < <(jq -r '.summary.free_items[]? | [(.order // ""), (.name // "")] | @tsv' "${PROMPT_FILE}")
+
+  while IFS=$'\t' read -r name reason || [[ -n "${name}${reason}" ]]; do
+    [[ -n "${name}" ]] || continue
+    SUMMARY_ERROR_NAMES+=("${name}"$'\t'"$(compact_error_reason "${reason}")")
+  done < <(jq -r '.summary.error_items[]? | [(.name // ""), (.reason // "")] | @tsv' "${PROMPT_FILE}")
+
+  while IFS=$'\t' read -r name note priority plan_info subscription_info limits five_hour_reset week_reset status || [[ -n "${name}${note}${priority}${plan_info}${subscription_info}${limits}${five_hour_reset}${week_reset}${status}" ]]; do
+    [[ -n "${name}" ]] || continue
+    RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${plan_info}"$'\t'"${subscription_info}"$'\t'"${limits}"$'\t'"${five_hour_reset}"$'\t'"${week_reset}"$'\t'"${status}")
+  done < <(
+    jq -r '.result_rows[]? | [
+      (.name // "(未命名)"),
+      (.note // "-"),
+      (.priority // "-"),
+      (.plan_info // "-"),
+      (.subscription_info // "-"),
+      (.limits // "-"),
+      (.five_hour_reset // "-"),
+      (.week_reset // "-"),
+      (.status // "-")
+    ] | @tsv' "${PROMPT_FILE}"
+  )
+
+  SUMMARY_TOTAL="$(jq -r '.summary.total // "0"' "${PROMPT_FILE}")"
+  SUMMARY_OK="$(jq -r '.summary.ok // "0"' "${PROMPT_FILE}")"
+  SUMMARY_ERROR="$(jq -r '.summary.error // "0"' "${PROMPT_FILE}")"
+  SUMMARY_SUM_5H="$(jq -r '.summary.sum_5h // "0"' "${PROMPT_FILE}")"
+  SUMMARY_SUM_WEEK="$(jq -r '.summary.sum_week // "0"' "${PROMPT_FILE}")"
+  SUMMARY_ITEM_ORDER=0
+}
+
 print_dashboard_image_prompt() {
   local five_hour_total="N/A"
   local week_total="N/A"
@@ -1152,14 +1631,12 @@ print_dashboard_image_prompt() {
 请生成一张中文运营看板图片，标题为“账号额度监控摘要”。
 以下是必须严格使用的实时数据，请不要改写数字，不要添加不存在的项目：
 EOF
-  printf '概要: %s个 。OK %s / ERR %s 。总 %s/%s\n' \
-    "${SUMMARY_TOTAL}" \
-    "${SUMMARY_OK}" \
-    "${SUMMARY_ERROR}" \
-    "${five_hour_total}" \
-    "${week_total}"
+  print_overview_summary_block "${five_hour_total}" "${week_total}"
+  printf '\n'
   build_summary_metric_line '5h剩余' SUMMARY_5H_ITEMS
   build_summary_metric_line '周剩余' SUMMARY_WEEK_ITEMS
+  build_free_summary_line
+  build_disabled_summary_line
   build_error_summary_line
   build_refresh_focus_line '5h刷新重点' '5h'
   build_refresh_focus_line '周刷新重点' 'week'
@@ -1222,30 +1699,31 @@ print_usage_summary() {
     week_total="$(format_percent "${SUMMARY_SUM_WEEK}")"
   fi
 
-  printf '概要: %s个 。OK %s / ERR %s 。总 %s/%s\n\n' \
-    "${SUMMARY_TOTAL}" \
-    "${SUMMARY_OK}" \
-    "${SUMMARY_ERROR}" \
-    "${five_hour_total}" \
-    "${week_total}"
+  print_overview_summary_block "${five_hour_total}" "${week_total}"
+  printf '\n\n'
   build_summary_metric_line '5h剩余' SUMMARY_5H_ITEMS
   printf '\n'
   build_summary_metric_line '周剩余' SUMMARY_WEEK_ITEMS
   printf '\n'
+  build_free_summary_line
+  printf '\n'
+  build_disabled_summary_line
+  printf '\n'
   build_expiry_summary_line
   printf '\n'
   build_error_summary_line
-  print_dashboard_image_prompt
 }
 
 query_usage_for_auth_entries() {
   local total="${#AUTH_INDEXES[@]}"
   local index=0
+  local current_index=0
   local name
   local note
   local priority
   local account_id
   local plan_type
+  local disabled_flag
   local subscription_start
   local subscription_until
   local plan_info
@@ -1257,6 +1735,8 @@ query_usage_for_auth_entries() {
   local second
   local third
   local fourth
+  local fifth
+  local error_reason
   local five_hour_reset
   local week_reset
   local status
@@ -1269,47 +1749,71 @@ query_usage_for_auth_entries() {
   SUMMARY_5H_ITEMS=()
   SUMMARY_WEEK_ITEMS=()
   SUMMARY_EXPIRY_ITEMS=()
+  SUMMARY_FREE_ITEMS=()
   SUMMARY_ERROR_NAMES=()
   SUMMARY_ITEM_ORDER=0
 
   [[ "${total}" -gt 0 ]] || die "没有可查询的 authIndex，请检查 auth-files 响应"
 
   for auth_index in "${AUTH_INDEXES[@]}"; do
-    name="${AUTH_NAMES[index]:-"(未命名)"}"
-    note="${AUTH_NOTES[index]:-"-"}"
-    priority="${AUTH_PRIORITIES[index]:-"-"}"
-    account_id="${AUTH_ACCOUNT_IDS[index]:-"-"}"
-    plan_type="${AUTH_PLAN_TYPES[index]:-"-"}"
-    subscription_start="${AUTH_SUBSCRIPTION_STARTS[index]:-"-"}"
-    subscription_until="${AUTH_SUBSCRIPTION_UNTILS[index]:-"-"}"
+    current_index="${index}"
+    name="${AUTH_NAMES[current_index]:-"(未命名)"}"
+    note="${AUTH_NOTES[current_index]:-"-"}"
+    priority="${AUTH_PRIORITIES[current_index]:-"-"}"
+    account_id="${AUTH_ACCOUNT_IDS[current_index]:-"-"}"
+    plan_type="${AUTH_PLAN_TYPES[current_index]:-"-"}"
+    disabled_flag="${AUTH_DISABLED_FLAGS[current_index]:-"false"}"
+    subscription_start="${AUTH_SUBSCRIPTION_STARTS[current_index]:-"-"}"
+    subscription_until="${AUTH_SUBSCRIPTION_UNTILS[current_index]:-"-"}"
     plan_info="${plan_type} | 账号ID: ${account_id}"
     subscription_info="$(format_subscription_time "${subscription_start}") -> $(format_subscription_time "${subscription_until}")"
-    record_expiry_summary "${name}" "${subscription_until}" "${index}"
+    record_expiry_summary "${name}" "${subscription_until}" "${current_index}"
     index=$((index + 1))
     log "查询 usage (${index}/${total}): ${name}"
 
     if ! response="$(fetch_usage_response "${auth_index}" "${plan_type}" 2>&1)"; then
+      error_reason="$(compact_error_reason "${response}")"
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
-      record_error_summary "${name}"
-      RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${plan_info}"$'\t'"${subscription_info}"$'\t-\t-\t-\t'"异常: ${response//$'\n'/ }")
+      record_error_summary "${name}" "${error_reason}"
+      disable_auth_entry_if_needed "${name}" "${current_index}" "${error_reason}"
+      disabled_flag="true"
+      RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${plan_info}"$'\t'"${subscription_info}"$'\t-\t-\t-\t'"异常: ${error_reason}")
       continue
     fi
 
     if ! parsed="$(extract_usage_limits "${response}" 2>&1)"; then
+      error_reason="$(compact_error_reason "${parsed}")"
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
-      record_error_summary "${name}"
-      RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${plan_info}"$'\t'"${subscription_info}"$'\t-\t-\t-\t'"异常: ${parsed//$'\n'/ }")
+      record_error_summary "${name}" "${error_reason}"
+      disable_auth_entry_if_needed "${name}" "${current_index}" "${error_reason}"
+      disabled_flag="true"
+      RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${plan_info}"$'\t'"${subscription_info}"$'\t-\t-\t-\t'"异常: ${error_reason}")
       continue
     fi
 
-    IFS=$'\t' read -r first second third fourth <<< "${parsed}"
+    IFS=$'\t' read -r first second third fourth fifth <<< "${parsed}"
     if [[ "${first}" == "ERROR" ]]; then
+      error_reason="$(compact_error_reason "${second:-未知错误}")"
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
-      record_error_summary "${name}"
-      RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${plan_info}"$'\t'"${subscription_info}"$'\t-\t-\t-\t'"异常: ${second:-未知错误}")
+      record_error_summary "${name}" "${error_reason}"
+      disable_auth_entry_if_needed "${name}" "${current_index}" "${error_reason}"
+      disabled_flag="true"
+      RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${plan_info}"$'\t'"${subscription_info}"$'\t-\t-\t-\t'"异常: ${error_reason}")
       continue
     fi
 
+    if [[ -n "${fifth}" && "${fifth}" != "-" ]]; then
+      plan_type="${fifth}"
+      AUTH_PLAN_TYPES[current_index]="${fifth}"
+    fi
+    if [[ "${plan_type}" == "free" ]]; then
+      SUMMARY_FREE_ITEMS+=("$(printf '%06d' "${current_index}")"$'\t'"${name}")
+      if [[ "${disabled_flag}" != "true" ]]; then
+        disable_auth_entry_if_needed "${name}" "${current_index}" "free 账号"
+        disabled_flag="true"
+      fi
+    fi
+    plan_info="${plan_type} | 账号ID: ${account_id}"
     five_hour_reset="$(format_reset_time "${second}")"
     week_reset="$(format_reset_time "${fourth}")"
     status="OK"
@@ -1325,6 +1829,29 @@ query_usage_for_auth_entries() {
   render_usage_table
   printf '\n'
   print_usage_summary
+  save_prompt_snapshot
+}
+
+run_all_action() {
+  local auth_files_response
+
+  log "查询 auth-files"
+  auth_files_response="$(fetch_auth_files)"
+  resolve_auth_entries_from_auth_files "${auth_files_response}"
+  log "自动处理 priority"
+  auto_manage_priorities_for_current_entries
+  sort_auth_entries_by_priority
+  query_usage_for_auth_entries
+  print_auto_priority_report
+}
+
+run_usage_action() {
+  local auth_files_response
+
+  log "从 auth-files 自动提取全部 name/authIndex"
+  auth_files_response="$(fetch_auth_files)"
+  resolve_auth_entries_from_auth_files "${auth_files_response}"
+  query_usage_for_auth_entries
 }
 
 main() {
@@ -1332,35 +1859,38 @@ main() {
   BASE_URL="${BASE_URL%/}"
   ensure_requirements
 
-  case "${ACTION}" in
-    all)
-      local auth_files_response
-      log "查询 auth-files"
-      auth_files_response="$(fetch_auth_files)"
-      resolve_auth_entries_from_auth_files "${auth_files_response}"
-      log "自动处理 priority"
-      auto_manage_priorities_for_current_entries
-      sort_auth_entries_by_priority
-      query_usage_for_auth_entries
-      print_auto_priority_report
-      ;;
-    auth-files)
-      query_auth_files
-      ;;
-    usage)
-      local auth_files_response
-      log "从 auth-files 自动提取全部 name/authIndex"
-      auth_files_response="$(fetch_auth_files)"
-      resolve_auth_entries_from_auth_files "${auth_files_response}"
-      query_usage_for_auth_entries
-      ;;
-    fields)
-      update_auth_fields
-      ;;
-    auto-priority)
-      auto_manage_priorities
-      ;;
-  esac
+  if [[ "${ACTION}" == "all" ]]; then
+    run_all_action
+    return 0
+  fi
+
+  if [[ "${ACTION}" == "auth-files" ]]; then
+    query_auth_files
+    return 0
+  fi
+
+  if [[ "${ACTION}" == "usage" ]]; then
+    run_usage_action
+    return 0
+  fi
+
+  if [[ "${ACTION}" == "fields" ]]; then
+    update_auth_fields
+    return 0
+  fi
+
+  if [[ "${ACTION}" == "auto-priority" ]]; then
+    auto_manage_priorities
+    return 0
+  fi
+
+  if [[ "${ACTION}" == "prompt" ]]; then
+    load_prompt_snapshot
+    print_dashboard_image_prompt
+    return 0
+  fi
+
+  die "未知动作: ${ACTION}"
 }
 
 main "$@"

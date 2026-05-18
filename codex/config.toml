@@ -1,0 +1,210 @@
+personality = "pragmatic"
+model_auto_compact_token_limit = 1000000000
+model = "gpt-5.4"
+model_reasoning_effort = "xhigh"
+approvals_reviewer = "user"
+model_provider = "newapi"
+
+
+[windows]
+sandbox = "unelevated"
+
+[model_providers.cpa]
+name = "cpa"
+base_url = "http://xxxx/v1"
+env_key = 'OPENAI_API_KEY'
+wire_api = "responses"
+supports_websockets = false
+responses_websockets_v2 = false
+
+[model_providers.cpa.env]
+OPENAI_API_KEY = ""
+
+[model_providers.newapi]
+name = "newapi"
+base_url = "http://xxxx/v1"
+env_key = 'OPENAI_API_KEY'
+wire_api = "responses"
+supports_websockets = false
+responses_websockets_v2 = false
+
+[model_providers.newapi.env]
+OPENAI_API_KEY = ""
+
+[notice]
+hide_full_access_warning = true
+
+[notice.model_migrations]
+"gpt-5.2-codex" = "gpt-5.3-codex"
+"gpt-5.3-codex" = "gpt-5.4"
+
+
+[mcp_servers]
+
+[mcp_servers.sequential-thinking]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.sequential-thinking.tools.sequentialthinking]
+approval_mode = "approve"
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp", "--api-key", ""]
+startup_timeout_sec = 120.0
+
+[mcp_servers.memory]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-memory"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.memory.tools.search_nodes]
+approval_mode = "approve"
+
+[mcp_servers.memory.tools.read_graph]
+approval_mode = "approve"
+
+[mcp_servers.memory.tools.create_entities]
+approval_mode = "approve"
+
+[mcp_servers.shrimp-task-manager]
+command = "npx"
+args = ["-y", "mcp-shrimp-task-manager"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.shrimp-task-manager.env]
+DATA_DIR = ".shrimp"
+ENABLE_GUI = "false"
+TEMPLATES_USE = "zh"
+
+[mcp_servers.shrimp-task-manager.tools.reflect_task]
+approval_mode = "approve"
+
+[mcp_servers.shrimp-task-manager.tools.split_tasks]
+approval_mode = "approve"
+
+[mcp_servers.deepwiki]
+command = "mcp-proxy"
+args = ["--transport", "streamablehttp", "https://mcp.deepwiki.com/mcp"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.deepwiki.tools.ask_question]
+approval_mode = "approve"
+
+[mcp_servers.microsoft-docs-mcp]
+command = "mcp-proxy"
+args = ["--transport", "streamablehttp", "https://learn.microsoft.com/api/mcp"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.duckduckgo-search]
+command = "uvx"
+args = ["duckduckgo-mcp-server"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.fetch]
+command = "uvx"
+args = ["mcp-server-fetch"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.fetch.tools.fetch]
+approval_mode = "approve"
+
+[mcp_servers.exa]
+command = "npx"
+args = ["-y", "exa-mcp-server"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.exa.env]
+EXA_API_KEY = ""
+
+[mcp_servers.fast-context]
+command = "npx"
+args = ["-y", "--prefer-online", "@sammysnake/fast-context-mcp"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.fast-context.env]
+WINDSURF_API_KEY = ""
+
+    
+[mcp_servers.codebase-retrieval]
+command = "auggie"
+args = ["--mcp", "--mcp-auto-workspace"]
+startup_timeout_sec = 120.0
+
+[mcp_servers.codebase-retrieval.env]
+AUGMENT_API_TOKEN = ""
+AUGMENT_API_URL = "https://i1.api.augmentcode.com/"
+
+[mcp_servers.codebase-retrieval.tools.codebase-retrieval]
+approval_mode = "approve"
+
+[tui]
+status_line = ["context-remaining", "context-used", "used-tokens", "total-output-tokens", "total-input-tokens", "current-dir", "model-name"]
+
+[tui.model_availability_nux]
+"gpt-5.5" = 4
+
+[mcp_servers.code-index]
+type = "stdio"
+command = "uvx"
+args = ["code-index-mcp"]
+
+[mcp_servers.code-index.tools.get_symbol_body]
+approval_mode = "approve"
+
+[mcp_servers.code-index.tools.set_project_path]
+approval_mode = "approve"
+
+[mcp_servers.code-index.tools.build_deep_index]
+approval_mode = "approve"
+
+[mcp_servers.code-index.tools.search_code_advanced]
+approval_mode = "approve"
+
+[mcp_servers.code-index.tools.get_file_summary]
+approval_mode = "approve"
+
+[mcp_servers.nocturne_memory]
+url = "http://xxxx/mcp"
+startup_timeout_sec = 120.0
+http_headers = { "Authorization" = "Bearer " }
+
+[mcp_servers.nocturne_memory.tools.search_memory]
+approval_mode = "approve"
+
+[mcp_servers.nocturne_memory.tools.read_memory]
+approval_mode = "approve"
+
+[mcp_servers.nocturne_memory.tools.update_memory]
+approval_mode = "approve"
+
+[mcp_servers.nocturne_memory.tools.create_memory]
+approval_mode = "approve"
+
+[mcp_servers.nocturne_memory.tools.manage_triggers]
+approval_mode = "approve"
+
+
+[mcp_servers.ai_localbase]
+url = "http://xxx/mcp"
+startup_timeout_sec = 120.0
+http_headers = { "Authorization" = "Bearer " }
+
+[mcp_servers.ai_localbase.tools."chat.ask"]
+approval_mode = "approve"
+
+[mcp_servers.ai_localbase.tools."knowledge_base.search"]
+approval_mode = "approve"
+
+[mcp_servers.ai_localbase.tools."knowledge_base.create"]
+approval_mode = "approve"
+
+[mcp_servers.ai_localbase.tools."document.upload"]
+approval_mode = "approve"
+
+[mcp_servers.ai_localbase.tools."document.update"]
+approval_mode = "approve"
+
+[mcp_servers.ai_localbase.tools."document.append"]
+approval_mode = "approve"
