@@ -95,7 +95,8 @@ set -euo pipefail
 #      追加 `auto-priority` 按订阅剩余时间自动调整并恢复 priority。
 #      规则：plan_type=free 的账号参与临期提权；订阅已过期且 plan_type 不是 free 时，
 #           10 天内直接调到最高优先级 11，过期超过 10 天不处理；一旦 free 账号已经
-#           >= 8，订阅结束前不再继续调高，只在结束后按状态文件恢复原 priority。
+#           >= 8，订阅结束前不再继续调高，只在结束后按状态文件恢复原 priority；
+#           free 账号只看周额度，周额度用完时自动禁用，到周刷新时间后自动启用。
 
 SCRIPT_NAME="$(basename "$0")"
 SCRIPT_DIR="$(cd -- "$(dirname "$0")" && pwd)"
@@ -113,6 +114,7 @@ FIELD_PRIORITY="${CPA_FIELD_PRIORITY:-}"
 STATE_FILE="${CPA_STATE_FILE:-${SCRIPT_DIR}/../cpa_query.json}"
 PROMPT_FILE="${CPA_PROMPT_FILE:-${SCRIPT_DIR}/../cp_query.json}"
 TIMEOUT="${CPA_TIMEOUT:-30}"
+USAGE_TIMEOUT="${CPA_USAGE_TIMEOUT:-120}"
 INSECURE="true"
 ACTION="all"
 ACTION_EXPLICIT="false"
@@ -164,6 +166,7 @@ usage() {
   fields：调用 PATCH /v0/management/auth-files/fields 更新单个账号字段。
   auto-priority：plan_type=free 的账号临期提权；订阅已过期且 plan_type 不是 free 时 10 天内调到 11；
                  free 账号已在 >= 8 区间时，订阅结束前不再继续调整，只在结束后恢复原优先级。
+                 free 账号只看周额度；周额度用完时自动禁用，到周刷新时间后自动启用。
   --prompt：不发起查询，直接读取 ${PROMPT_FILE} 并生成看板图片提示词。
   若未显式指定动作，但传入了 --field-name/--field-priority，则会自动切到 fields。
 
@@ -177,6 +180,7 @@ usage() {
   --account-id <id>                Chatgpt-Account-Id，也可用 CPA_CHATGPT_ACCOUNT_ID
   --usage-base-url <url>           management-usage 专用地址，也可用 CPA_USAGE_BASE_URL
   --usage-port <port>              management-usage 自动派生端口，默认 ${USAGE_PORT}
+  --usage-timeout <seconds>        management-usage 专用超时时间，默认 ${USAGE_TIMEOUT}
   --name <name>                    priority/delete-auth 动作必填，目标账号名
   --priority <int>                 priority 动作必填，目标优先级
   --field-name <name>              fields 动作必填，目标账号名，也可用 CPA_FIELD_NAME
@@ -293,6 +297,11 @@ parse_args() {
         USAGE_PORT="$2"
         shift 2
         ;;
+      --usage-timeout)
+        [[ $# -ge 2 && "${2:-}" =~ ^[0-9]+$ ]] || die "--usage-timeout 需要整数秒数"
+        USAGE_TIMEOUT="$2"
+        shift 2
+        ;;
       --name)
         [[ $# -ge 2 && -n "${2:-}" ]] || die "--name 需要参数"
         FIELD_NAME="$2"
@@ -391,12 +400,13 @@ ensure_requirements() {
 
 build_curl_common_args() {
   local referer_base_url="${1:-${BASE_URL}}"
+  local request_timeout="${2:-${TIMEOUT}}"
   CURL_ARGS=(
     --silent
     --show-error
     --location
     --connect-timeout "${TIMEOUT}"
-    --max-time "${TIMEOUT}"
+    --max-time "${request_timeout}"
     -H "Accept: application/json, text/plain, */*"
     -H "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8,ja;q=0.7"
     -H "Authorization: Bearer ${MANAGEMENT_TOKEN}"
@@ -438,7 +448,7 @@ fetch_auth_files() {
 fetch_management_usage() {
   local usage_base_url
   usage_base_url="$(derive_usage_base_url "${BASE_URL}")"
-  build_curl_common_args "${usage_base_url}"
+  build_curl_common_args "${usage_base_url}" "${USAGE_TIMEOUT}"
   curl "${CURL_ARGS[@]}" "${usage_base_url}/v0/management/usage"
 }
 
@@ -522,6 +532,21 @@ disable_auth_entry_if_needed() {
   AUTH_DISABLED_FLAGS[index]="true"
 }
 
+enable_auth_entry_if_needed() {
+  local field_name="$1"
+  local index="$2"
+  local reason="${3:-恢复}"
+  local disabled_flag="${AUTH_DISABLED_FLAGS[index]:-"false"}"
+
+  if [[ "${disabled_flag}" != "true" ]]; then
+    return 0
+  fi
+
+  log "自动启用账号: ${field_name}（${reason}）"
+  patch_auth_status "${field_name}" "false" >/dev/null
+  AUTH_DISABLED_FLAGS[index]="false"
+}
+
 promote_free_auth_entry_if_needed() {
   local field_name="$1"
   local index="$2"
@@ -596,14 +621,28 @@ parse_datetime_to_epoch() {
 }
 
 ensure_state_file() {
-  # 状态文件只记录“被自动提权托管过”的账号及其原始 priority，用于后续恢复。
+  # 状态文件记录自动托管行为：priority 恢复，以及 free 周额度用尽后的定时启用。
   if [[ ! -f "${STATE_FILE}" ]]; then
     mkdir -p "$(dirname "${STATE_FILE}")"
-    printf '{\n  "managed_priorities": {}\n}\n' > "${STATE_FILE}"
+    printf '{\n  "managed_priorities": {},\n  "free_weekly_disabled": {}\n}\n' > "${STATE_FILE}"
     return 0
   fi
 
-  jq -e '.managed_priorities? | type == "object"' "${STATE_FILE}" >/dev/null 2>&1 || die "状态文件 ${STATE_FILE} 不是合法的 cpa_query.json 结构"
+  jq -e '
+    type == "object"
+    and (.managed_priorities? == null or (.managed_priorities | type) == "object")
+    and (.free_weekly_disabled? == null or (.free_weekly_disabled | type) == "object")
+  ' "${STATE_FILE}" >/dev/null 2>&1 || die "状态文件 ${STATE_FILE} 不是合法的 cpa_query.json 结构"
+
+  if ! jq -e '(.managed_priorities | type) == "object" and (.free_weekly_disabled | type) == "object"' "${STATE_FILE}" >/dev/null 2>&1; then
+    local tmp_file
+    tmp_file="$(mktemp "${STATE_FILE}.XXXXXX")"
+    jq '.managed_priorities //= {} | .free_weekly_disabled //= {}' "${STATE_FILE}" > "${tmp_file}" || {
+      rm -f "${tmp_file}"
+      die "升级状态文件失败: ${STATE_FILE}"
+    }
+    mv "${tmp_file}" "${STATE_FILE}"
+  fi
 }
 
 state_get_original_priority() {
@@ -647,6 +686,52 @@ state_remove_managed_priority() {
   jq --arg name "${name}" 'del(.managed_priorities[$name])' "${STATE_FILE}" > "${tmp_file}" || {
     rm -f "${tmp_file}"
     die "清理状态文件失败: ${STATE_FILE}"
+  }
+
+  mv "${tmp_file}" "${STATE_FILE}"
+}
+
+state_get_free_weekly_restore_epoch() {
+  local name="$1"
+  jq -r --arg name "${name}" '.free_weekly_disabled[$name].restore_epoch // empty' "${STATE_FILE}"
+}
+
+state_set_free_weekly_disabled() {
+  local name="$1"
+  local restore_epoch="$2"
+  local restore_at="$3"
+  local reason="$4"
+  local tmp_file
+
+  tmp_file="$(mktemp "${STATE_FILE}.XXXXXX")"
+  jq \
+    --arg name "${name}" \
+    --argjson restore_epoch "${restore_epoch}" \
+    --arg restore_at "${restore_at}" \
+    --arg reason "${reason}" \
+    --arg disabled_at "$(current_timestamp_utc)" \
+    '.free_weekly_disabled[$name] = {
+      restore_epoch: $restore_epoch,
+      restore_at: $restore_at,
+      reason: $reason,
+      disabled_at: $disabled_at
+    }' \
+    "${STATE_FILE}" > "${tmp_file}" || {
+      rm -f "${tmp_file}"
+      die "写入 free 周额度禁用状态失败: ${STATE_FILE}"
+    }
+
+  mv "${tmp_file}" "${STATE_FILE}"
+}
+
+state_remove_free_weekly_disabled() {
+  local name="$1"
+  local tmp_file
+
+  tmp_file="$(mktemp "${STATE_FILE}.XXXXXX")"
+  jq --arg name "${name}" 'del(.free_weekly_disabled[$name])' "${STATE_FILE}" > "${tmp_file}" || {
+    rm -f "${tmp_file}"
+    die "清理 free 周额度禁用状态失败: ${STATE_FILE}"
   }
 
   mv "${tmp_file}" "${STATE_FILE}"
@@ -750,8 +835,53 @@ print_auto_priority_rules() {
   printf '2. free 账号当前优先级已为 8 时，订阅结束前不再调整，只保留状态文件等待到期后恢复原优先级。\n'
   printf '3. 非 free 账号在订阅未过期时不参与自动提权。\n'
   printf '4. 非 free 账号订阅已过期且未超过 10 天时，直接调整到最高优先级 11；过期超过 10 天不处理。\n'
-  printf '5. 已记录在 %s 的托管账号，到期后会按记录自动恢复原 priority。\n' "${STATE_FILE}"
+  printf '5. free 账号只看周额度；周额度用完时自动禁用，到周刷新时间后自动启用。\n'
+  printf '6. 已记录在 %s 的托管账号，到期后会按记录自动恢复原 priority 或启用状态。\n' "${STATE_FILE}"
   printf '\n'
+}
+
+restore_free_weekly_disabled_entries_for_current_entries() {
+  local total="${#AUTH_INDEXES[@]}"
+  local index=0
+  local now_epoch
+  local name plan_type disabled_flag restore_epoch
+
+  now_epoch="$(date '+%s')"
+
+  while [[ "${index}" -lt "${total}" ]]; do
+    name="${AUTH_NAMES[index]:-"(未命名)"}"
+    plan_type="${AUTH_PLAN_TYPES[index]:-"-"}"
+    disabled_flag="${AUTH_DISABLED_FLAGS[index]:-"false"}"
+    restore_epoch="$(state_get_free_weekly_restore_epoch "${name}")"
+
+    if [[ -z "${restore_epoch}" ]]; then
+      index=$((index + 1))
+      continue
+    fi
+
+    if [[ "${plan_type}" != "free" ]]; then
+      # 套餐已经不是 free 时，旧的 free 周额度禁用记录不再适用。
+      state_remove_free_weekly_disabled "${name}"
+      index=$((index + 1))
+      continue
+    fi
+
+    if [[ ! "${restore_epoch}" =~ ^[0-9]+$ ]]; then
+      log "free 周额度禁用状态异常，跳过自动启用: ${name}"
+      index=$((index + 1))
+      continue
+    fi
+
+    if (( now_epoch >= restore_epoch )); then
+      enable_auth_entry_if_needed "${name}" "${index}" "free 周额度刷新"
+      state_remove_free_weekly_disabled "${name}"
+    elif [[ "${disabled_flag}" != "true" ]]; then
+      # 账号已被人工启用时清理托管记录，避免后续误恢复。
+      state_remove_free_weekly_disabled "${name}"
+    fi
+
+    index=$((index + 1))
+  done
 }
 
 auto_manage_priorities_for_current_entries() {
@@ -768,6 +898,7 @@ auto_manage_priorities_for_current_entries() {
   now_epoch="$(date '+%s')"
 
   [[ "${total}" -gt 0 ]] || die "没有可处理的 auth-files"
+  restore_free_weekly_disabled_entries_for_current_entries
 
   while [[ "${index}" -lt "${total}" ]]; do
     name="${AUTH_NAMES[index]:-"(未命名)"}"
@@ -1133,20 +1264,33 @@ extract_usage_limits() {
       elif ($body.rate_limit? == null) then
         ["ERROR", "api-call body 缺少 rate_limit"] | @tsv
       else
-        [
-          (if ($body.rate_limit.primary_window.used_percent | type) == "number" then
+        (($body.plan_type // "-") | tostring) as $plan_type
+        | [
+          (if $plan_type == "free" then
+            "N/A"
+          elif ($body.rate_limit.primary_window.used_percent | type) == "number" then
             (100 - $body.rate_limit.primary_window.used_percent)
           else
             "N/A"
           end),
-          ($body.rate_limit.primary_window.reset_at // "N/A"),
-          (if ($body.rate_limit.secondary_window.used_percent | type) == "number" then
+          (if $plan_type == "free" then
+            "N/A"
+          else
+            ($body.rate_limit.primary_window.reset_at // "N/A")
+          end),
+          (if $plan_type == "free" and ($body.rate_limit.primary_window.used_percent | type) == "number" then
+            (100 - $body.rate_limit.primary_window.used_percent)
+          elif ($body.rate_limit.secondary_window.used_percent | type) == "number" then
             (100 - $body.rate_limit.secondary_window.used_percent)
           else
             "N/A"
           end),
-          ($body.rate_limit.secondary_window.reset_at // "N/A"),
-          (($body.plan_type // "-") | tostring)
+          (if $plan_type == "free" then
+            ($body.rate_limit.primary_window.reset_at // "N/A")
+          else
+            ($body.rate_limit.secondary_window.reset_at // "N/A")
+          end),
+          $plan_type
         ] | @tsv
       end
   '
@@ -1425,7 +1569,7 @@ collect_management_usage_snapshot_json() {
   local response
 
   if ! response="$(fetch_management_usage 2>&1)"; then
-    log "management usage 快照跳过: $(compact_error_reason "${response}")"
+    log "management usage 快照跳过: $(compact_error_reason "${response}")；如响应较大可提高 --usage-timeout"
     printf 'null'
     return 0
   fi
@@ -2271,6 +2415,38 @@ print_usage_summary() {
   build_error_summary_line
 }
 
+disable_free_weekly_quota_if_needed() {
+  local name="$1"
+  local index="$2"
+  local week_remaining="$3"
+  local week_reset_epoch="$4"
+  local now_epoch
+  local restore_at
+
+  [[ "${week_remaining}" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 1
+  if number_greater_than_zero "${week_remaining}"; then
+    return 1
+  fi
+
+  if [[ ! "${week_reset_epoch}" =~ ^[0-9]+$ ]]; then
+    log "free 账号周额度已用尽但缺少周刷新时间，跳过自动禁用: ${name}"
+    return 1
+  fi
+
+  now_epoch="$(date '+%s')"
+  if (( week_reset_epoch <= now_epoch )); then
+    log "free 账号周额度已用尽但周刷新时间已过，跳过自动禁用: ${name}"
+    state_remove_free_weekly_disabled "${name}"
+    return 1
+  fi
+
+  restore_at="$(format_reset_time "${week_reset_epoch}")"
+  log "free 账号周额度用尽，自动禁用到周刷新: ${name}（恢复 ${restore_at}）"
+  disable_auth_entry_if_needed "${name}" "${index}" "free 周额度用尽"
+  state_set_free_weekly_disabled "${name}" "${week_reset_epoch}" "${restore_at}" "free 周额度用尽"
+  return 0
+}
+
 query_usage_for_auth_entries() {
   local total="${#AUTH_INDEXES[@]}"
   local index=0
@@ -2311,6 +2487,8 @@ query_usage_for_auth_entries() {
   SUMMARY_ITEM_ORDER=0
 
   [[ "${total}" -gt 0 ]] || die "没有可查询的 authIndex，请检查 auth-files 响应"
+  ensure_state_file
+  restore_free_weekly_disabled_entries_for_current_entries
 
   for auth_index in "${AUTH_INDEXES[@]}"; do
     current_index="${index}"
@@ -2332,8 +2510,10 @@ query_usage_for_auth_entries() {
       error_reason="$(compact_error_reason "${response}")"
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
       record_error_summary "${name}" "${error_reason}"
-      disable_auth_entry_if_needed "${name}" "${current_index}" "${error_reason}"
-      disabled_flag="true"
+      if [[ "${plan_type}" != "free" ]]; then
+        disable_auth_entry_if_needed "${name}" "${current_index}" "${error_reason}"
+        disabled_flag="true"
+      fi
       RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${plan_info}"$'\t'"${subscription_info}"$'\t-\t-\t-\t'"异常: ${error_reason}")
       continue
     fi
@@ -2342,8 +2522,10 @@ query_usage_for_auth_entries() {
       error_reason="$(compact_error_reason "${parsed}")"
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
       record_error_summary "${name}" "${error_reason}"
-      disable_auth_entry_if_needed "${name}" "${current_index}" "${error_reason}"
-      disabled_flag="true"
+      if [[ "${plan_type}" != "free" ]]; then
+        disable_auth_entry_if_needed "${name}" "${current_index}" "${error_reason}"
+        disabled_flag="true"
+      fi
       RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${plan_info}"$'\t'"${subscription_info}"$'\t-\t-\t-\t'"异常: ${error_reason}")
       continue
     fi
@@ -2353,8 +2535,10 @@ query_usage_for_auth_entries() {
       error_reason="$(compact_error_reason "${second:-未知错误}")"
       SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
       record_error_summary "${name}" "${error_reason}"
-      disable_auth_entry_if_needed "${name}" "${current_index}" "${error_reason}"
-      disabled_flag="true"
+      if [[ "${plan_type}" != "free" ]]; then
+        disable_auth_entry_if_needed "${name}" "${current_index}" "${error_reason}"
+        disabled_flag="true"
+      fi
       RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${plan_info}"$'\t'"${subscription_info}"$'\t-\t-\t-\t'"异常: ${error_reason}")
       continue
     fi
@@ -2372,6 +2556,10 @@ query_usage_for_auth_entries() {
     five_hour_reset="$(format_reset_time "${second}")"
     week_reset="$(format_reset_time "${fourth}")"
     status="OK"
+    if [[ "${plan_type}" == "free" ]] && disable_free_weekly_quota_if_needed "${name}" "${current_index}" "${third}" "${fourth}"; then
+      disabled_flag="true"
+      status="已禁用: free周额度用尽，恢复 ${week_reset}"
+    fi
     if is_expired_plus_plan "${plan_type}" "${subscription_until}"; then
       record_error_summary "${name}" "订阅已到期但 plan_type=plus，结束: $(format_subscription_time "${subscription_until}")"
       record_success_summary "${name}" "${first}" "${third}" "false"
@@ -2414,7 +2602,7 @@ run_management_usage_action() {
 
   log "查询 management usage"
   if ! response="$(fetch_management_usage 2>&1)"; then
-    die "management usage 请求失败: $(compact_error_reason "${response}")"
+    die "management usage 请求失败: $(compact_error_reason "${response}")；当前 usage 超时 ${USAGE_TIMEOUT}s，可加 --usage-timeout 180"
   fi
   if ! printf '%s' "${response}" | jq -e 'type == "object" and (.apis | type == "object")' >/dev/null 2>&1; then
     die "management usage 响应不是预期 JSON 对象，请检查 --base-url 是否指向支持 /v0/management/usage 的服务"
