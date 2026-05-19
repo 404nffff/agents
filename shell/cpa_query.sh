@@ -4,46 +4,94 @@ set -euo pipefail
 # 调用方式：
 #   CPA_BASE_URL='http://<管理服务地址>:<端口>' \
 #   CPA_MANAGEMENT_TOKEN='<remote-management token>' \
-#   ./shell/cpa_query.sh
+#   ./cpa_query.sh
 #
 # 等价参数方式：
-#   ./shell/cpa_query.sh \
+#   ./cpa_query.sh \
 #     --base-url 'http://<管理服务地址>:<端口>' \
 #     --management-token '<remote-management token>'
 #
+# 设置账号优先级：
+#   ./cpa_query.sh priority \
+#     --base-url 'http://<管理服务地址>:<端口>' \
+#     --management-token '<remote-management token>' \
+#     --name '3块钱.json' \
+#     --priority 8
+#
+# 设置账号优先级（等价别名）：
+#   ./cpa_query.sh set-priority \
+#     --base-url 'http://<管理服务地址>:<端口>' \
+#     --management-token '<remote-management token>' \
+#     --name '3块钱.json' \
+#     --priority 8
+#
+# 设置账号优先级（省略 action，检测到 --name/--priority 后自动切到 priority）：
+#   ./cpa_query.sh \
+#     --base-url 'http://<管理服务地址>:<端口>' \
+#     --management-token '<remote-management token>' \
+#     --name '3块钱.json' \
+#     --priority 8
+#
 # 更新字段（显式 fields）：
-#   ./shell/cpa_query.sh fields \
+#   ./cpa_query.sh fields \
 #     --base-url 'http://<管理服务地址>:<端口>' \
 #     --management-token '<remote-management token>' \
 #     --field-name '3块钱.json' \
 #     --field-priority 8
 #
 # 更新字段（省略 action，检测到 --field-* 后自动切到 fields）：
-#   ./shell/cpa_query.sh \
+#   ./cpa_query.sh \
 #     --base-url 'http://<管理服务地址>:<端口>' \
 #     --management-token '<remote-management token>' \
 #     --field-name '3块钱.json' \
 #     --field-priority 8
 #
 # 自动处理订阅临近账号的优先级：
-#   ./shell/cpa_query.sh auto-priority \
+#   ./cpa_query.sh auto-priority \
 #     --base-url 'http://<管理服务地址>:<端口>' \
 #     --management-token '<remote-management token>'
 #
-# 默认查询后写入提示词快照 cp_query.json：
-#   ./shell/cpa_query.sh \
+# 默认查询账号额度和管理端当天用量后写入提示词快照 cp_query.json：
+#   ./cpa_query.sh \
 #     --base-url 'http://<管理服务地址>:<端口>' \
 #     --management-token '<remote-management token>'
 #
 # 读取本地 cp_query.json 生成图片提示词：
-#   ./shell/cpa_query.sh --prompt
+#   ./cpa_query.sh --prompt
+#
+# 自动查询账号额度和管理端当天用量并输出图片提示词（先生成 cp_query.json，再读取它生成 prompt）：
+#   ./cpa_query.sh \
+#     --base-url 'http://<管理服务地址>:<端口>' \
+#     --management-token '<remote-management token>' && \
+#   ./cpa_query.sh --prompt
 #
 # 读取指定提示词快照文件：
-#   ./shell/cpa_query.sh --prompt --prompt-file '/path/to/cp_query.json'
+#   ./cpa_query.sh --prompt --prompt-file '/path/to/cp_query.json'
+#
+# 列出已禁用账号：
+#   ./cpa_query.sh disabled-list \
+#     --base-url 'http://<管理服务地址>:<端口>' \
+#     --management-token '<remote-management token>'
+#
+# 删除 auth-file 账号：
+#   ./cpa_query.sh delete-auth \
+#     --base-url 'http://<管理服务地址>:<端口>' \
+#     --management-token '<remote-management token>' \
+#     --name '3块钱.json'
+#
+# 查询管理端当天用量汇总，并同步更新 cp_query.json：
+#   ./cpa_query.sh management-usage \
+#     --base-url 'http://<管理服务地址>:<端口>' \
+#     --management-token '<remote-management token>'
+#   # 也可用 --usage-base-url 覆盖。
 #
 # api-call 目标固定为 ChatGPT usage 地址。
 # 可选：追加 `usage` 只输出用量查询；追加 `auth-files` 只输出 auth-files 原始响应；
-#      追加 `fields` 更新单个 auth-file 的字段（当前支持 priority）；
+#      追加 `management-usage` / `server-usage` 查询管理端 `/usage` 汇总；
+#      追加 `disabled-list` / `disabled` 只列出 auth-files 中 disabled=true 的账号；
+#      追加 `delete-auth` / `delete-auth-file` 删除指定 auth-file 账号；
+#      追加 `priority` / `set-priority` 设置单个账号优先级；
+#      追加 `fields` 更新单个 auth-file 的字段（当前支持 priority，保留兼容）；
 #      追加 `auto-priority` 按订阅剩余时间自动调整并恢复 priority。
 #      规则：plan_type=free 的账号参与临期提权；订阅已过期且 plan_type 不是 free 时，
 #           10 天内直接调到最高优先级 11，过期超过 10 天不处理；一旦 free 账号已经
@@ -53,6 +101,8 @@ SCRIPT_NAME="$(basename "$0")"
 SCRIPT_DIR="$(cd -- "$(dirname "$0")" && pwd)"
 
 BASE_URL="${CPA_BASE_URL:-}"
+USAGE_BASE_URL="${CPA_USAGE_BASE_URL:-}"
+USAGE_PORT="${CPA_USAGE_PORT:-18317}"
 MANAGEMENT_TOKEN="${CPA_MANAGEMENT_TOKEN:-}"
 TARGET_URL="https://chatgpt.com/backend-api/wham/usage"
 TARGET_METHOD="${CPA_TARGET_METHOD:-GET}"
@@ -66,6 +116,7 @@ TIMEOUT="${CPA_TIMEOUT:-30}"
 INSECURE="true"
 ACTION="all"
 ACTION_EXPLICIT="false"
+PRIORITY_ACTION_REQUESTED="false"
 
 BROWSER_USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 TARGET_USER_AGENT="${CPA_TARGET_USER_AGENT:-codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal}"
@@ -99,12 +150,17 @@ AUTO_PRIORITY_UNCHANGED=0
 usage() {
   cat <<EOF
 用法:
-  ./${SCRIPT_NAME} [all|auth-files|usage|fields|auto-priority] [选项]
+  ./${SCRIPT_NAME} [all|auth-files|usage|management-usage|server-usage|disabled-list|disabled|delete-auth|delete-auth-file|priority|set-priority|fields|auto-priority] [选项]
 
 说明:
   查询 cliproxyapi remote management 接口。
-  默认执行 all：先查询 auth-files，自动处理 priority，再按 name/authIndex 逐个查询 ChatGPT usage。
+  默认执行 all：先查询 auth-files，自动处理 priority，再按 name/authIndex 逐个查询 ChatGPT usage，
+               最后请求管理端当天用量并写入 ${PROMPT_FILE}。
   默认查询不会输出看板图片提示词，而是把本次结果写入 ${PROMPT_FILE}。
+  management-usage / server-usage：查询 GET /v0/management/usage，输出当天接口与模型汇总，并同步更新 ${PROMPT_FILE}。
+  disabled-list / disabled：只读取 auth-files 并列出 disabled=true 的账号，不触发 usage 查询或状态更新。
+  delete-auth / delete-auth-file：调用 DELETE /v0/management/auth-files 删除 --name 指定的账号。
+  priority / set-priority：设置指定账号的 priority。
   fields：调用 PATCH /v0/management/auth-files/fields 更新单个账号字段。
   auto-priority：plan_type=free 的账号临期提权；订阅已过期且 plan_type 不是 free 时 10 天内调到 11；
                  free 账号已在 >= 8 区间时，订阅结束前不再继续调整，只在结束后恢复原优先级。
@@ -119,6 +175,10 @@ usage() {
   --target-method <method>         api-call 目标方法，默认 ${TARGET_METHOD}
   --target-auth-header <value>     目标请求 Authorization，默认保留 Bearer \$TOKEN\$ 占位
   --account-id <id>                Chatgpt-Account-Id，也可用 CPA_CHATGPT_ACCOUNT_ID
+  --usage-base-url <url>           management-usage 专用地址，也可用 CPA_USAGE_BASE_URL
+  --usage-port <port>              management-usage 自动派生端口，默认 ${USAGE_PORT}
+  --name <name>                    priority/delete-auth 动作必填，目标账号名
+  --priority <int>                 priority 动作必填，目标优先级
   --field-name <name>              fields 动作必填，目标账号名，也可用 CPA_FIELD_NAME
   --field-priority <int>           fields 动作必填，目标优先级，也可用 CPA_FIELD_PRIORITY
   --state-file <path>              auto-priority 状态文件路径，默认 ${STATE_FILE}
@@ -131,6 +191,10 @@ usage() {
 示例:
   CPA_BASE_URL='http://127.0.0.1:3318' CPA_MANAGEMENT_TOKEN='***' ./${SCRIPT_NAME}
   ./${SCRIPT_NAME} usage --base-url 'http://127.0.0.1:3318' --management-token '***'
+  ./${SCRIPT_NAME} management-usage --base-url 'http://127.0.0.1:3318' --management-token '***'
+  ./${SCRIPT_NAME} disabled-list --base-url 'http://127.0.0.1:3318' --management-token '***'
+  ./${SCRIPT_NAME} delete-auth --base-url 'http://127.0.0.1:3318' --management-token '***' --name '3块钱.json'
+  ./${SCRIPT_NAME} priority --base-url 'http://127.0.0.1:3318' --management-token '***' --name '3块钱.json' --priority 8
   ./${SCRIPT_NAME} fields --base-url 'http://127.0.0.1:3318' --management-token '***' --field-name '3块钱.json' --field-priority 8
   ./${SCRIPT_NAME} auto-priority --base-url 'http://127.0.0.1:3318' --management-token '***'
   ./${SCRIPT_NAME} --prompt
@@ -219,6 +283,28 @@ parse_args() {
         CHATGPT_ACCOUNT_ID="$2"
         shift 2
         ;;
+      --usage-base-url)
+        [[ $# -ge 2 && -n "${2:-}" ]] || die "--usage-base-url 需要参数"
+        USAGE_BASE_URL="${2%/}"
+        shift 2
+        ;;
+      --usage-port)
+        [[ $# -ge 2 && "${2:-}" =~ ^[0-9]+$ ]] || die "--usage-port 需要整数端口"
+        USAGE_PORT="$2"
+        shift 2
+        ;;
+      --name)
+        [[ $# -ge 2 && -n "${2:-}" ]] || die "--name 需要参数"
+        FIELD_NAME="$2"
+        PRIORITY_ACTION_REQUESTED="true"
+        shift 2
+        ;;
+      --priority)
+        [[ $# -ge 2 && "${2:-}" =~ ^-?[0-9]+$ ]] || die "--priority 需要整数"
+        FIELD_PRIORITY="$2"
+        PRIORITY_ACTION_REQUESTED="true"
+        shift 2
+        ;;
       --field-name)
         [[ $# -ge 2 && -n "${2:-}" ]] || die "--field-name 需要参数"
         FIELD_NAME="$2"
@@ -263,17 +349,19 @@ parse_args() {
     esac
   done
 
-  if [[ "${ACTION_EXPLICIT}" == "false" ]] && [[ -n "${FIELD_NAME}" || -n "${FIELD_PRIORITY}" ]]; then
+  if [[ "${ACTION_EXPLICIT}" == "false" && "${PRIORITY_ACTION_REQUESTED}" == "true" ]]; then
+    ACTION="priority"
+  elif [[ "${ACTION_EXPLICIT}" == "false" ]] && [[ -n "${FIELD_NAME}" || -n "${FIELD_PRIORITY}" ]]; then
     ACTION="fields"
   fi
 }
 
 ensure_requirements() {
   case "${ACTION}" in
-    all|auth-files|usage|fields|auto-priority|prompt)
+    all|auth-files|usage|management-usage|server-usage|disabled-list|disabled|delete-auth|delete-auth-file|priority|set-priority|fields|auto-priority|prompt)
       ;;
     *)
-      die "未知动作: ${ACTION}，请使用 all/auth-files/usage/fields/auto-priority 或 --prompt"
+      die "未知动作: ${ACTION}，请使用 all/auth-files/usage/management-usage/server-usage/disabled-list/disabled/delete-auth/delete-auth-file/priority/set-priority/fields/auto-priority 或 --prompt"
       ;;
   esac
 
@@ -287,17 +375,22 @@ ensure_requirements() {
   [[ -n "${BASE_URL}" ]] || die "缺少管理接口地址，请通过 --base-url 或 CPA_BASE_URL 传入"
   [[ -n "${MANAGEMENT_TOKEN}" ]] || die "缺少管理 Token，请通过 --management-token 或 CPA_MANAGEMENT_TOKEN 传入"
 
-  if [[ "${ACTION}" == "all" || "${ACTION}" == "usage" || "${ACTION}" == "auto-priority" ]]; then
-    command -v jq >/dev/null 2>&1 || die "usage/all 需要 jq 来解析 auth-files 和 api-call 响应"
+  if [[ "${ACTION}" == "all" || "${ACTION}" == "usage" || "${ACTION}" == "management-usage" || "${ACTION}" == "server-usage" || "${ACTION}" == "disabled-list" || "${ACTION}" == "disabled" || "${ACTION}" == "auto-priority" ]]; then
+    command -v jq >/dev/null 2>&1 || die "${ACTION} 需要 jq 来解析 JSON 响应"
   fi
 
-  if [[ "${ACTION}" == "fields" ]]; then
-    [[ -n "${FIELD_NAME}" ]] || die "fields 动作缺少 --field-name 或 CPA_FIELD_NAME"
-    [[ "${FIELD_PRIORITY}" =~ ^-?[0-9]+$ ]] || die "fields 动作缺少合法的 --field-priority 或 CPA_FIELD_PRIORITY"
+  if [[ "${ACTION}" == "fields" || "${ACTION}" == "priority" || "${ACTION}" == "set-priority" ]]; then
+    [[ -n "${FIELD_NAME}" ]] || die "${ACTION} 动作缺少账号名，请传入 --name 或 --field-name"
+    [[ "${FIELD_PRIORITY}" =~ ^-?[0-9]+$ ]] || die "${ACTION} 动作缺少合法优先级，请传入 --priority 或 --field-priority"
+  fi
+
+  if [[ "${ACTION}" == "delete-auth" || "${ACTION}" == "delete-auth-file" ]]; then
+    [[ -n "${FIELD_NAME}" ]] || die "${ACTION} 动作缺少账号名，请传入 --name"
   fi
 }
 
 build_curl_common_args() {
+  local referer_base_url="${1:-${BASE_URL}}"
   CURL_ARGS=(
     --silent
     --show-error
@@ -307,7 +400,7 @@ build_curl_common_args() {
     -H "Accept: application/json, text/plain, */*"
     -H "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8,ja;q=0.7"
     -H "Authorization: Bearer ${MANAGEMENT_TOKEN}"
-    -H "Referer: ${BASE_URL}/management.html"
+    -H "Referer: ${referer_base_url}/management.html"
     -H "User-Agent: ${BROWSER_USER_AGENT}"
   )
 
@@ -316,9 +409,37 @@ build_curl_common_args() {
   fi
 }
 
+derive_usage_base_url() {
+  local source_url="${1%/}"
+
+  if [[ -n "${USAGE_BASE_URL}" ]]; then
+    printf '%s' "${USAGE_BASE_URL%/}"
+    return 0
+  fi
+
+  if [[ "${source_url}" =~ ^(https?://[^/:]+):[0-9]+$ ]]; then
+    printf '%s:%s' "${BASH_REMATCH[1]}" "${USAGE_PORT}"
+    return 0
+  fi
+
+  if [[ "${source_url}" =~ ^(https?://[^/]+)(/.*)?$ ]]; then
+    printf '%s:%s' "${BASH_REMATCH[1]}" "${USAGE_PORT}"
+    return 0
+  fi
+
+  printf '%s' "${source_url}"
+}
+
 fetch_auth_files() {
   build_curl_common_args
   curl "${CURL_ARGS[@]}" "${BASE_URL}/v0/management/auth-files"
+}
+
+fetch_management_usage() {
+  local usage_base_url
+  usage_base_url="$(derive_usage_base_url "${BASE_URL}")"
+  build_curl_common_args "${usage_base_url}"
+  curl "${CURL_ARGS[@]}" "${usage_base_url}/v0/management/usage"
 }
 
 build_auth_fields_payload() {
@@ -335,6 +456,11 @@ build_auth_status_payload() {
   printf '{"name":"%s","disabled":%s}' \
     "$(json_escape "${field_name}")" \
     "${disabled}"
+}
+
+build_auth_delete_payload() {
+  local field_name="$1"
+  printf '{"names":["%s"]}' "$(json_escape "${field_name}")"
 }
 
 patch_auth_fields() {
@@ -367,6 +493,20 @@ patch_auth_status() {
     "${BASE_URL}/v0/management/auth-files/status"
 }
 
+delete_auth_file() {
+  local field_name="$1"
+  local payload
+  build_curl_common_args
+  payload="$(build_auth_delete_payload "${field_name}")"
+
+  curl "${CURL_ARGS[@]}" \
+    -X DELETE \
+    -H "Content-Type: application/json" \
+    -H "Origin: ${BASE_URL}" \
+    --data-raw "${payload}" \
+    "${BASE_URL}/v0/management/auth-files"
+}
+
 disable_auth_entry_if_needed() {
   local field_name="$1"
   local index="$2"
@@ -382,6 +522,20 @@ disable_auth_entry_if_needed() {
   AUTH_DISABLED_FLAGS[index]="true"
 }
 
+promote_free_auth_entry_if_needed() {
+  local field_name="$1"
+  local index="$2"
+  local priority="${AUTH_PRIORITIES[index]:-"-"}"
+
+  if [[ "${priority}" == "8" ]]; then
+    return 0
+  fi
+
+  log "free 账号调整优先级: ${field_name}（${priority} -> 8）"
+  patch_auth_fields "${field_name}" "8" >/dev/null
+  AUTH_PRIORITIES[index]="8"
+}
+
 query_auth_files() {
   log "查询 auth-files"
   fetch_auth_files
@@ -391,6 +545,18 @@ query_auth_files() {
 update_auth_fields() {
   log "更新 auth-fields: ${FIELD_NAME} -> priority ${FIELD_PRIORITY}"
   patch_auth_fields "${FIELD_NAME}" "${FIELD_PRIORITY}"
+  printf '\n'
+}
+
+set_auth_priority() {
+  log "设置账号优先级: ${FIELD_NAME} -> ${FIELD_PRIORITY}"
+  patch_auth_fields "${FIELD_NAME}" "${FIELD_PRIORITY}"
+  printf '\n'
+}
+
+delete_auth_file_action() {
+  log "删除 auth-file: ${FIELD_NAME}"
+  delete_auth_file "${FIELD_NAME}"
   printf '\n'
 }
 
@@ -580,8 +746,8 @@ print_auto_priority_report() {
 
 print_auto_priority_rules() {
   printf '优先级处理规则：\n'
-  printf '1. free 账号仅在订阅未过期且剩余不足 3 天时自动提权：48~72h => 8，24~48h => 9，12~24h => 10，<12h => 11。\n'
-  printf '2. free 账号当前优先级已 >= 8 时，订阅结束前不再继续上调，只保留状态文件等待到期后恢复原优先级。\n'
+  printf '1. free 账号在订阅未过期时自动调整到优先级 8。\n'
+  printf '2. free 账号当前优先级已为 8 时，订阅结束前不再调整，只保留状态文件等待到期后恢复原优先级。\n'
   printf '3. 非 free 账号在订阅未过期时不参与自动提权。\n'
   printf '4. 非 free 账号订阅已过期且未超过 10 天时，直接调整到最高优先级 11；过期超过 10 天不处理。\n'
   printf '5. 已记录在 %s 的托管账号，到期后会按记录自动恢复原 priority。\n' "${STATE_FILE}"
@@ -675,8 +841,8 @@ auto_manage_priorities_for_current_entries() {
       continue
     fi
 
-    if [[ "${priority}" =~ ^-?[0-9]+$ ]] && (( priority >= 8 )); then
-      # 账号已经在高优先级区间时，不再按剩余时间继续上调，只保留恢复记录等待订阅结束。
+    if [[ "${priority}" == "8" ]]; then
+      # 账号已经在 free 目标优先级时，不再继续调整，只保留恢复记录等待订阅结束。
       if [[ -n "${original_priority}" ]]; then
         state_set_managed_priority "${name}" "${original_priority}" "${priority}" "${subscription_until}"
       fi
@@ -685,6 +851,7 @@ auto_manage_priorities_for_current_entries() {
       continue
     fi
 
+    target_priority="8"
     if [[ -n "${target_priority}" ]]; then
       if [[ -z "${original_priority}" ]]; then
         # 首次进入托管区间时，锁定当时的原始 priority，后续不再覆盖。
@@ -693,10 +860,9 @@ auto_manage_priorities_for_current_entries() {
       fi
 
       if [[ "${priority}" != "${target_priority}" ]]; then
-        remaining_seconds=$((subscription_until_epoch - now_epoch))
-        log "自动提权: ${name} ${priority} -> ${target_priority}（剩余 $(format_remaining_duration "${remaining_seconds}")）"
+        log "free 账号调整优先级: ${name} ${priority} -> ${target_priority}"
         patch_auth_fields "${name}" "${target_priority}" >/dev/null
-        record_auto_priority_line "调整: ${name} | ${priority} -> ${target_priority} | 剩余 $(format_remaining_duration "${remaining_seconds}") | 到期 $(format_subscription_time "${subscription_until}")"
+        record_auto_priority_line "free调整: ${name} | ${priority} -> ${target_priority} | 到期 $(format_subscription_time "${subscription_until}")"
         priority="${target_priority}"
         AUTH_PRIORITIES[index]="${target_priority}"
         AUTO_PRIORITY_MANAGED=$((AUTO_PRIORITY_MANAGED + 1))
@@ -1013,6 +1179,361 @@ render_usage_table() {
     printf '   订阅: %s\n' "${subscription_info}"
     printf '   刷新: %s / %s\n' "${five_hour_reset}" "${week_reset}"
     if [[ "${row_number}" -lt "${total_rows}" ]]; then
+      printf '\n'
+    fi
+  done
+}
+
+render_management_usage() {
+  local response="$1"
+  local usage_date
+  local start_epoch
+  local end_epoch
+
+  usage_date="$(date '+%Y-%m-%d')"
+  start_epoch="$(date -d 'today 00:00:00' '+%s')"
+  end_epoch="$(date -d 'tomorrow 00:00:00' '+%s')"
+
+  printf '%s' "${response}" | jq -r \
+    --arg usage_date "${usage_date}" \
+    --argjson start_epoch "${start_epoch}" \
+    --argjson end_epoch "${end_epoch}" '
+    def sum_tokens($items): ($items | map(.tokens.total_tokens // 0) | add // 0);
+    def fail_count($items): ($items | map(select(.failed == true)) | length);
+    def ok_count($items): ($items | length) - fail_count($items);
+    def pct($part; $total):
+      if ($total | tonumber) == 0 then "0%"
+      else (((($part | tonumber) * 10000 / ($total | tonumber)) | floor) / 100 | tostring) + "%"
+      end;
+    def token_m($tokens):
+      (((($tokens // 0) | tonumber) / 10000 | floor) / 100 | tostring) + "M";
+    def timestamp_epoch:
+      (.timestamp // "" | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?);
+    def summary_name:
+      ((.auth_file_snapshot // .account_snapshot // .auth_label_snapshot // .source // "(未知账号)") | tostring)
+      | sub("\\.json$"; "")
+      | split("@")[0]
+      | sub("^codex-"; "")
+      | sub("^code-"; "");
+
+    . as $root
+    | [
+        ($root.apis // {})
+        | to_entries[]
+        | .key as $api
+        | (.value.models // {})
+        | to_entries[]
+        | .key as $model
+        | (.value.details[]? + {api: $api, model: $model})
+        | (timestamp_epoch) as $ts
+        | select($ts != null and $ts >= $start_epoch and $ts < $end_epoch)
+      ] as $details
+    | ($details | length) as $total
+    | ok_count($details) as $ok
+    | fail_count($details) as $fail
+    | sum_tokens($details) as $tokens
+    | [
+        ("管理端当天用量：" + $usage_date),
+        "",
+        ("总请求: " + ($total | tostring)),
+        ("成功/失败: " + ($ok | tostring) + "/" + ($fail | tostring)),
+        ("成功率: " + pct($ok; $total)),
+        ("总 tokens: " + token_m($tokens)),
+        "",
+        "账号汇总:"
+      ],
+      (
+        $details
+        | group_by(summary_name)
+        | map(
+            . as $items
+            | {
+                account: ($items[0] | summary_name),
+                requests: ($items | length),
+                ok: ok_count($items),
+                fail: fail_count($items),
+                tokens: sum_tokens($items),
+                models: ($items | map(.model) | unique | length)
+              }
+          )
+        | sort_by(-.tokens, .account)
+        | .[]
+        | "- " + .account + ": 请求 " + (.requests | tostring)
+          + "，成功/失败 " + (.ok | tostring) + "/" + (.fail | tostring)
+          + "，tokens " + token_m(.tokens)
+          + "，使用模型数 " + (.models | tostring)
+      ),
+      "",
+      "模型汇总:",
+      (
+        $details
+        | group_by(.model)
+        | map(
+            . as $items
+            | {
+                model: $items[0].model,
+                requests: ($items | length),
+                ok: ok_count($items),
+                fail: fail_count($items),
+                tokens: sum_tokens($items),
+                accounts: ($items | map(summary_name) | unique | length)
+              }
+          )
+        | sort_by(-.tokens, .model)
+        | .[]
+        | "- " + .model + ": 请求 " + (.requests | tostring)
+          + "，成功/失败 " + (.ok | tostring) + "/" + (.fail | tostring)
+          + "，tokens " + token_m(.tokens)
+          + "，使用账号数 " + (.accounts | tostring)
+      ),
+      "",
+      "接口汇总:",
+      (
+        $details
+        | group_by(.api)
+        | map(
+            . as $items
+            | {
+                api: $items[0].api,
+                requests: ($items | length),
+                ok: ok_count($items),
+                fail: fail_count($items),
+                tokens: sum_tokens($items),
+                models: ($items | map(.model) | unique | length)
+              }
+          )
+        | sort_by(-.tokens, .api)
+        | .[]
+        | "- " + .api + ": 请求 " + (.requests | tostring)
+          + "，成功/失败 " + (.ok | tostring) + "/" + (.fail | tostring)
+          + "，tokens " + token_m(.tokens)
+          + "，使用模型数 " + (.models | tostring)
+      )
+    | if type == "array" then .[] else . end
+  '
+}
+
+build_management_usage_snapshot_json() {
+  local response="$1"
+  local usage_date
+  local start_epoch
+  local end_epoch
+
+  usage_date="$(date '+%Y-%m-%d')"
+  start_epoch="$(date -d 'today 00:00:00' '+%s')"
+  end_epoch="$(date -d 'tomorrow 00:00:00' '+%s')"
+
+  printf '%s' "${response}" | jq -c \
+    --arg usage_date "${usage_date}" \
+    --argjson start_epoch "${start_epoch}" \
+    --argjson end_epoch "${end_epoch}" '
+    def sum_tokens($items): ($items | map(.tokens.total_tokens // 0) | add // 0);
+    def fail_count($items): ($items | map(select(.failed == true)) | length);
+    def ok_count($items): ($items | length) - fail_count($items);
+    def pct($part; $total):
+      if ($total | tonumber) == 0 then "0%"
+      else (((($part | tonumber) * 10000 / ($total | tonumber)) | floor) / 100 | tostring) + "%"
+      end;
+    def token_m($tokens):
+      (((($tokens // 0) | tonumber) / 10000 | floor) / 100 | tostring) + "M";
+    def timestamp_epoch:
+      (.timestamp // "" | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?);
+    def summary_name:
+      ((.auth_file_snapshot // .account_snapshot // .auth_label_snapshot // .source // "(未知账号)") | tostring)
+      | sub("\\.json$"; "")
+      | split("@")[0]
+      | sub("^codex-"; "")
+      | sub("^code-"; "");
+
+    . as $root
+    | [
+        ($root.apis // {})
+        | to_entries[]
+        | .key as $api
+        | (.value.models // {})
+        | to_entries[]
+        | .key as $model
+        | (.value.details[]? + {api: $api, model: $model})
+        | (timestamp_epoch) as $ts
+        | select($ts != null and $ts >= $start_epoch and $ts < $end_epoch)
+      ] as $details
+    | ($details | length) as $total
+    | ok_count($details) as $ok
+    | fail_count($details) as $fail
+    | sum_tokens($details) as $tokens
+    | {
+        available: true,
+        date: $usage_date,
+        total_requests: $total,
+        ok: $ok,
+        fail: $fail,
+        success_rate: pct($ok; $total),
+        total_tokens_m: token_m($tokens),
+        accounts: (
+          $details
+          | group_by(summary_name)
+          | map(
+              . as $items
+              | {
+                  name: ($items[0] | summary_name),
+                  requests: ($items | length),
+                  ok: ok_count($items),
+                  fail: fail_count($items),
+                  tokens_m: token_m(sum_tokens($items)),
+                  model_count: ($items | map(.model) | unique | length)
+                }
+            )
+          | sort_by(-(.tokens_m | sub("M$"; "") | tonumber), .name)
+        ),
+        models: (
+          $details
+          | group_by(.model)
+          | map(
+              . as $items
+              | {
+                  name: $items[0].model,
+                  requests: ($items | length),
+                  ok: ok_count($items),
+                  fail: fail_count($items),
+                  tokens_m: token_m(sum_tokens($items)),
+                  account_count: ($items | map(summary_name) | unique | length)
+                }
+            )
+          | sort_by(-(.tokens_m | sub("M$"; "") | tonumber), .name)
+        ),
+        apis: (
+          $details
+          | group_by(.api)
+          | map(
+              . as $items
+              | {
+                  name: $items[0].api,
+                  requests: ($items | length),
+                  ok: ok_count($items),
+                  fail: fail_count($items),
+                  tokens_m: token_m(sum_tokens($items)),
+                  model_count: ($items | map(.model) | unique | length)
+                }
+            )
+          | sort_by(-(.tokens_m | sub("M$"; "") | tonumber), .name)
+        )
+      }
+  '
+}
+
+collect_management_usage_snapshot_json() {
+  local response
+
+  if ! response="$(fetch_management_usage 2>&1)"; then
+    log "management usage 快照跳过: $(compact_error_reason "${response}")"
+    printf 'null'
+    return 0
+  fi
+
+  if ! printf '%s' "${response}" | jq -e 'type == "object" and (.apis | type == "object")' >/dev/null 2>&1; then
+    log "management usage 快照跳过: 响应不是预期 JSON 对象"
+    printf 'null'
+    return 0
+  fi
+
+  build_management_usage_snapshot_json "${response}" || {
+    log "management usage 快照跳过: 解析失败"
+    printf 'null'
+  }
+}
+
+save_management_usage_snapshot() {
+  local response="$1"
+  local management_usage_json
+  local tmp_file
+
+  management_usage_json="$(build_management_usage_snapshot_json "${response}")" || {
+    die "management usage 快照解析失败"
+  }
+
+  mkdir -p "$(dirname "${PROMPT_FILE}")"
+  tmp_file="$(mktemp "${PROMPT_FILE}.XXXXXX")"
+  if [[ -s "${PROMPT_FILE}" ]] && jq -e 'type == "object"' "${PROMPT_FILE}" >/dev/null 2>&1; then
+    # 单独查询 usage 时只更新 usage 节点，保留已有额度快照内容。
+    jq --argjson management_usage "${management_usage_json}" \
+      '.management_usage = $management_usage' \
+      "${PROMPT_FILE}" > "${tmp_file}" || {
+        rm -f "${tmp_file}"
+        die "更新提示词快照 usage 失败: ${PROMPT_FILE}"
+      }
+  else
+    jq -n \
+      --arg generated_at "$(current_timestamp_local)" \
+      --argjson management_usage "${management_usage_json}" \
+      '{
+        generated_at: $generated_at,
+        auth: [],
+        management_usage: $management_usage,
+        summary: {
+          total: "0",
+          ok: "0",
+          error: "0",
+          sum_5h: "0",
+          sum_week: "0",
+          five_hour_items: [],
+          week_items: [],
+          expiry_items: [],
+          free_items: [],
+          error_items: []
+        },
+        result_rows: []
+      }' > "${tmp_file}" || {
+        rm -f "${tmp_file}"
+        die "写入提示词快照 usage 失败: ${PROMPT_FILE}"
+      }
+  fi
+  mv "${tmp_file}" "${PROMPT_FILE}"
+  log "已更新提示词快照 usage: ${PROMPT_FILE}"
+}
+
+render_disabled_list() {
+  local total="${#AUTH_NAMES[@]}"
+  local index=0
+  local count=0
+  local name note priority auth_index account_id plan_type subscription_start subscription_until disabled
+  local plan_info subscription_info
+  local -a disabled_rows=()
+
+  while [[ "${index}" -lt "${total}" ]]; do
+    disabled="${AUTH_DISABLED_FLAGS[index]:-"false"}"
+    if [[ "${disabled}" == "true" ]]; then
+      name="${AUTH_NAMES[index]:-"(未命名)"}"
+      note="${AUTH_NOTES[index]:-"-"}"
+      priority="${AUTH_PRIORITIES[index]:-"-"}"
+      auth_index="${AUTH_INDEXES[index]:-"-"}"
+      account_id="${AUTH_ACCOUNT_IDS[index]:-"-"}"
+      plan_type="${AUTH_PLAN_TYPES[index]:-"-"}"
+      subscription_start="${AUTH_SUBSCRIPTION_STARTS[index]:-"-"}"
+      subscription_until="${AUTH_SUBSCRIPTION_UNTILS[index]:-"-"}"
+      plan_info="${plan_type} | 账号ID: ${account_id}"
+      subscription_info="$(format_subscription_time "${subscription_start}") -> $(format_subscription_time "${subscription_until}")"
+      disabled_rows+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${auth_index}"$'\t'"${plan_info}"$'\t'"${subscription_info}")
+    fi
+    index=$((index + 1))
+  done
+
+  printf '禁用列表：%s\n' "${#disabled_rows[@]}"
+  if [[ "${#disabled_rows[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  printf '\n'
+  for row in "${disabled_rows[@]}"; do
+    count=$((count + 1))
+    IFS=$'\t' read -r name note priority auth_index plan_info subscription_info <<< "${row}"
+    printf '%s. %s\n' "${count}" "${name}"
+    printf '   状态：disabled=true\n'
+    printf '   备注: %s\n' "${note}"
+    printf '   优先级: %s\n' "${priority}"
+    printf '   套餐: %s\n' "${plan_info}"
+    printf '   订阅: %s\n' "${subscription_info}"
+    printf '   authIndex: %s\n' "${auth_index}"
+    if [[ "${count}" -lt "${#disabled_rows[@]}" ]]; then
       printf '\n'
     fi
   done
@@ -1375,7 +1896,7 @@ build_expiry_focus_line() {
 
 save_prompt_snapshot() {
   local tmp_file
-  local auth_json result_rows_json summary_5h_json summary_week_json summary_expiry_json summary_free_json error_json
+  local auth_json result_rows_json summary_5h_json summary_week_json summary_expiry_json summary_free_json error_json management_usage_json
 
   auth_json="$(
     local count="${#AUTH_NAMES[@]}"
@@ -1477,6 +1998,10 @@ save_prompt_snapshot() {
     '
   )"
 
+  # management usage 属于辅助快照，采集失败时写 null，不阻断额度查询结果落盘。
+  log "查询 management usage 快照"
+  management_usage_json="$(collect_management_usage_snapshot_json)"
+
   mkdir -p "$(dirname "${PROMPT_FILE}")"
   tmp_file="$(mktemp "${PROMPT_FILE}.XXXXXX")"
   jq -n \
@@ -1493,9 +2018,11 @@ save_prompt_snapshot() {
     --argjson summary_expiry_items "${summary_expiry_json}" \
     --argjson summary_free_items "${summary_free_json}" \
     --argjson summary_error_items "${error_json}" \
+    --argjson management_usage "${management_usage_json}" \
     '{
       generated_at: $generated_at,
       auth: $auth,
+      management_usage: $management_usage,
       summary: {
         total: $summary_total,
         ok: $summary_ok,
@@ -1609,6 +2136,35 @@ load_prompt_snapshot() {
   SUMMARY_ITEM_ORDER=0
 }
 
+build_management_usage_prompt_lines() {
+  [[ -f "${PROMPT_FILE}" ]] || return 0
+
+  jq -r '
+    def brief_items($items; $extra_key; $extra_label):
+      ($items // [])
+      | .[:8]
+      | map(
+          .name + " " + (.tokens_m // "0M") + "/" + ((.requests // 0) | tostring) + "次"
+          + (if .[$extra_key] != null then "（" + $extra_label + ((.[$extra_key] // 0) | tostring) + "）" else "" end)
+        )
+      | join("，");
+
+    .management_usage as $usage
+    | select($usage != null and ($usage.available // false) == true)
+    | [
+        ("当天用量汇总：" + ($usage.date // "-")),
+        ("总请求：" + (($usage.total_requests // 0) | tostring)
+          + "，成功/失败：" + (($usage.ok // 0) | tostring) + "/" + (($usage.fail // 0) | tostring)
+          + "，成功率：" + ($usage.success_rate // "0%")
+          + "，总 tokens：" + ($usage.total_tokens_m // "0M")),
+        ("用量账号汇总：" + (brief_items($usage.accounts; "model_count"; "模型数 "))),
+        ("用量模型汇总：" + (brief_items($usage.models; "account_count"; "账号数 "))),
+        ("用量接口汇总：" + (brief_items($usage.apis; "model_count"; "模型数 ")))
+      ]
+    | .[]
+  ' "${PROMPT_FILE}"
+}
+
 print_dashboard_image_prompt() {
   local five_hour_total="N/A"
   local week_total="N/A"
@@ -1638,6 +2194,7 @@ EOF
   build_free_summary_line
   build_disabled_summary_line
   build_error_summary_line
+  build_management_usage_prompt_lines
   build_refresh_focus_line '5h刷新重点' '5h'
   build_refresh_focus_line '周刷新重点' 'week'
   printf '账号补充信息：\n'
@@ -1808,10 +2365,8 @@ query_usage_for_auth_entries() {
     fi
     if [[ "${plan_type}" == "free" ]]; then
       SUMMARY_FREE_ITEMS+=("$(printf '%06d' "${current_index}")"$'\t'"${name}")
-      if [[ "${disabled_flag}" != "true" ]]; then
-        disable_auth_entry_if_needed "${name}" "${current_index}" "free 账号"
-        disabled_flag="true"
-      fi
+      promote_free_auth_entry_if_needed "${name}" "${current_index}"
+      priority="${AUTH_PRIORITIES[current_index]:-"8"}"
     fi
     plan_info="${plan_type} | 账号ID: ${account_id}"
     five_hour_reset="$(format_reset_time "${second}")"
@@ -1854,6 +2409,29 @@ run_usage_action() {
   query_usage_for_auth_entries
 }
 
+run_management_usage_action() {
+  local response
+
+  log "查询 management usage"
+  if ! response="$(fetch_management_usage 2>&1)"; then
+    die "management usage 请求失败: $(compact_error_reason "${response}")"
+  fi
+  if ! printf '%s' "${response}" | jq -e 'type == "object" and (.apis | type == "object")' >/dev/null 2>&1; then
+    die "management usage 响应不是预期 JSON 对象，请检查 --base-url 是否指向支持 /v0/management/usage 的服务"
+  fi
+  render_management_usage "${response}"
+  save_management_usage_snapshot "${response}"
+}
+
+run_disabled_list_action() {
+  local auth_files_response
+
+  log "从 auth-files 提取 disabled=true 账号"
+  auth_files_response="$(fetch_auth_files)"
+  resolve_auth_entries_from_auth_files "${auth_files_response}"
+  render_disabled_list
+}
+
 main() {
   parse_args "$@"
   BASE_URL="${BASE_URL%/}"
@@ -1871,6 +2449,26 @@ main() {
 
   if [[ "${ACTION}" == "usage" ]]; then
     run_usage_action
+    return 0
+  fi
+
+  if [[ "${ACTION}" == "management-usage" || "${ACTION}" == "server-usage" ]]; then
+    run_management_usage_action
+    return 0
+  fi
+
+  if [[ "${ACTION}" == "disabled-list" || "${ACTION}" == "disabled" ]]; then
+    run_disabled_list_action
+    return 0
+  fi
+
+  if [[ "${ACTION}" == "delete-auth" || "${ACTION}" == "delete-auth-file" ]]; then
+    delete_auth_file_action
+    return 0
+  fi
+
+  if [[ "${ACTION}" == "priority" || "${ACTION}" == "set-priority" ]]; then
+    set_auth_priority
     return 0
   fi
 
