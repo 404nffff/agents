@@ -452,6 +452,18 @@ fetch_management_usage() {
   curl "${CURL_ARGS[@]}" "${usage_base_url}/v0/management/usage"
 }
 
+is_supported_management_usage_response() {
+  local response="$1"
+
+  printf '%s' "${response}" | jq -e '
+    type == "object"
+    and (
+      (.apis | type) == "object"
+      or (.total_requests? != null)
+    )
+  ' >/dev/null 2>&1
+}
+
 build_auth_fields_payload() {
   local field_name="$1"
   local field_priority="$2"
@@ -1351,6 +1363,34 @@ render_management_usage() {
       end;
     def token_m($tokens):
       (((($tokens // 0) | tonumber) / 10000 | floor) / 100 | tostring) + "M";
+    def direct_ok:
+      (.ok // .success_count // ((.total_requests // 0) - (.failure_count // .fail // 0)));
+    def direct_fail:
+      (.fail // .failure_count // 0);
+    def direct_success_rate:
+      (.success_rate // pct(direct_ok; (.total_requests // 0)));
+    def direct_tokens_m:
+      (.total_tokens_m // token_m(.total_tokens // 0));
+    def as_item_array($items):
+      if ($items | type) == "array" then $items
+      elif ($items | type) == "object" then
+        $items | to_entries | map(.value + {name: (.value.name // .key)})
+      else []
+      end;
+    def detail_lines($items; $key; $extra_key; $extra_label):
+      as_item_array($items) as $normalized_items
+      | if ($normalized_items | length) == 0 then ["- 无"]
+      else
+        ($normalized_items
+        | sort_by(-((.tokens_m // "0M") | sub("M$"; "") | tonumber), (.[$key] // .name // ""))
+        | map(
+            "- " + ((.[$key] // .name // "-") | tostring)
+            + ": 请求 " + ((.requests // 0) | tostring)
+            + "，成功/失败 " + ((.ok // 0) | tostring) + "/" + ((.fail // 0) | tostring)
+            + "，tokens " + (.tokens_m // token_m(.tokens // .total_tokens // 0))
+            + (if .[$extra_key] != null then "，" + $extra_label + (.[$extra_key] | tostring) else "" end)
+          ))
+      end;
     def timestamp_epoch:
       (.timestamp // "" | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?);
     def summary_name:
@@ -1372,87 +1412,68 @@ render_management_usage() {
         | (timestamp_epoch) as $ts
         | select($ts != null and $ts >= $start_epoch and $ts < $end_epoch)
       ] as $details
-    | ($details | length) as $total
-    | ok_count($details) as $ok
-    | fail_count($details) as $fail
-    | sum_tokens($details) as $tokens
-    | [
-        ("管理端当天用量：" + $usage_date),
+    | if ($details | length) > 0 then
+        ($details | length) as $total
+        | ok_count($details) as $ok
+        | fail_count($details) as $fail
+        | sum_tokens($details) as $tokens
+        | [
+            ("管理端当天用量：" + $usage_date),
+            "",
+            ("总请求: " + ($total | tostring)),
+            ("成功/失败: " + ($ok | tostring) + "/" + ($fail | tostring)),
+            ("成功率: " + pct($ok; $total)),
+            ("总 tokens: " + token_m($tokens)),
+            "",
+            "账号汇总:"
+          ],
+          (
+            $details
+            | group_by(summary_name)
+            | map(. as $items | {account: ($items[0] | summary_name), requests: ($items | length), ok: ok_count($items), fail: fail_count($items), tokens: sum_tokens($items), models: ($items | map(.model) | unique | length)})
+            | sort_by(-.tokens, .account)
+            | .[]
+            | "- " + .account + ": 请求 " + (.requests | tostring) + "，成功/失败 " + (.ok | tostring) + "/" + (.fail | tostring) + "，tokens " + token_m(.tokens) + "，使用模型数 " + (.models | tostring)
+          ),
+          "",
+          "模型汇总:",
+          (
+            $details
+            | group_by(.model)
+            | map(. as $items | {model: $items[0].model, requests: ($items | length), ok: ok_count($items), fail: fail_count($items), tokens: sum_tokens($items), accounts: ($items | map(summary_name) | unique | length)})
+            | sort_by(-.tokens, .model)
+            | .[]
+            | "- " + .model + ": 请求 " + (.requests | tostring) + "，成功/失败 " + (.ok | tostring) + "/" + (.fail | tostring) + "，tokens " + token_m(.tokens) + "，使用账号数 " + (.accounts | tostring)
+          ),
+          "",
+          "接口汇总:",
+          (
+            $details
+            | group_by(.api)
+            | map(. as $items | {api: $items[0].api, requests: ($items | length), ok: ok_count($items), fail: fail_count($items), tokens: sum_tokens($items), models: ($items | map(.model) | unique | length)})
+            | sort_by(-.tokens, .api)
+            | .[]
+            | "- " + .api + ": 请求 " + (.requests | tostring) + "，成功/失败 " + (.ok | tostring) + "/" + (.fail | tostring) + "，tokens " + token_m(.tokens) + "，使用模型数 " + (.models | tostring)
+          )
+      else
+        [
+          ("管理端当天用量：" + ($root.date // $usage_date)),
+          "",
+          ("总请求: " + (($root.total_requests // 0) | tostring)),
+          ("成功/失败: " + ($root | direct_ok | tostring) + "/" + ($root | direct_fail | tostring)),
+          ("成功率: " + ($root | direct_success_rate)),
+          ("总 tokens: " + ($root | direct_tokens_m)),
+          "",
+          "账号汇总:"
+        ],
+        detail_lines($root.accounts; "account"; "model_count"; "使用模型数 "),
         "",
-        ("总请求: " + ($total | tostring)),
-        ("成功/失败: " + ($ok | tostring) + "/" + ($fail | tostring)),
-        ("成功率: " + pct($ok; $total)),
-        ("总 tokens: " + token_m($tokens)),
+        "模型汇总:",
+        detail_lines($root.models; "model"; "account_count"; "使用账号数 "),
         "",
-        "账号汇总:"
-      ],
-      (
-        $details
-        | group_by(summary_name)
-        | map(
-            . as $items
-            | {
-                account: ($items[0] | summary_name),
-                requests: ($items | length),
-                ok: ok_count($items),
-                fail: fail_count($items),
-                tokens: sum_tokens($items),
-                models: ($items | map(.model) | unique | length)
-              }
-          )
-        | sort_by(-.tokens, .account)
-        | .[]
-        | "- " + .account + ": 请求 " + (.requests | tostring)
-          + "，成功/失败 " + (.ok | tostring) + "/" + (.fail | tostring)
-          + "，tokens " + token_m(.tokens)
-          + "，使用模型数 " + (.models | tostring)
-      ),
-      "",
-      "模型汇总:",
-      (
-        $details
-        | group_by(.model)
-        | map(
-            . as $items
-            | {
-                model: $items[0].model,
-                requests: ($items | length),
-                ok: ok_count($items),
-                fail: fail_count($items),
-                tokens: sum_tokens($items),
-                accounts: ($items | map(summary_name) | unique | length)
-              }
-          )
-        | sort_by(-.tokens, .model)
-        | .[]
-        | "- " + .model + ": 请求 " + (.requests | tostring)
-          + "，成功/失败 " + (.ok | tostring) + "/" + (.fail | tostring)
-          + "，tokens " + token_m(.tokens)
-          + "，使用账号数 " + (.accounts | tostring)
-      ),
-      "",
-      "接口汇总:",
-      (
-        $details
-        | group_by(.api)
-        | map(
-            . as $items
-            | {
-                api: $items[0].api,
-                requests: ($items | length),
-                ok: ok_count($items),
-                fail: fail_count($items),
-                tokens: sum_tokens($items),
-                models: ($items | map(.model) | unique | length)
-              }
-          )
-        | sort_by(-.tokens, .api)
-        | .[]
-        | "- " + .api + ": 请求 " + (.requests | tostring)
-          + "，成功/失败 " + (.ok | tostring) + "/" + (.fail | tostring)
-          + "，tokens " + token_m(.tokens)
-          + "，使用模型数 " + (.models | tostring)
-      )
+        "接口汇总:",
+        detail_lines($root.apis; "api"; "model_count"; "使用模型数 ")
+      end
     | if type == "array" then .[] else . end
   '
 }
@@ -1480,6 +1501,30 @@ build_management_usage_snapshot_json() {
       end;
     def token_m($tokens):
       (((($tokens // 0) | tonumber) / 10000 | floor) / 100 | tostring) + "M";
+    def direct_ok:
+      (.ok // .success_count // ((.total_requests // 0) - (.failure_count // .fail // 0)));
+    def direct_fail:
+      (.fail // .failure_count // 0);
+    def direct_success_rate:
+      (.success_rate // pct(direct_ok; (.total_requests // 0)));
+    def direct_tokens_m:
+      (.total_tokens_m // token_m(.total_tokens // 0));
+    def as_item_array($items):
+      if ($items | type) == "array" then $items
+      elif ($items | type) == "object" then
+        $items | to_entries | map(.value + {name: (.value.name // .key)})
+      else []
+      end;
+    def normalize_items($items; $name_key; $extra_key):
+      as_item_array($items)
+      | map({
+          name: ((.name // .[$name_key] // "-") | tostring),
+          requests: (.requests // 0),
+          ok: (.ok // .success_count // 0),
+          fail: (.fail // .failure_count // 0),
+          tokens_m: (.tokens_m // token_m(.tokens // .total_tokens // 0)),
+          ($extra_key): (.[$extra_key] // null)
+        });
     def timestamp_epoch:
       (.timestamp // "" | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?);
     def summary_name:
@@ -1501,80 +1546,75 @@ build_management_usage_snapshot_json() {
         | (timestamp_epoch) as $ts
         | select($ts != null and $ts >= $start_epoch and $ts < $end_epoch)
       ] as $details
-    | ($details | length) as $total
-    | ok_count($details) as $ok
-    | fail_count($details) as $fail
-    | sum_tokens($details) as $tokens
-    | {
-        available: true,
-        date: $usage_date,
-        total_requests: $total,
-        ok: $ok,
-        fail: $fail,
-        success_rate: pct($ok; $total),
-        total_tokens_m: token_m($tokens),
-        accounts: (
-          $details
-          | group_by(summary_name)
-          | map(
-              . as $items
-              | {
-                  name: ($items[0] | summary_name),
-                  requests: ($items | length),
-                  ok: ok_count($items),
-                  fail: fail_count($items),
-                  tokens_m: token_m(sum_tokens($items)),
-                  model_count: ($items | map(.model) | unique | length)
-                }
+    | if ($details | length) > 0 then
+        ($details | length) as $total
+        | ok_count($details) as $ok
+        | fail_count($details) as $fail
+        | sum_tokens($details) as $tokens
+        | {
+            available: true,
+            date: $usage_date,
+            total_requests: $total,
+            ok: $ok,
+            fail: $fail,
+            success_rate: pct($ok; $total),
+            total_tokens_m: token_m($tokens),
+            accounts: (
+              $details
+              | group_by(summary_name)
+              | map(. as $items | {name: ($items[0] | summary_name), requests: ($items | length), ok: ok_count($items), fail: fail_count($items), tokens_m: token_m(sum_tokens($items)), model_count: ($items | map(.model) | unique | length)})
+              | sort_by(-(.tokens_m | sub("M$"; "") | tonumber), .name)
+            ),
+            models: (
+              $details
+              | group_by(.model)
+              | map(. as $items | {name: $items[0].model, requests: ($items | length), ok: ok_count($items), fail: fail_count($items), tokens_m: token_m(sum_tokens($items)), account_count: ($items | map(summary_name) | unique | length)})
+              | sort_by(-(.tokens_m | sub("M$"; "") | tonumber), .name)
+            ),
+            apis: (
+              $details
+              | group_by(.api)
+              | map(. as $items | {name: $items[0].api, requests: ($items | length), ok: ok_count($items), fail: fail_count($items), tokens_m: token_m(sum_tokens($items)), model_count: ($items | map(.model) | unique | length)})
+              | sort_by(-(.tokens_m | sub("M$"; "") | tonumber), .name)
             )
-          | sort_by(-(.tokens_m | sub("M$"; "") | tonumber), .name)
-        ),
-        models: (
-          $details
-          | group_by(.model)
-          | map(
-              . as $items
-              | {
-                  name: $items[0].model,
-                  requests: ($items | length),
-                  ok: ok_count($items),
-                  fail: fail_count($items),
-                  tokens_m: token_m(sum_tokens($items)),
-                  account_count: ($items | map(summary_name) | unique | length)
-                }
-            )
-          | sort_by(-(.tokens_m | sub("M$"; "") | tonumber), .name)
-        ),
-        apis: (
-          $details
-          | group_by(.api)
-          | map(
-              . as $items
-              | {
-                  name: $items[0].api,
-                  requests: ($items | length),
-                  ok: ok_count($items),
-                  fail: fail_count($items),
-                  tokens_m: token_m(sum_tokens($items)),
-                  model_count: ($items | map(.model) | unique | length)
-                }
-            )
-          | sort_by(-(.tokens_m | sub("M$"; "") | tonumber), .name)
-        )
-      }
+          }
+      else
+        {
+          available: true,
+          date: ($root.date // $usage_date),
+          total_requests: ($root.total_requests // 0),
+          ok: ($root | direct_ok),
+          fail: ($root | direct_fail),
+          success_rate: ($root | direct_success_rate),
+          total_tokens_m: ($root | direct_tokens_m),
+          accounts: (normalize_items($root.accounts; "account"; "model_count") | sort_by(-(.tokens_m | sub("M$"; "") | tonumber), .name)),
+          models: (normalize_items($root.models; "model"; "account_count") | sort_by(-(.tokens_m | sub("M$"; "") | tonumber), .name)),
+          apis: (normalize_items($root.apis; "api"; "model_count") | sort_by(-(.tokens_m | sub("M$"; "") | tonumber), .name))
+        }
+      end
   '
 }
 
 collect_management_usage_snapshot_json() {
   local response
+  local curl_error_file
+  local curl_error
 
-  if ! response="$(fetch_management_usage 2>&1)"; then
-    log "management usage 快照跳过: $(compact_error_reason "${response}")；如响应较大可提高 --usage-timeout"
-    printf 'null'
-    return 0
+  curl_error_file="$(mktemp)"
+  if ! response="$(fetch_management_usage 2>"${curl_error_file}")"; then
+    curl_error="$(<"${curl_error_file}")"
+    rm -f "${curl_error_file}"
+    if ! is_supported_management_usage_response "${response}"; then
+      log "management usage 快照跳过: $(compact_error_reason "${curl_error:-${response}}")；如响应较大可提高 --usage-timeout"
+      printf 'null'
+      return 0
+    fi
+    log "management usage 快照收到可解析响应，忽略 curl 非零退出: $(compact_error_reason "${curl_error}")"
+  else
+    rm -f "${curl_error_file}"
   fi
 
-  if ! printf '%s' "${response}" | jq -e 'type == "object" and (.apis | type == "object")' >/dev/null 2>&1; then
+  if ! is_supported_management_usage_response "${response}"; then
     log "management usage 快照跳过: 响应不是预期 JSON 对象"
     printf 'null'
     return 0
@@ -2326,9 +2366,10 @@ print_dashboard_image_prompt() {
 企业运营看板 / SaaS BI dashboard / 业务汇报面板风格。
 整体要求：现代企业后台、运营周报、经营分析看板视觉；信息分区明确、卡片化布局、模块清晰、可读性高；强调业务汇报感，不要赛博朋克，不要强烈霓虹，不要海报式夸张光效。
 配色要求：蓝白商务风或稳重深蓝商务风；低风险/高剩余用蓝绿系，预警/低剩余用橙红系；整体干净、专业、可信。
-版式要求：顶部为标题与概要卡片；中部为 5h 剩余、周剩余两大重点模块；刷新时间信息分别内嵌到 5h剩余 和 周剩余 模块下方；底部保留异常、总结，以及“订阅时间快到期”板块。
+版式要求：顶部为标题与概要卡片；中部为 5h 剩余、周剩余、当天用量三大重点模块；刷新时间信息分别内嵌到 5h剩余 和 周剩余 模块下方；底部保留异常、总结，以及“订阅时间快到期”板块。
 严格约束：不要显示编造的日期、年份、时钟、时间戳；右上角、标题栏、页眉位置禁止出现任何时间、日期、最近更新时间、current time、last updated；不要杜撰数据，不要改写数字；只根据输入数据做可视化整理。
 请生成一张中文运营看板图片，标题为“账号额度监控摘要”。
+展示规则：5h剩余和周剩余中的 0% 账号必须展示，不能因为数值为 0 而省略；当天用量必须展示总请求、成功/失败、成功率、总 tokens，并尽量展示账号、模型、接口三类汇总。
 以下是必须严格使用的实时数据，请不要改写数字，不要添加不存在的项目：
 EOF
   print_overview_summary_block "${five_hour_total}" "${week_total}"
@@ -2345,7 +2386,7 @@ EOF
   build_account_info_lines
   build_expiry_focus_line
   cat <<'EOF'
-补充要求：5h剩余、周剩余、异常都要可视化展示；刷新时间不要单独做大模块，必须归属于对应模块。套餐必须显示在账号名右侧并使用 tag/标签样式；订阅与备注展示在账号名称下方。订阅到期颜色规则：小于等于 7 天用红色；小于等于 15 天但大于 7 天用黄色；其余保持普通样式。刷新重点必须完整展示给定条目，不允许截断、漏项或删除。输出特征：operations dashboard, business analytics board, enterprise SaaS admin UI, Chinese infographic, clean layout, highly readable.
+补充要求：5h剩余、周剩余、当天用量、异常都要可视化展示；刷新时间不要单独做大模块，必须归属于对应模块。套餐必须显示在账号名右侧并使用 tag/标签样式；订阅与备注展示在账号名称下方。订阅到期颜色规则：小于等于 7 天用红色；小于等于 15 天但大于 7 天用黄色；其余保持普通样式。刷新重点和 0% 剩余账号必须完整展示给定条目，不允许截断、漏项或删除。输出特征：operations dashboard, business analytics board, enterprise SaaS admin UI, Chinese infographic, clean layout, highly readable.
 EOF
 }
 
@@ -2355,7 +2396,6 @@ record_success_summary() {
   local week="$3"
   local include_remaining="${4:-true}"
   local entry_order=""
-  local five_hour_positive="false"
   local week_positive="false"
 
   SUMMARY_OK=$((SUMMARY_OK + 1))
@@ -2369,12 +2409,7 @@ record_success_summary() {
   fi
 
   if [[ "${five_hour}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-    if number_greater_than_zero "${five_hour}"; then
-      five_hour_positive="true"
-    fi
-    if [[ "${five_hour_positive}" == "true" && "${week_positive}" == "true" ]]; then
-      SUMMARY_5H_ITEMS+=("${five_hour}"$'\t'"${entry_order}"$'\t'"${name}")
-    fi
+    SUMMARY_5H_ITEMS+=("${five_hour}"$'\t'"${entry_order}"$'\t'"${name}")
     # 周剩余为 0 时，该账号的 5 小时额度实际不可用，不计入 5 小时总量。
     if [[ ! "${week}" =~ ^[0-9]+([.][0-9]+)?$ ]] || [[ "${week_positive}" == "true" ]]; then
       SUMMARY_SUM_5H="$(number_add "${SUMMARY_SUM_5H}" "${five_hour}")"
@@ -2382,9 +2417,7 @@ record_success_summary() {
   fi
 
   if [[ "${week}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-    if [[ "${week_positive}" == "true" ]]; then
-      SUMMARY_WEEK_ITEMS+=("${week}"$'\t'"${entry_order}"$'\t'"${name}")
-    fi
+    SUMMARY_WEEK_ITEMS+=("${week}"$'\t'"${entry_order}"$'\t'"${name}")
     SUMMARY_SUM_WEEK="$(number_add "${SUMMARY_SUM_WEEK}" "${week}")"
   fi
 }
@@ -2599,12 +2632,22 @@ run_usage_action() {
 
 run_management_usage_action() {
   local response
+  local curl_error_file
+  local curl_error
 
   log "查询 management usage"
-  if ! response="$(fetch_management_usage 2>&1)"; then
-    die "management usage 请求失败: $(compact_error_reason "${response}")；当前 usage 超时 ${USAGE_TIMEOUT}s，可加 --usage-timeout 180"
+  curl_error_file="$(mktemp)"
+  if ! response="$(fetch_management_usage 2>"${curl_error_file}")"; then
+    curl_error="$(<"${curl_error_file}")"
+    rm -f "${curl_error_file}"
+    if ! is_supported_management_usage_response "${response}"; then
+      die "management usage 请求失败: $(compact_error_reason "${curl_error:-${response}}")；当前 usage 超时 ${USAGE_TIMEOUT}s，可加 --usage-timeout 180"
+    fi
+    log "management usage 收到可解析响应，忽略 curl 非零退出: $(compact_error_reason "${curl_error}")"
+  else
+    rm -f "${curl_error_file}"
   fi
-  if ! printf '%s' "${response}" | jq -e 'type == "object" and (.apis | type == "object")' >/dev/null 2>&1; then
+  if ! is_supported_management_usage_response "${response}"; then
     die "management usage 响应不是预期 JSON 对象，请检查 --base-url 是否指向支持 /v0/management/usage 的服务"
   fi
   render_management_usage "${response}"
