@@ -11,6 +11,7 @@ import (
 type Options struct {
 	Driver       string
 	Profile      string
+	ListProfiles bool
 	ConfigPath   string
 	Host         string
 	Port         int
@@ -52,6 +53,7 @@ func Parse(args []string) (Options, error) {
 	fs := flag.NewFlagSet("db-query", flag.ContinueOnError)
 	fs.StringVar(&opts.Driver, "driver", "", "database driver: mysql|pgsql|mongo|redis|memcached|es")
 	fs.StringVar(&opts.Profile, "profile", "", "connection profile name")
+	fs.BoolVar(&opts.ListProfiles, "list-profiles", false, "list configured connection profiles without connecting to databases")
 	fs.StringVar(&opts.ConfigPath, "config", "", "config.env absolute path")
 	fs.StringVar(&opts.Host, "host", "", "database host")
 	fs.IntVar(&opts.Port, "port", 0, "database port")
@@ -112,14 +114,16 @@ func Parse(args []string) (Options, error) {
 	opts.OrderBy = firstNonEmpty(opts.OrderBy, opts.Sort)
 	opts.Where = strings.Join(opts.WhereClauses, " AND ")
 
-	if opts.Driver == "" {
+	if opts.Driver == "" && !opts.ListProfiles {
 		return Options{}, core.NewAppError(core.CodeInvalidArgument, "--driver is required")
 	}
 
-	switch opts.Driver {
-	case "mysql", "pgsql", "mongo", "redis", "memcached", "es":
-	default:
-		return Options{}, core.NewAppError(core.CodeInvalidArgument, "--driver must be one of mysql|pgsql|mongo|redis|memcached|es")
+	if opts.Driver != "" {
+		switch opts.Driver {
+		case "mysql", "pgsql", "mongo", "redis", "memcached", "es":
+		default:
+			return Options{}, core.NewAppError(core.CodeInvalidArgument, "--driver must be one of mysql|pgsql|mongo|redis|memcached|es")
+		}
 	}
 
 	if opts.Limit <= 0 {

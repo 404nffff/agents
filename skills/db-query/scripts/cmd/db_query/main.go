@@ -42,6 +42,29 @@ func main() {
 	}
 
 	startedAt := time.Now()
+	if opts.ListProfiles {
+		if configErr != nil {
+			printErrorAndExit(opts.Driver, core.WrapAppError(core.CodeInvalidConfig, configErr.Error(), configErr))
+		}
+		profiles, pErr := config.ListConfiguredProfiles(envVars, opts.Driver)
+		if pErr != nil {
+			printErrorAndExit(opts.Driver, core.WrapAppError(core.CodeInvalidConfig, pErr.Error(), pErr))
+		}
+		payload := profileListPayload{
+			Status:               "profiles",
+			ConfigPath:           configPath,
+			GlobalDefaultProfile: strings.TrimSpace(envVars["DB_PROFILE"]),
+			Drivers:              profiles,
+			Meta: map[string]any{
+				"elapsed_ms": time.Since(startedAt).Milliseconds(),
+			},
+		}
+		if err := core.PrintJSON(payload); err != nil {
+			printErrorAndExit(opts.Driver, core.WrapAppError(core.CodeInternalError, "failed to write output", err))
+		}
+		return
+	}
+
 	switch opts.Driver {
 	case "mysql":
 		runSQLDriver(startedAt, "mysql", opts, envVars, configErr)
@@ -86,6 +109,14 @@ func main() {
 	default:
 		printErrorAndExit(opts.Driver, core.NewAppError(core.CodeInvalidArgument, "unsupported driver"))
 	}
+}
+
+type profileListPayload struct {
+	Status               string                        `json:"status"`
+	ConfigPath           string                        `json:"config_path"`
+	GlobalDefaultProfile string                        `json:"global_default_profile,omitempty"`
+	Drivers              []config.DriverProfileSummary `json:"drivers"`
+	Meta                 map[string]any                `json:"meta,omitempty"`
 }
 
 func runSQLDriver(startedAt time.Time, driver string, opts cli.Options, envVars map[string]string, configErr error) {

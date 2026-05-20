@@ -47,16 +47,24 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
 | `view_image` | 获取界面截图或渲染图像供分析 | 需在配置中启用 `tools.view_image`。 |
 | `web_search_request` | 发起在线检索以补充事实依据 | 仅作为 MCP 检索不可用时的最终降级路径；默认关闭，需配置 `tools.web_search` 或执行时加 `--search`。 |
 
-### 4.2 外部工具 (MCP) 与降级策略
-| 类别 | MCP 工具名 | 规范与降级策略 |
-| :--- | :--- | :--- |
-| **项目知识库优先检索** | `skill[ai-localbase-background]` | 优先使用 `ai-localbase-background` skill。每次会话开始先通过该 skill 的统一入口执行 `init <当前启动目录>`，按启动目录 basename 确认或创建知识库并缓存真实 `kb_id`；检索优先走同步 `search` / `chat`；文档沉淀与维护默认走 `queue-upload` / `queue-append` / `queue-update` / `queue-delete`。`queue-*` 在 worker 未运行时自动拉起后台 worker，队列清空并空闲后自动退出。 |
-| **语义检索 / 代码定位** | `codebase-retrieval` / `code-index` | 任何需要理解代码上下文、探索性搜索必须优先调用 `codebase-retrieval`。若出现不可用、限流、超时、鉴权失败或连续失败，必须先重试 1 次；仍不可用时，**强制**降级到 `code-index`，先完成 `set_project_path` / `build_deep_index`，再使用 `search_code_advanced`、`get_file_summary`、`get_symbol_body` 等能力做文件定位、符号提取与上下文补全。仅当 `code-index` 也不可用时，才允许继续降级为原生 `Grep`/`Glob`/`Read`。 |
-| **数据库查询** | `skill[db-query]` / `skill[mysql-query]` | 只要代码中涉及数据库查询（包含 MySQL、Redis、Mongo、PGSQL），必须先使用 `db-query` skill；若为 MySQL 查询且 `db-query` 连续重试 3 次仍不可用、不存在或执行失败，才允许降级使用 `mysql-query` skill；禁止绕过该流程直接执行数据库查询。 |
-| **在线检索** | `exa` MCP | 发起通用网络事实补充、官方页面定位、产品/价格/新闻等实时信息查询时，首选使用 `exa` MCP（如 `web_search_exa`、`web_fetch_exa`）。若 `exa` MCP 不可用、超时或连续失败，再降级为原生 web search / `web_search_request`。 |
-| **文档搜索** | `context7` / `deepwiki` / `microsoft-docs-mcp` MCP | 查询库、框架、GitHub 仓库或 Microsoft / Azure 官方技术文档时，必须优先使用专用文档 MCP：通用库与框架文档使用 `context7`，GitHub 仓库架构与项目文档使用 `deepwiki`，Microsoft / Azure / .NET / Microsoft 365 相关文档与代码示例使用 `microsoft-docs-mcp`。若对应 MCP 不可用、无结果或连续失败，再降级为 `exa` MCP；仍不可用时才降级为原生 web search / `web_search_request`。 |
-| **深度思考** | `sequential-thinking` | 复杂问题分析、风险识别必须强制使用。 |
-| **任务规划** | `shrimp-task-manager` | 复杂任务必须使用 `plan_task`, `analyze_task`, `reflect_task`, `split_tasks` 做规模评估与任务拆解。 |
+### 4.2 Skill 工具与降级策略
+| 类别 | Skill 名称 | 描述 | 规范与降级策略 |
+| :--- | :--- | :--- | :--- |
+| **项目知识库** | `ai-localbase-background` | 项目知识库管理与检索 | 每次会话开始先执行 `init <当前启动目录>`，按启动目录 basename 确认或创建知识库并缓存真实 `kb_id`；检索优先走同步 `search` / `chat`；文档沉淀与维护默认走 `queue-upload` / `queue-append` / `queue-update` / `queue-delete`。`queue-*` 在 worker 未运行时自动拉起后台 worker，队列清空并空闲后自动退出。 |
+| **数据库查询** | `db-query` | 多数据库统一查询接口 | 只要代码中涉及数据库查询（包含 MySQL、Redis、Mongo、PGSQL），必须先使用 `db-query` skill；若为 MySQL 查询且 `db-query` 连续重试 3 次仍不可用、不存在或执行失败，才允许降级使用 `mysql-query` skill；禁止绕过该流程直接执行数据库查询。 |
+| **数据库查询** | `mysql-query` | MySQL 专用查询接口 | 仅作为 `db-query` 的降级备选，仅限 MySQL 查询场景。 |
+
+### 4.3 MCP 工具与降级策略
+| 类别 | MCP 工具名 | 描述 | 规范与降级策略 |
+| :--- | :--- | :--- | :--- |
+| **语义检索** | `codebase-retrieval` | 代码语义理解与检索 | 任何需要理解代码上下文、探索性搜索必须优先调用。若出现不可用、限流、超时、鉴权失败或连续失败，必须先重试 1 次；仍不可用时，**强制**降级到 `code-index`。 |
+| **代码索引** | `code-index` | 代码文件级与符号级索引 | 作为 `codebase-retrieval` 的降级备选。先完成 `set_project_path` / `build_deep_index`，再使用 `search_code_advanced`、`get_file_summary`、`get_symbol_body` 等能力做文件定位、符号提取与上下文补全。仅当 `code-index` 也不可用时，才允许继续降级为原生 `Grep`/`Glob`/`Read`。 |
+| **在线检索** | `exa` | 网络实时信息检索 | 发起通用网络事实补充、官方页面定位、产品/价格/新闻等实时信息查询时首选。工具：`web_search_exa`、`web_fetch_exa`。若不可用、超时或连续失败，再降级为原生 web search / `web_search_request`。 |
+| **文档搜索** | `context7` | 通用库与框架文档 | 查询库、框架文档时优先使用。若不可用、无结果或连续失败，降级为 `exa` MCP；仍不可用时才降级为原生 web search / `web_search_request`。 |
+| **文档搜索** | `deepwiki` | GitHub 仓库文档 | 查询 GitHub 仓库架构与项目文档时使用。降级策略同 `context7`。 |
+| **文档搜索** | `microsoft-docs-mcp` | Microsoft 技术文档 | 查询 Microsoft / Azure / .NET / Microsoft 365 相关文档与代码示例时使用。降级策略同 `context7`。 |
+| **深度思考** | `sequential-thinking` | 复杂问题分步分析 | 复杂问题分析、风险识别必须强制使用。 |
+| **任务规划** | `shrimp-task-manager` | 任务规模评估与拆解 | 复杂任务必须使用 `plan_task`, `analyze_task`, `reflect_task`, `split_tasks` 做规模评估与任务拆解。 |
 
 ## 5. 项目知识库
 ### 5.1 ai-localbase-background skill 优先规范

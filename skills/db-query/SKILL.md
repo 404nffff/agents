@@ -1,6 +1,6 @@
 ---
 name: db-query
-description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/PostgreSQL/Elasticsearch。配置采用 DRIVER 前缀加 profile 后缀的多库模式（例如 `MYSQL_HOST_main`、`REDIS_ADDR_cache`、`MEMCACHED_ADDR_cache`、`ES_URL_main`），通过 `--profile` 或 `DB_PROFILE` 选择。默认只允许只读查询，并强制输出 JSON。
+description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/PostgreSQL/Elasticsearch。配置采用 DRIVER 前缀加 profile 后缀的多库模式（例如 `MYSQL_HOST_main`、`REDIS_ADDR_cache`、`MEMCACHED_ADDR_cache`、`ES_URL_main`），首次使用先执行 `--list-profiles` 暴露当前配置中的 profile，再通过 `--profile` 或 `DB_PROFILE` 选择。默认只允许只读查询，并强制输出 JSON。
 ---
 
 # DB Query
@@ -32,6 +32,54 @@ description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/Postg
 以下示例统一遵循上述规则：如果工作区存在 `docs/db.env`，请在命令中补上 `--config docs/db.env`；否则按默认回退到 skill 根目录 `config.env`。
 
 ## 快速开始
+
+### 0) 首次使用：先确认配置与 profile（强制）
+
+第一次在某个工作区使用本 skill 时，必须先执行 `--list-profiles`，确认实际读取的配置文件、可用 profile、全局默认 profile 与驱动默认 profile。该命令只读取配置并输出 profile 名称，不连接数据库，也不输出密码、URI 等敏感值。
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --list-profiles
+```
+
+如果只需要确认某个驱动：
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --list-profiles \
+  --driver mysql
+```
+
+若工作区存在 `docs/db.env`：
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --config docs/db.env \
+  --list-profiles
+```
+
+返回示例：
+
+```json
+{
+  "status": "profiles",
+  "config_path": "/mnt/project/docs/db.env",
+  "global_default_profile": "main",
+  "drivers": [
+    {
+      "driver": "mysql",
+      "profiles": ["main", "report"],
+      "driver_default_profile": "report",
+      "effective_default_profile": "main"
+    }
+  ],
+  "meta": {
+    "elapsed_ms": 1
+  }
+}
+```
+
+如果某个驱动的 `effective_default_profile` 不在该驱动的 `profiles` 数组中，说明全局 `DB_PROFILE` 覆盖了驱动默认值但该驱动没有对应连接配置；此时查询必须显式传入该驱动可用的 `--profile`。
 
 ### 1) MySQL / PostgreSQL（统一结构化参数）
 
@@ -155,6 +203,7 @@ description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/Postg
 
 优先使用以下统一参数名：
 
+- `--list-profiles`：只读取配置并输出当前配置中暴露的 profile 名称；可选配合 `--driver` 过滤单个驱动
 - `--target`：SQL 的表名、Mongo 的 collection、Redis 的 key 或 pattern、Memcached 的 key、ES 的 index
 - `--fields`：SQL 字段列表、Mongo 投影字段列表、ES `_source` 字段列表
 - `--where`：SQL 条件表达式，或 Mongo / ES 条件 `字段:操作符:值`

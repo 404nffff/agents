@@ -109,3 +109,29 @@ func TestParseAcceptsMemcachedDriverWithUnifiedFlags(t *testing.T) {
 		t.Fatalf("expected keys preserved, got %q", opts.Keys)
 	}
 }
+
+func TestParseAllowsListProfilesWithoutDriver(t *testing.T) {
+	opts, err := Parse([]string{"--list-profiles"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !opts.ListProfiles {
+		t.Fatalf("expected list profiles flag to be true")
+	}
+	if opts.Driver != "" {
+		t.Fatalf("expected empty driver, got %q", opts.Driver)
+	}
+}
+
+func TestParseAllowsListProfilesWithDriverFilter(t *testing.T) {
+	opts, err := Parse([]string{"--list-profiles", "--driver", "mysql"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !opts.ListProfiles {
+		t.Fatalf("expected list profiles flag to be true")
+	}
+	if opts.Driver != "mysql" {
+		t.Fatalf("expected mysql driver, got %q", opts.Driver)
+	}
+}

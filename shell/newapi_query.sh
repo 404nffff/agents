@@ -19,6 +19,35 @@ set -euo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
 SCRIPT_DIR="$(cd -- "$(dirname "$0")" && pwd)"
+CURRENT_DIR="${PWD:-$(pwd)}"
+DEFAULT_ENV_FILE="${CURRENT_DIR}/cpa.env"
+ENV_FILE="${NEWAPI_ENV_FILE:-${CPA_ENV_FILE:-${DEFAULT_ENV_FILE}}}"
+
+load_newapi_env_file() {
+  local env_file="${1:-}"
+  local -a preserved_names=()
+  local -A preserved_values=()
+  local var_name
+  [[ -n "${env_file}" ]] || return 0
+  [[ -f "${env_file}" ]] || return 0
+
+  while IFS= read -r var_name; do
+    [[ -n "${var_name}" ]] || continue
+    preserved_names+=("${var_name}")
+    preserved_values["${var_name}"]="${!var_name}"
+  done < <(compgen -A variable NEWAPI_ || true)
+
+  # 仅加载当前工作区内约定路径的本地配置文件，用于减少重复传参。
+  # shellcheck disable=SC1090
+  . "${env_file}"
+
+  for var_name in "${preserved_names[@]}"; do
+    printf -v "${var_name}" '%s' "${preserved_values[${var_name}]}"
+    export "${var_name}"
+  done
+}
+
+load_newapi_env_file "${ENV_FILE}"
 
 ACTION="log"
 BASE_URL="${NEWAPI_BASE_URL:-}"
@@ -48,6 +77,7 @@ usage() {
 
 说明:
   查询 NewAPI 面板日志接口 GET /api/log/，自动翻页拉取全量结果，默认保存到 ${OUTPUT_FILE}。
+  默认会先读取当前运行目录下的 cpa.env（${DEFAULT_ENV_FILE}）；如需覆盖路径，可设置 NEWAPI_ENV_FILE 或 CPA_ENV_FILE。
   --base-url 可传站点根地址或 /v1 地址；如果传入 /v1，脚本会自动退回站点根地址拼接 /api/log/。
   默认时间范围为本地当天 00:00:00 到当前时间。
   汇总金额按历史前端逻辑 quota / 500000 计算。

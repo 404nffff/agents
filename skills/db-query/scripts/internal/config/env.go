@@ -6,10 +6,69 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
 var profileNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+type DriverProfileSummary struct {
+	Driver                  string   `json:"driver"`
+	Profiles                []string `json:"profiles"`
+	DriverDefaultProfile    string   `json:"driver_default_profile,omitempty"`
+	EffectiveDefaultProfile string   `json:"effective_default_profile,omitempty"`
+}
+
+type profileDriverSpec struct {
+	driver        string
+	profileKey    string
+	valuePrefixes []string
+}
+
+var profileDriverSpecs = []profileDriverSpec{
+	{
+		driver:     "mysql",
+		profileKey: "MYSQL_PROFILE",
+		valuePrefixes: []string{
+			"MYSQL_HOST_", "MYSQL_PORT_", "MYSQL_USER_", "MYSQL_PASSWORD_", "MYSQL_DATABASE_", "MYSQL_SOCKET_", "MYSQL_TIMEOUT_",
+		},
+	},
+	{
+		driver:     "pgsql",
+		profileKey: "PGSQL_PROFILE",
+		valuePrefixes: []string{
+			"PGSQL_HOST_", "PGSQL_PORT_", "PGSQL_USER_", "PGSQL_PASSWORD_", "PGSQL_DATABASE_", "PGSQL_SSLMODE_", "PGSQL_TIMEOUT_",
+		},
+	},
+	{
+		driver:     "mongo",
+		profileKey: "MONGO_PROFILE",
+		valuePrefixes: []string{
+			"MONGO_URI_", "MONGO_DATABASE_", "MONGO_TIMEOUT_", "MONGO_ALLOWED_OPERATIONS_", "MONGO_FORBIDDEN_AGG_STAGES_",
+		},
+	},
+	{
+		driver:     "redis",
+		profileKey: "REDIS_PROFILE",
+		valuePrefixes: []string{
+			"REDIS_ADDR_", "REDIS_USER_", "REDIS_PASSWORD_", "REDIS_DB_", "REDIS_TIMEOUT_", "REDIS_ALLOWED_COMMANDS_",
+		},
+	},
+	{
+		driver:     "memcached",
+		profileKey: "MEMCACHED_PROFILE",
+		valuePrefixes: []string{
+			"MEMCACHED_ADDR_", "MEMCACHED_TIMEOUT_", "MEMCACHED_ALLOWED_COMMANDS_",
+		},
+	},
+	{
+		driver:     "es",
+		profileKey: "ES_PROFILE",
+		valuePrefixes: []string{
+			"ES_URL_", "ES_USERNAME_", "ES_PASSWORD_", "ES_INDEX_", "ES_TIMEOUT_",
+		},
+	},
+}
 
 func IsProfileName(name string) bool {
 	return profileNamePattern.MatchString(name)
@@ -118,6 +177,65 @@ func ResolveProfile(driver, explicit string, env map[string]string) (string, err
 	}
 
 	return "", fmt.Errorf("profile is required: pass --profile or set DB_PROFILE/%s", driverKey)
+}
+
+func ListConfiguredProfiles(env map[string]string, driverFilter string) ([]DriverProfileSummary, error) {
+	driverFilter = strings.ToLower(strings.TrimSpace(driverFilter))
+	if driverFilter != "" && !isKnownDriver(driverFilter) {
+		return nil, fmt.Errorf("unsupported driver: %s", driverFilter)
+	}
+
+	globalDefault := strings.TrimSpace(env["DB_PROFILE"])
+	out := make([]DriverProfileSummary, 0, len(profileDriverSpecs))
+	for _, spec := range profileDriverSpecs {
+		if driverFilter != "" && spec.driver != driverFilter {
+			continue
+		}
+
+		profileSet := make(map[string]struct{})
+		for key := range env {
+			for _, prefix := range spec.valuePrefixes {
+				if !strings.HasPrefix(key, prefix) {
+					continue
+				}
+				name := strings.TrimSpace(strings.TrimPrefix(key, prefix))
+				if name != "" && IsProfileName(name) {
+					profileSet[name] = struct{}{}
+				}
+			}
+		}
+
+		driverDefault := strings.TrimSpace(env[spec.profileKey])
+
+		profiles := make([]string, 0, len(profileSet))
+		for name := range profileSet {
+			profiles = append(profiles, name)
+		}
+		sort.Strings(profiles)
+
+		effectiveDefault := driverDefault
+		if globalDefault != "" {
+			effectiveDefault = globalDefault
+		}
+
+		out = append(out, DriverProfileSummary{
+			Driver:                  spec.driver,
+			Profiles:                profiles,
+			DriverDefaultProfile:    driverDefault,
+			EffectiveDefaultProfile: effectiveDefault,
+		})
+	}
+
+	return out, nil
+}
+
+func isKnownDriver(driver string) bool {
+	for _, spec := range profileDriverSpecs {
+		if spec.driver == driver {
+			return true
+		}
+	}
+	return false
 }
 
 func ParseCSV(raw string) []string {

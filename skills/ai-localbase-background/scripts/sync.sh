@@ -77,7 +77,7 @@ ai_localbase_background_sync_resolve_work_dir() {
   if [ -d "$input" ]; then
     (cd "$input" && pwd -P)
   else
-    printf '%s\n' "$input"
+    ai_localbase_background_sync_fail "目录不存在: $input"
   fi
 }
 
@@ -88,7 +88,7 @@ ai_localbase_background_sync_resolve_kb_name() {
 
 ai_localbase_background_sync_runtime_root() {
   local work_dir="$1"
-  printf '%s/%s\n' "$work_dir" "$AI_LOCALBASE_BACKGROUND_SYNC_STATE_DIR_NAME"
+  printf '%s/docs/%s\n' "$work_dir" "$AI_LOCALBASE_BACKGROUND_SYNC_STATE_DIR_NAME"
 }
 
 ai_localbase_background_sync_ensure_runtime_dirs() {
@@ -288,30 +288,55 @@ ai_localbase_background_sync_delete() {
   printf '%s\n' "$response"
 }
 
+ai_localbase_background_sync_parse_query_args() {
+  if [ -d "${1:-}" ]; then
+    AI_LOCALBASE_BACKGROUND_SYNC_WORK_DIR_ARG="$1"
+    AI_LOCALBASE_BACKGROUND_SYNC_QUERY_ARG="${2:-示例}"
+    AI_LOCALBASE_BACKGROUND_SYNC_TOP_K_ARG="${3:-3}"
+  else
+    AI_LOCALBASE_BACKGROUND_SYNC_QUERY_ARG="${1:-示例}"
+    AI_LOCALBASE_BACKGROUND_SYNC_WORK_DIR_ARG="${2:-$(pwd)}"
+    AI_LOCALBASE_BACKGROUND_SYNC_TOP_K_ARG="${3:-3}"
+  fi
+
+  if ! [[ "$AI_LOCALBASE_BACKGROUND_SYNC_TOP_K_ARG" =~ ^[0-9]+$ ]]; then
+    ai_localbase_background_sync_fail "search 的 topK 必须是数字: $AI_LOCALBASE_BACKGROUND_SYNC_TOP_K_ARG"
+  fi
+}
+
+ai_localbase_background_sync_parse_message_args() {
+  if [ -d "${1:-}" ]; then
+    AI_LOCALBASE_BACKGROUND_SYNC_WORK_DIR_ARG="$1"
+    AI_LOCALBASE_BACKGROUND_SYNC_MESSAGE_ARG="${2:-这是什么内容？}"
+  else
+    AI_LOCALBASE_BACKGROUND_SYNC_MESSAGE_ARG="${1:-这是什么内容？}"
+    AI_LOCALBASE_BACKGROUND_SYNC_WORK_DIR_ARG="${2:-$(pwd)}"
+  fi
+}
+
 ai_localbase_background_sync_search() {
-  local query="${1:-示例}"
-  local work_dir_input="${2:-$(pwd)}"
   local response
 
-  ai_localbase_background_sync_prepare_context "$work_dir_input"
+  ai_localbase_background_sync_parse_query_args "$@"
+  ai_localbase_background_sync_prepare_context "$AI_LOCALBASE_BACKGROUND_SYNC_WORK_DIR_ARG"
   ai_localbase_background_sync_ensure_kb_id
 
-  response="$(ai_localbase_background_sync_post_tool_call "knowledge_base.search" "$(printf '{"arguments":{"knowledgeBaseId":"%s","query":"%s","topK":3}}' \
+  response="$(ai_localbase_background_sync_post_tool_call "knowledge_base.search" "$(printf '{"arguments":{"knowledgeBaseId":"%s","query":"%s","topK":%s}}' \
     "$(ai_localbase_background_sync_json_escape "$AI_LOCALBASE_BACKGROUND_SYNC_KB_ID")" \
-    "$(ai_localbase_background_sync_json_escape "$query")")")"
+    "$(ai_localbase_background_sync_json_escape "$AI_LOCALBASE_BACKGROUND_SYNC_QUERY_ARG")" \
+    "$AI_LOCALBASE_BACKGROUND_SYNC_TOP_K_ARG")")"
   printf '%s\n' "$response"
 }
 
 ai_localbase_background_sync_chat() {
-  local message="${1:-这是什么内容？}"
-  local work_dir_input="${2:-$(pwd)}"
   local response
 
-  ai_localbase_background_sync_prepare_context "$work_dir_input"
+  ai_localbase_background_sync_parse_message_args "$@"
+  ai_localbase_background_sync_prepare_context "$AI_LOCALBASE_BACKGROUND_SYNC_WORK_DIR_ARG"
   ai_localbase_background_sync_ensure_kb_id
 
   response="$(ai_localbase_background_sync_post_tool_call "chat.ask" "$(printf '{"arguments":{"knowledgeBaseId":"%s","message":"%s"}}' \
     "$(ai_localbase_background_sync_json_escape "$AI_LOCALBASE_BACKGROUND_SYNC_KB_ID")" \
-    "$(ai_localbase_background_sync_json_escape "$message")")")"
+    "$(ai_localbase_background_sync_json_escape "$AI_LOCALBASE_BACKGROUND_SYNC_MESSAGE_ARG")")")"
   printf '%s\n' "$response"
 }

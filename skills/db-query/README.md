@@ -18,6 +18,7 @@
 
 - 用 `--driver` 切换数据库类型
 - 用 `<DRIVER>_*_<profile>` 管理多套连接配置
+- 用 `--list-profiles` 暴露当前配置中的 profile 名称，首次使用先确认配置来源
 - 统一使用 JSON 返回结果
 - 强制限制为只读查询
 - 将 DDL / DML 请求落盘为 `.sql` 文件，而不是直接执行
@@ -60,6 +61,26 @@
 - Elasticsearch：`ES_*_<profile>`
 
 ## 快速开始
+
+### 首次使用：确认配置 profile
+
+第一次在某个工作区使用前，先执行：
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --list-profiles
+```
+
+如需按驱动过滤：
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --list-profiles \
+  --driver mysql
+```
+
+该命令只输出配置文件路径、全局默认 profile、驱动默认 profile 与 profile 名称，不连接数据库，不输出密码、URI 等敏感值。
+如果某个驱动的 `effective_default_profile` 不在该驱动的 `profiles` 数组中，说明全局 `DB_PROFILE` 覆盖了驱动默认值但该驱动没有对应连接配置；查询该驱动时应显式传入可用的 `--profile`。
 
 ### MySQL
 
@@ -178,6 +199,7 @@
 优先使用以下统一参数：
 
 - `--target`：SQL 的表名、Mongo 的 collection、Redis 的 key 或 pattern、ES 的 index
+- `--list-profiles`：列出配置中的 profile 名称；可选配合 `--driver` 过滤单个驱动
 - `--fields`：SQL 字段列表、Mongo 投影字段列表、ES `_source` 字段列表
 - `--where`：SQL 条件表达式，或 Mongo / ES 条件 `字段:操作符:值`
 - `--sort`：SQL 排序表达式，或 Mongo / ES 排序 `字段:asc|desc`

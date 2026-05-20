@@ -9,7 +9,7 @@ description: Use when starting any conversation in a project that uses ai_localb
 
 - skill 安装目录：`~/.codex/skills/ai-localbase-background/`
 - 默认配置文件：`~/.codex/skills/ai-localbase-background/.env`
-- 每个项目的运行状态目录：`<project>/.ai-localbase-background/`
+- 每个项目的运行状态目录：`<project>/docs/.ai-localbase-background/`
 
 ## 适用场景
 
@@ -104,6 +104,7 @@ description: Use when starting any conversation in a project that uses ai_localb
 
 # 同步检索与问答
 "${HOME}/.codex/skills/ai-localbase-background/ai-localbase-background.sh" search "关键词" "/path/to/project"
+"${HOME}/.codex/skills/ai-localbase-background/ai-localbase-background.sh" search "/path/to/project" "关键词" 5
 "${HOME}/.codex/skills/ai-localbase-background/ai-localbase-background.sh" chat "你的问题" "/path/to/project"
 
 # 停止 worker
@@ -127,14 +128,14 @@ description: Use when starting any conversation in a project that uses ai_localb
 
 ## 状态目录
 
-后台版会在项目根目录下维护：
+后台版会在项目 `docs/` 下维护：
 
-- `.ai-localbase-background/knowledge.json`
-- `.ai-localbase-background/worker.pid`
-- `.ai-localbase-background/worker.log`
-- `.ai-localbase-background/queue/`
-- `.ai-localbase-background/jobs/`
-- `.ai-localbase-background/results/`
+- `docs/.ai-localbase-background/knowledge.json`
+- `docs/.ai-localbase-background/worker.pid`
+- `docs/.ai-localbase-background/worker.log`
+- `docs/.ai-localbase-background/queue/`
+- `docs/.ai-localbase-background/jobs/`
+- `docs/.ai-localbase-background/results/`
 
 ## 注意点
 

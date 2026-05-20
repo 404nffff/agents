@@ -24,8 +24,10 @@ usage() {
   ./ai-localbase-background.sh queue-append [documentId] [内容] [目录]
   ./ai-localbase-background.sh queue-update [documentId] [内容] [目录]
   ./ai-localbase-background.sh queue-delete [documentId] [目录]
-  ./ai-localbase-background.sh search [关键词] [目录]
+  ./ai-localbase-background.sh search [关键词] [目录] [topK]
+  ./ai-localbase-background.sh search [目录] [关键词] [topK]
   ./ai-localbase-background.sh chat [问题] [目录]
+  ./ai-localbase-background.sh chat [目录] [问题]
   ./ai-localbase-background.sh job-status [jobId] [目录]
   ./ai-localbase-background.sh job-result [jobId] [目录]
 
@@ -185,10 +187,10 @@ main() {
       fi
       ;;
     search)
-      ai_localbase_background_sync_search "${1:-示例}" "${2:-$(pwd)}"
+      ai_localbase_background_sync_search "$@"
       ;;
     chat)
-      ai_localbase_background_sync_chat "${1:-这是什么内容？}" "${2:-$(pwd)}"
+      ai_localbase_background_sync_chat "$@"
       ;;
     job-status)
       require_python_for_async "job-status"

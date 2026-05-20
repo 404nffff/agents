@@ -35,6 +35,7 @@ Thumbs.db
 .nfs*
 test/
 .env
+cpa.env
 
 .claude/sessions/
 *.txt
@@ -51,3 +52,4 @@ docs
 
 *.json
 .codex
+.cache
