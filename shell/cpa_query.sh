@@ -2643,7 +2643,8 @@ extract_quota_from_limits() {
   local week="-"
 
   if [[ "${limits}" == *"/"* ]]; then
-    IFS='/' read -r five_hour week <<< "${limits}"
+    five_hour="${limits%/*}"
+    week="${limits##*/}"
   fi
 
   if [[ "${kind}" == "week" ]]; then
@@ -2797,7 +2798,7 @@ build_mobile_week_refresh_summary_lines() {
         continue
       fi
     fi
-    items+="${reset_value}"$'\t'"${plan_tag}"$'\n'
+    items+="${reset_value}"$'\t'"${plan_tag}"$'\t'"${remaining_value}"$'\t'"${name}"$'\n'
   done
 
   if [[ -z "${items}" ]]; then
@@ -2805,7 +2806,7 @@ build_mobile_week_refresh_summary_lines() {
     return 0
   fi
 
-  printf '%s' "${items}" | sort -t $'\t' -k1,1 -k2,2 | awk -F '\t' '
+  printf '%s' "${items}" | sort -t $'\t' -k1,1 -k2,2 -k4,4 -k3,3 | awk -F '\t' '
     function build_hour_bucket(ts,    date_part, hour_part) {
       if (length(ts) >= 8) {
         date_part = substr(ts, 1, 5)
@@ -2815,7 +2816,35 @@ build_mobile_week_refresh_summary_lines() {
       return ts
     }
 
-    function flush_group(    details, plan_order, plan_count, i, plan) {
+    function format_number(value) {
+      if (value == int(value)) {
+        return int(value)
+      }
+      return sprintf("%.2f", value)
+    }
+
+    function quota_to_number(value,    normalized) {
+      normalized = value
+      gsub(/%$/, "", normalized)
+      if (normalized ~ /^-?[0-9]+([.][0-9]+)?$/) {
+        return normalized + 0
+      }
+      return 0
+    }
+
+    function extract_email_domain(name,    clean_name, domain) {
+      clean_name = name
+      sub(/\.json$/, "", clean_name)
+      if (clean_name !~ /@/) {
+        return "无邮箱域名"
+      }
+      domain = clean_name
+      sub(/^.*@/, "", domain)
+      sub(/-(free|plus|team)$/, "", domain)
+      return domain
+    }
+
+    function flush_group(    details, quota_details, domain_details, plan_order, plan_count, i, plan, domain) {
       if (current_reset == "") {
         return
       }
@@ -2834,9 +2863,32 @@ build_mobile_week_refresh_summary_lines() {
       if (details == "") {
         details = "无有效套餐标签"
       }
-      printf("- %s | 刷新 %d 个账号 | 套餐类型 %s\n", current_reset, total, details)
+      if (quota_seen == 0) {
+        quota_details = "无额度数据"
+      } else {
+        quota_details = format_number(quota_sum) "%"
+      }
+      domain_details = ""
+      for (i = 1; i <= domain_order_count; i++) {
+        domain = domain_order[i]
+        if (domain_details != "") {
+          domain_details = domain_details "；"
+        }
+        domain_details = domain_details domain " " domain_counts[domain] "个/" format_number(domain_quota_sums[domain]) "%"
+      }
+      if (domain_details == "") {
+        domain_details = "无邮箱域名"
+      }
+      printf("- 邮箱域名 %s | %s | 刷新 %d 个账号 | 套餐类型 %s | 周额度剩余合计 %s\n", domain_details, current_reset, total, details, quota_details)
       delete counts
+      delete domain_counts
+      delete domain_quota_sums
+      delete domain_seen
+      delete domain_order
       total = 0
+      quota_sum = 0
+      quota_seen = 0
+      domain_order_count = 0
     }
 
     NF >= 1 {
@@ -2851,6 +2903,19 @@ build_mobile_week_refresh_summary_lines() {
       if ($2 != "") {
         counts[$2] += 1
       }
+      if ($3 != "") {
+        quota_value = quota_to_number($3)
+        quota_sum += quota_value
+        quota_seen += 1
+      }
+      domain = extract_email_domain($4)
+      if (!(domain in domain_seen)) {
+        domain_seen[domain] = 1
+        domain_order_count += 1
+        domain_order[domain_order_count] = domain
+      }
+      domain_counts[domain] += 1
+      domain_quota_sums[domain] += quota_value
     }
 
     END {
@@ -2967,7 +3032,7 @@ EOF
   printf -- '- 这一段只展示 plus/team 等常规账号的周剩余重点，继续保持逐账号展示。\n'
   build_mobile_quota_focus_lines 'week' '周剩余' 'non-free-only'
   printf '\n### 第5段下方补充 free周刷新\n'
-  printf -- '- free 账号不要逐个列出，按周刷新 1 小时时间窗口汇总：每个时间窗口刷新了几个 free 账号。\n'
+  printf -- '- free 账号不要逐个列出，按周刷新 1 小时时间窗口汇总：每个时间窗口刷新了几个 free 账号，并展示周额度剩余合计和邮箱域名细分。\n'
   build_mobile_week_refresh_summary_lines 'free-only'
   printf '\n### 第6段 风险与结论\n'
   printf '异常项\n'

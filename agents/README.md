@@ -32,6 +32,7 @@
 | 文件名 | 说明 |
 | --- | --- |
 | `AGENTS_GLOBAL.md` | 全局通用规则，推荐通过 `install_codex.sh agents` 安装 |
+| `AGENTS_AILOCALBASE_GLOBAL.md` | 启用 `ai_localbase` 项目的全局通用规则，包含知识库初始化、检索、沉淀与降级约束 |
 
 ---
 
@@ -42,5 +43,6 @@
 - **需要记忆功能:** 使用 `AGENTS_MEMORY_v2.md`（支持 Nocturne Memory）
 - **简单项目:** 使用 `AGENTS_v2.md`（无外部依赖）
 - **全局配置:** 使用 `AGENTS_GLOBAL.md`
+- **全局配置（启用 ai_localbase）:** 使用 `AGENTS_AILOCALBASE_GLOBAL.md`
 
 <!-- AGENT_CATALOG_END -->
