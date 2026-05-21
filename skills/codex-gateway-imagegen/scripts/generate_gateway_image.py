@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import unquote_to_bytes
 import ssl
 
 
@@ -199,7 +200,7 @@ def encode_image_data_url(image_path: str) -> str:
     return f"data:{mime_type};base64,{encoded}"
 
 
-def build_payload(args: argparse.Namespace) -> bytes:
+def build_responses_payload(args: argparse.Namespace) -> bytes:
     input_content: list[dict[str, str]] = [
         {
             "type": "input_text",
@@ -250,6 +251,15 @@ def build_payload(args: argparse.Namespace) -> bytes:
     return json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
 
+def build_images_payload(args: argparse.Namespace) -> bytes:
+    payload = {
+        "model": args.model,
+        "prompt": args.prompt,
+        "size": args.size,
+    }
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
 def extract_image_base64(data: dict) -> str:
     for item in data.get("output", []):
         if item.get("type") == "image_generation_call" and item.get("result"):
@@ -257,29 +267,105 @@ def extract_image_base64(data: dict) -> str:
     raise RuntimeError("No image_generation_call result returned")
 
 
+def extract_images_api_result(data: dict) -> str:
+    if isinstance(data, dict):
+        for item in data.get("data", []):
+            if not isinstance(item, dict):
+                continue
+            if item.get("b64_json"):
+                return item["b64_json"]
+            if item.get("url"):
+                return item["url"]
+            if item.get("result"):
+                return item["result"]
+        if data.get("b64_json"):
+            return data["b64_json"]
+        if data.get("url"):
+            return data["url"]
+        if data.get("result"):
+            return data["result"]
+        for item in data.get("output", []):
+            if isinstance(item, dict) and item.get("result"):
+                return item["result"]
+    raise RuntimeError("No image result returned from images API")
+
+
+def _decode_svg_data_url(data_url: str) -> bytes:
+    prefix = "data:image/svg+xml"
+    if not data_url.startswith(prefix):
+        raise RuntimeError("Not an SVG data URL")
+
+    metadata, separator, payload = data_url.partition(",")
+    if not separator:
+        raise RuntimeError("Invalid SVG data URL")
+    if ";base64" in metadata:
+        return base64.b64decode(payload)
+    return unquote_to_bytes(payload)
+
+
+def _write_image_result(output_path: Path, image_result: str, timeout: int) -> None:
+    if image_result.lstrip().startswith("<svg"):
+        output_path.write_bytes(image_result.encode("utf-8"))
+        return
+    if image_result.startswith("<?xml"):
+        output_path.write_bytes(image_result.encode("utf-8"))
+        return
+    if image_result.startswith("data:image/svg+xml"):
+        output_path.write_bytes(_decode_svg_data_url(image_result))
+        return
+    if image_result.startswith("data:"):
+        metadata, separator, payload = image_result.partition(",")
+        if not separator:
+            raise RuntimeError("Invalid data URL returned by image API")
+        if ";base64" in metadata:
+            output_path.write_bytes(base64.b64decode(payload))
+        else:
+            output_path.write_bytes(unquote_to_bytes(payload))
+        return
+    if image_result.startswith("http://") or image_result.startswith("https://"):
+        with urlopen(image_result, context=ssl.create_default_context(), timeout=timeout) as response:
+            output_path.write_bytes(response.read())
+        return
+    output_path.write_bytes(base64.b64decode(image_result))
+
+
 def main() -> int:
     args, env_values, env_path = parse_args()
 
     try:
         base_url, api_key = load_config(env_values, env_path)
-        body = build_payload(args)
-        request = Request(
-            f"{base_url}/responses",
-            data=body,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        if args.model == "gpt-image-2":
+            body = build_images_payload(args)
+            request = Request(
+                f"{base_url}/images/generations",
+                data=body,
+                headers=headers,
+                method="POST",
+            )
+            with urlopen(request, context=ssl.create_default_context(), timeout=args.timeout) as response:
+                data = json.loads(response.read().decode("utf-8", errors="replace"))
+            image_result = extract_images_api_result(data)
+        else:
+            body = build_responses_payload(args)
+            request = Request(
+                f"{base_url}/responses",
+                data=body,
+                headers=headers,
+                method="POST",
+            )
 
-        with urlopen(request, context=ssl.create_default_context(), timeout=args.timeout) as response:
-            data = json.loads(response.read().decode("utf-8", errors="replace"))
+            with urlopen(request, context=ssl.create_default_context(), timeout=args.timeout) as response:
+                data = json.loads(response.read().decode("utf-8", errors="replace"))
 
-        image_base64 = extract_image_base64(data)
+            image_result = extract_image_base64(data)
+
         output_path = Path(args.out).resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(base64.b64decode(image_base64))
+        _write_image_result(output_path, image_result, args.timeout)
         print(json.dumps({"saved": str(output_path), "bytes": output_path.stat().st_size}, ensure_ascii=False))
         return 0
     except HTTPError as exc:

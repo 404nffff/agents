@@ -53,3 +53,5 @@ docs
 *.json
 .codex
 .cache
+
+__pycache__
