@@ -905,6 +905,21 @@ compute_auto_priority() {
   fi
 }
 
+is_valid_priority_value() {
+  local priority="${1:-}"
+  [[ "${priority}" =~ ^-?[0-9]+$ ]]
+}
+
+default_priority_for_plan_type() {
+  local plan_type="${1:-}"
+
+  if [[ "${plan_type}" == "free" ]]; then
+    printf '8'
+  else
+    printf '1'
+  fi
+}
+
 format_remaining_duration() {
   local remaining_seconds="$1"
   local abs_seconds days hours
@@ -1037,7 +1052,8 @@ auto_manage_priorities_for_current_entries() {
   local total
   local index=0
   local now_epoch
-  local name priority plan_type disabled_flag subscription_until original_priority target_priority subscription_until_epoch
+  local name raw_priority priority plan_type disabled_flag subscription_until original_priority target_priority subscription_until_epoch
+  local priority_missing default_priority
 
   ensure_state_file
   reset_auto_priority_report
@@ -1050,13 +1066,22 @@ auto_manage_priorities_for_current_entries() {
 
   while [[ "${index}" -lt "${total}" ]]; do
     name="${AUTH_NAMES[index]:-"(未命名)"}"
-    priority="${AUTH_PRIORITIES[index]:-"-"}"
+    raw_priority="${AUTH_PRIORITIES[index]:-"-"}"
+    priority="${raw_priority}"
     plan_type="${AUTH_PLAN_TYPES[index]:-"-"}"
     disabled_flag="${AUTH_DISABLED_FLAGS[index]:-"false"}"
     subscription_until="${AUTH_SUBSCRIPTION_UNTILS[index]:-"-"}"
     original_priority="$(state_get_original_priority "${name}")"
     subscription_until_epoch=""
     target_priority=""
+    priority_missing="false"
+    default_priority="$(default_priority_for_plan_type "${plan_type}")"
+
+    if ! is_valid_priority_value "${priority}"; then
+      priority_missing="true"
+      priority="1"
+      log "账号 ${name} 的 priority 缺失或非法(${raw_priority})，按默认值参与自动调整: ${default_priority}"
+    fi
 
     if [[ "${disabled_flag}" == "true" ]]; then
       # 禁用账号不再参与 priority 调整，避免刚被禁用的账号继续被调度提权。
@@ -1082,10 +1107,9 @@ auto_manage_priorities_for_current_entries() {
         index=$((index + 1))
         continue
       fi
-      [[ "${priority}" =~ ^-?[0-9]+$ ]] || die "账号 ${name} 的当前 priority 非法: ${priority}"
-      log "free 账号调整优先级: ${name} ${priority} -> 8"
+      log "free 账号调整优先级: ${name} ${raw_priority} -> 8"
       patch_auth_fields "${name}" "8" >/dev/null
-      record_auto_priority_line "free调整: ${name} | ${priority} -> 8"
+      record_auto_priority_line "free调整: ${name} | ${raw_priority} -> 8"
       AUTH_PRIORITIES[index]="8"
       AUTO_PRIORITY_MANAGED=$((AUTO_PRIORITY_MANAGED + 1))
       index=$((index + 1))
@@ -1098,14 +1122,27 @@ auto_manage_priorities_for_current_entries() {
 
     if [[ -n "${target_priority}" ]]; then
       if [[ "${priority}" != "${target_priority}" ]]; then
-        log "临期或过期非 free 账号提权: ${name} ${priority} -> ${target_priority}"
+        log "临期或过期非 free 账号提权: ${name} ${raw_priority} -> ${target_priority}"
         patch_auth_fields "${name}" "${target_priority}" >/dev/null
         AUTH_PRIORITIES[index]="${target_priority}"
         AUTO_PRIORITY_MANAGED=$((AUTO_PRIORITY_MANAGED + 1))
-        record_auto_priority_line "临期/过期提权: ${name} | ${priority} -> ${target_priority} | plan_type ${plan_type} | 到期 $(format_subscription_time "${subscription_until}")"
+        record_auto_priority_line "临期/过期提权: ${name} | ${raw_priority} -> ${target_priority} | plan_type ${plan_type} | 到期 $(format_subscription_time "${subscription_until}")"
       else
         AUTO_PRIORITY_UNCHANGED=$((AUTO_PRIORITY_UNCHANGED + 1))
       fi
+      if [[ -n "${original_priority}" ]]; then
+        state_remove_managed_priority "${name}"
+      fi
+      index=$((index + 1))
+      continue
+    fi
+
+    if [[ "${priority_missing}" == "true" ]] && [[ "${default_priority}" == "1" ]]; then
+      log "非 free 账号补齐默认优先级: ${name} ${raw_priority} -> 1"
+      patch_auth_fields "${name}" "1" >/dev/null
+      AUTH_PRIORITIES[index]="1"
+      AUTO_PRIORITY_MANAGED=$((AUTO_PRIORITY_MANAGED + 1))
+      record_auto_priority_line "缺失优先级补齐: ${name} | ${raw_priority} -> 1 | plan_type ${plan_type}"
       if [[ -n "${original_priority}" ]]; then
         state_remove_managed_priority "${name}"
       fi
@@ -2586,15 +2623,293 @@ build_management_usage_prompt_lines() {
   ' "${PROMPT_FILE}"
 }
 
+normalize_prompt_plan_type() {
+  local plan_type="${1:-}"
+
+  case "${plan_type}" in
+    free|plus|team)
+      printf '%s' "${plan_type}"
+      ;;
+    *)
+      printf ''
+      ;;
+  esac
+}
+
+extract_quota_from_limits() {
+  local limits="${1:-}"
+  local kind="${2:-5h}"
+  local five_hour="-"
+  local week="-"
+
+  if [[ "${limits}" == *"/"* ]]; then
+    IFS='/' read -r five_hour week <<< "${limits}"
+  fi
+
+  if [[ "${kind}" == "week" ]]; then
+    printf '%s' "${week:-"-"}"
+  else
+    printf '%s' "${five_hour:-"-"}"
+  fi
+}
+
+find_auth_index_by_name() {
+  local target_name="$1"
+  local index=0
+
+  while [[ "${index}" -lt "${#AUTH_NAMES[@]}" ]]; do
+    if [[ "${AUTH_NAMES[index]:-}" == "${target_name}" ]]; then
+      printf '%s' "${index}"
+      return 0
+    fi
+    index=$((index + 1))
+  done
+
+  return 1
+}
+
+count_prompt_expiring_soon_items() {
+  local threshold_days="${1:-7}"
+  local threshold_seconds=$((threshold_days * 86400))
+  local count=0
+  local remaining_seconds order name auth_index plan_type
+
+  while IFS=$'\t' read -r remaining_seconds order name || [[ -n "${remaining_seconds}${order}${name}" ]]; do
+    [[ -n "${name}" ]] || continue
+    [[ "${remaining_seconds}" =~ ^-?[0-9]+$ ]] || continue
+    (( remaining_seconds > 0 && remaining_seconds <= threshold_seconds )) || continue
+    auth_index="$(find_auth_index_by_name "${name}" 2>/dev/null)" || continue
+    plan_type="$(normalize_prompt_plan_type "${AUTH_PLAN_TYPES[auth_index]:-}")"
+    [[ "${plan_type}" == "free" ]] && continue
+    count=$((count + 1))
+  done < <(printf '%s\n' "${SUMMARY_EXPIRY_ITEMS[@]}" | sort -t $'\t' -k1,1n -k2,2n)
+
+  printf '%s' "${count}"
+}
+
+build_management_usage_mobile_prompt_lines() {
+  [[ -f "${PROMPT_FILE}" ]] || return 0
+
+  jq -r '
+    def brief_items($items):
+      ($items // [])
+      | .[:3]
+      | map(.name + " " + (.tokens_m // "0M") + "/" + ((.requests // 0) | tostring) + "次")
+      | join("；")
+      | if length > 0 then . else "无" end;
+
+    .management_usage as $usage
+    | select($usage != null and ($usage.available // false) == true)
+    | [
+        ("- 总请求 " + (($usage.total_requests // 0) | tostring)),
+        ("- 成功/失败 " + (($usage.ok // 0) | tostring) + "/" + (($usage.fail // 0) | tostring)),
+        ("- 成功率 " + ($usage.success_rate // "0%")),
+        ("- 总 tokens " + ($usage.total_tokens_m // "0M")),
+        ("- 账号摘要 " + brief_items($usage.accounts)),
+        ("- 模型摘要 " + brief_items($usage.models))
+      ]
+    | .[]
+  ' "${PROMPT_FILE}"
+}
+
+build_mobile_quota_focus_lines() {
+  local kind="$1"
+  local label="$2"
+  local plan_filter="${3:-all}"
+  local items=""
+  local row name note priority plan_info subscription_info limits five_hour_reset week_reset status
+  local remaining_value reset_value plan_tag auth_index
+
+  for row in "${RESULT_ROWS[@]}"; do
+    IFS=$'\t' read -r name note priority plan_info subscription_info limits five_hour_reset week_reset status <<< "${row}"
+    [[ -n "${name}" ]] || continue
+    [[ "${status}" == 异常:* ]] && continue
+    remaining_value="$(extract_quota_from_limits "${limits}" "${kind}")"
+    [[ -n "${remaining_value}" && "${remaining_value}" != "-" && "${remaining_value}" != "N/A" ]] || continue
+    if [[ "${kind}" == "week" ]]; then
+      reset_value="${week_reset}"
+    else
+      reset_value="${five_hour_reset}"
+    fi
+    [[ -n "${reset_value}" && "${reset_value}" != "-" && "${reset_value}" != "N/A" ]] || continue
+    plan_tag="$(normalize_prompt_plan_type "${plan_info}")"
+    if [[ "${plan_filter}" == "free-only" && "${plan_tag}" != "free" ]]; then
+      continue
+    fi
+    if [[ "${plan_filter}" == "non-free-only" && "${plan_tag}" == "free" ]]; then
+      continue
+    fi
+    if auth_index="$(find_auth_index_by_name "${name}" 2>/dev/null)"; then
+      if is_expired_plus_plan "${AUTH_PLAN_TYPES[auth_index]:-"${plan_tag}"}" "${AUTH_SUBSCRIPTION_UNTILS[auth_index]:-"-"}"; then
+        continue
+      fi
+    fi
+    items+="${reset_value}"$'\t'"${name}"$'\t'"${plan_tag}"$'\t'"${remaining_value}"$'\n'
+  done
+
+  if [[ -z "${items}" ]]; then
+    printf -- '- 无\n'
+    return 0
+  fi
+
+  while IFS=$'\t' read -r reset_value name plan_tag remaining_value || [[ -n "${reset_value}${name}${plan_tag}${remaining_value}" ]]; do
+    [[ -n "${name}" ]] || continue
+    if [[ -n "${plan_tag}" ]]; then
+      printf -- '- %s | 套餐 %s | %s %s | 刷新 %s\n' \
+        "${name}" \
+        "${plan_tag}" \
+        "${label}" \
+        "${remaining_value}" \
+        "${reset_value}"
+    else
+      printf -- '- %s | %s %s | 刷新 %s\n' \
+        "${name}" \
+        "${label}" \
+        "${remaining_value}" \
+        "${reset_value}"
+    fi
+  done < <(printf '%s' "${items}" | sort -t $'\t' -k1,1 -k2,2)
+}
+
+build_mobile_week_refresh_summary_lines() {
+  local plan_filter="${1:-all}"
+  local items=""
+  local row name note priority plan_info subscription_info limits five_hour_reset week_reset status
+  local remaining_value reset_value plan_tag auth_index
+
+  for row in "${RESULT_ROWS[@]}"; do
+    IFS=$'\t' read -r name note priority plan_info subscription_info limits five_hour_reset week_reset status <<< "${row}"
+    [[ -n "${name}" ]] || continue
+    [[ "${status}" == 异常:* ]] && continue
+    remaining_value="$(extract_quota_from_limits "${limits}" "week")"
+    [[ -n "${remaining_value}" && "${remaining_value}" != "-" && "${remaining_value}" != "N/A" ]] || continue
+    reset_value="${week_reset}"
+    [[ -n "${reset_value}" && "${reset_value}" != "-" && "${reset_value}" != "N/A" ]] || continue
+    plan_tag="$(normalize_prompt_plan_type "${plan_info}")"
+    if [[ "${plan_filter}" == "free-only" && "${plan_tag}" != "free" ]]; then
+      continue
+    fi
+    if [[ "${plan_filter}" == "non-free-only" && "${plan_tag}" == "free" ]]; then
+      continue
+    fi
+    if auth_index="$(find_auth_index_by_name "${name}" 2>/dev/null)"; then
+      if is_expired_plus_plan "${AUTH_PLAN_TYPES[auth_index]:-"${plan_tag}"}" "${AUTH_SUBSCRIPTION_UNTILS[auth_index]:-"-"}"; then
+        continue
+      fi
+    fi
+    items+="${reset_value}"$'\t'"${plan_tag}"$'\n'
+  done
+
+  if [[ -z "${items}" ]]; then
+    printf -- '- 无\n'
+    return 0
+  fi
+
+  printf '%s' "${items}" | sort -t $'\t' -k1,1 -k2,2 | awk -F '\t' '
+    function build_hour_bucket(ts,    date_part, hour_part) {
+      if (length(ts) >= 8) {
+        date_part = substr(ts, 1, 5)
+        hour_part = substr(ts, 7, 2)
+        return date_part " " hour_part ":00-" hour_part ":59"
+      }
+      return ts
+    }
+
+    function flush_group(    details, plan_order, plan_count, i, plan) {
+      if (current_reset == "") {
+        return
+      }
+      details = ""
+      split("free plus team", plan_order, " ")
+      for (i = 1; i <= 3; i++) {
+        plan = plan_order[i]
+        plan_count = counts[plan] + 0
+        if (plan_count > 0) {
+          if (details != "") {
+            details = details "；"
+          }
+          details = details plan " " plan_count "个"
+        }
+      }
+      if (details == "") {
+        details = "无有效套餐标签"
+      }
+      printf("- %s | 刷新 %d 个账号 | 套餐类型 %s\n", current_reset, total, details)
+      delete counts
+      total = 0
+    }
+
+    NF >= 1 {
+      bucket = build_hour_bucket($1)
+      if (current_reset != "" && bucket != current_reset) {
+        flush_group()
+      }
+      if (bucket != current_reset) {
+        current_reset = bucket
+      }
+      total += 1
+      if ($2 != "") {
+        counts[$2] += 1
+      }
+    }
+
+    END {
+      flush_group()
+    }
+  '
+}
+
+build_mobile_error_focus_lines() {
+  local item name reason auth_index printed="false"
+
+  for item in "${SUMMARY_ERROR_NAMES[@]}"; do
+    IFS=$'\t' read -r name reason <<< "${item}"
+    [[ -n "${name}" ]] || continue
+    auth_index="$(find_auth_index_by_name "${name}" 2>/dev/null)" || continue
+    reason="$(compact_error_reason "${reason}")"
+    if [[ -n "${reason}" ]]; then
+      printf -- '- %s %s\n' "${name}" "${reason}"
+    else
+      printf -- '- %s\n' "${name}"
+    fi
+    printed="true"
+  done
+
+  if [[ "${printed}" != "true" ]]; then
+    printf -- '- 无\n'
+  fi
+}
+
+build_mobile_expiry_focus_lines() {
+  local count=0
+  local remaining_seconds order name auth_index plan_type remaining_days
+
+  while IFS=$'\t' read -r remaining_seconds order name || [[ -n "${remaining_seconds}${order}${name}" ]]; do
+    [[ -n "${name}" ]] || continue
+    [[ "${remaining_seconds}" =~ ^-?[0-9]+$ ]] || continue
+    (( remaining_seconds > 0 )) || continue
+    auth_index="$(find_auth_index_by_name "${name}" 2>/dev/null)" || continue
+    plan_type="$(normalize_prompt_plan_type "${AUTH_PLAN_TYPES[auth_index]:-}")"
+    [[ -n "${plan_type}" && "${plan_type}" != "free" ]] || continue
+    remaining_days=$((remaining_seconds / 86400))
+    printf -- '- %s | 套餐 %s | 剩余%s天\n' "${name}" "${plan_type}" "${remaining_days}"
+    count=$((count + 1))
+    if (( count >= 3 )); then
+      break
+    fi
+  done < <(printf '%s\n' "${SUMMARY_EXPIRY_ITEMS[@]}" | sort -t $'\t' -k1,1n -k2,2n)
+
+  if (( count == 0 )); then
+    printf -- '- 无\n'
+  fi
+}
+
 print_dashboard_image_prompt() {
   local five_hour_total="N/A"
   local week_total="N/A"
-  local enabled_total="${#AUTH_NAMES[@]}"
-  local free_count="${#SUMMARY_FREE_ITEMS[@]}"
-  local error_count="${#SUMMARY_ERROR_NAMES[@]}"
+  local total_accounts="${SUMMARY_TOTAL:-0}"
   local expiring_soon_count
   local management_usage_lines
-  local line
 
   if [[ "${#SUMMARY_5H_ITEMS[@]}" -gt 0 ]]; then
     five_hour_total="$(format_percent "${SUMMARY_SUM_5H}")"
@@ -2602,82 +2917,69 @@ print_dashboard_image_prompt() {
   if [[ "${#SUMMARY_WEEK_ITEMS[@]}" -gt 0 ]]; then
     week_total="$(format_percent "${SUMMARY_SUM_WEEK}")"
   fi
-  expiring_soon_count="$(count_expiring_soon_summary_items 7)"
+  expiring_soon_count="$(count_prompt_expiring_soon_items 7)"
 
   printf '\n'
   printf '# 看板图片提示词\n'
   printf '\n'
   cat <<'EOF'
 ## 任务
-生成一张中文企业运营看板图片，标题为“账号额度监控摘要”。
+生成一张进一步优化样式的中文手机长图汇报版本，标题为《账号额度监控摘要》。
 
-## 视觉风格
-- 类型：SaaS BI dashboard / 企业后台 / 运营周报 / 经营分析看板。
-- 气质：干净、专业、可信、信息密度高，适合业务汇报。
-- 配色：蓝白商务风或稳重深蓝商务风；低风险/高剩余用蓝绿系，预警/低剩余用橙红系。
-- 避免：赛博朋克、强烈霓虹、海报式夸张光效、装饰性过强的背景。
+## 风格与版式
+- 类型：高质量飞书长图汇报 / 管理层移动端周报 / executive mobile report。
+- 版式：整体为竖版长图，适合手机查看，不要做成复杂后台页面，不要海报感，不要赛博朋克。
+- 质感：视觉更精致，层级更清楚，卡片阴影更轻，留白更合理，字体更统一，模块分隔更明显，既专业又高级。
+- 标题区更强，数字卡更大，列表卡片更整洁，标签样式统一，阅读顺序明确。
+- 从上到下固定分为 6 段，其中第 2 段“当天用量摘要”必须做成最显眼的核心卡片区。
+- 账号名必须完整展示，不要截断，不要缩写，不要省略邮箱前后缀。
+- 套餐标签只允许显示 free、plus、team，不要出现“套餐未知”或其他套餐文案。
+- 颜色规则：0% 和即将到期重点用红橙色；正常剩余用蓝绿；free 标签灰蓝；plus 标签蓝色；team 标签青绿色。
+- 不要添加不存在的项目，不要改写数字，不要凭空补日期或时间角标。
 
-## 版式要求
-- 顶部：标题和概要指标卡片。
-- 中部：额度明细为核心表格，5h剩余和周剩余必须并列展示。
-- 辅助区：展示提醒、刷新重点、账号补充信息。
-- 当天用量：仅在下方“当天用量”有数据时展示；如果标记为未采集，不要编造。
-- 刷新时间：不要单独做大模块，必须归属于额度或刷新重点区域。
-
-## 数据规则
-- 只使用下方实时数据，不要改写数字，不要添加不存在的项目。
-- 5h剩余和周剩余中的 0% 账号必须展示，不能因为数值为 0 而省略。
-- 账号名右侧用 tag/标签样式展示套餐；订阅与备注放在账号名称下方。
-- 订阅到期颜色：小于等于 7 天用红色；大于 7 天且小于等于 15 天用黄色；其余普通样式。
-- 不要显示编造的日期、年份、时钟、时间戳；右上角、标题栏、页眉禁止出现 current time、last updated 等时间文案。
-
-## 实时数据
+## 真实分段数据
 
 EOF
-  printf '### 概要\n'
-  printf '| 分类 | 指标 |\n'
-  printf '| --- | --- |\n'
-  printf '| 基础 | 共 %s 个；OK %s；ERR %s |\n' "${enabled_total}" "${SUMMARY_OK}" "${SUMMARY_ERROR}"
-  printf '| 额度 | 5h总剩余 %s；周总剩余 %s |\n' "${five_hour_total}" "${week_total}"
-  printf '| 风险 | free %s；异常 %s；7天内到期 %s |\n' \
-    "${free_count}" \
-    "${error_count}" \
+  printf '### 第1段 标题与一句总结\n'
+  printf -- '- 标题：《账号额度监控摘要》\n'
+  printf -- '- 总结：账号总量%s，当前OK %s / ERR %s，7天内到期%s，整体额度可用但存在少量异常账号需跟进。\n' \
+    "${total_accounts}" \
+    "${SUMMARY_OK}" \
+    "${SUMMARY_ERROR}" \
     "${expiring_soon_count}"
-  printf '\n### 额度明细\n'
-  build_quota_detail_table
-  printf '\n### 提醒\n'
-  printf -- '- '
-  build_free_summary_line
-  printf -- '- '
-  build_expiring_soon_summary_line 7
-  printf -- '- '
-  build_plan_change_summary_line
-  printf -- '- '
-  build_error_summary_line
-  printf '\n### 当天用量\n'
-  management_usage_lines="$(build_management_usage_prompt_lines)"
+  printf '\n### 第2段 当天用量摘要\n'
+  management_usage_lines="$(build_management_usage_mobile_prompt_lines)"
   if [[ -n "${management_usage_lines}" ]]; then
     printf '%s\n' "${management_usage_lines}"
   else
-    printf -- '- 未采集\n'
+    printf -- '- 未采集：不要编造当天用量数据。\n'
   fi
-  printf '\n### 刷新重点\n'
-  printf -- '- '
-  build_refresh_focus_line '5h刷新重点' '5h'
-  printf -- '- '
-  build_refresh_focus_line '周刷新重点' 'week'
-  printf '\n### 账号补充信息\n'
-  while IFS= read -r line; do
-    [[ -n "${line}" ]] || continue
-    printf -- '- %s\n' "${line}"
-  done < <(build_account_info_lines)
-  printf '\n### 订阅到期重点\n'
-  printf -- '- '
-  build_expiry_focus_line
+  printf '\n### 第3段 顶部摘要卡\n'
+  printf -- '- 基础 %s个\n' "${total_accounts}"
+  printf -- '- OK %s\n' "${SUMMARY_OK}"
+  printf -- '- ERR %s\n' "${SUMMARY_ERROR}"
+  printf -- '- 5h总剩余 %s\n' "${five_hour_total}"
+  printf -- '- 周总剩余 %s\n' "${week_total}"
+  printf -- '- 风险提醒仅显示 7天内到期 %s\n' "${expiring_soon_count}"
+  printf '\n### 第4段 5h剩余重点账号\n'
+  build_mobile_quota_focus_lines '5h' '5h剩余'
+  printf '\n### 第5段 周剩余重点账号\n'
+  printf -- '- 这一段只展示 plus/team 等常规账号的周剩余重点，继续保持逐账号展示。\n'
+  build_mobile_quota_focus_lines 'week' '周剩余' 'non-free-only'
+  printf '\n### 第5段下方补充 free周刷新\n'
+  printf -- '- free 账号不要逐个列出，按周刷新 1 小时时间窗口汇总：每个时间窗口刷新了几个 free 账号。\n'
+  build_mobile_week_refresh_summary_lines 'free-only'
+  printf '\n### 第6段 风险与结论\n'
+  printf '异常项\n'
+  build_mobile_error_focus_lines
+  printf '订阅到期重点\n'
+  build_mobile_expiry_focus_lines
+  printf '结论\n'
+  printf -- '- 建议优先关注 7天内到期账号，并持续观察剩余为 0%% 的账号。\n'
   cat <<'EOF'
 
 ## 输出特征
-operations dashboard, business analytics board, enterprise SaaS admin UI, Chinese infographic, clean layout, highly readable.
+premium mobile report, vertical dashboard, refined layout, high readability, executive summary, Chinese mobile long image.
 EOF
 }
 
