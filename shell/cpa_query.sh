@@ -6,6 +6,11 @@ set -euo pipefail
 #   CPA_MANAGEMENT_TOKEN='<remote-management token>' \
 #   ./cpa_query.sh
 #
+# 多连接方式（按逗号位置配对）：
+#   CPA_BASE_URL='http://<管理服务地址1>:<端口>,http://<管理服务地址2>:<端口>' \
+#   CPA_MANAGEMENT_TOKEN='<token1>,<token2>' \
+#   ./cpa_query.sh
+#
 # 等价参数方式：
 #   ./cpa_query.sh \
 #     --base-url 'http://<管理服务地址>:<端口>' \
@@ -97,6 +102,7 @@ set -euo pipefail
 #      规则：plan_type=free 的账号固定调整到优先级 8；plan_type 以本次 api-call 为准；
 #           非 free 账号只要订阅剩余 3 天内或已过期未满 10 天，统一调整到优先级 9；
 #           已过期达到 10 天及以上时，不调整当前优先级；
+#           priority=1 的正常账号若处于 disabled=true，输出异常提示，便于人工跟进；
 #           api-call 返回 401 时禁用账号；free 周额度用完时自动禁用，到周刷新时间后自动启用。
 
 SCRIPT_NAME="$(basename "$0")"
@@ -185,6 +191,34 @@ SUMMARY_ITEM_ORDER=0
 AUTO_PRIORITY_MANAGED=0
 AUTO_PRIORITY_RESTORED=0
 AUTO_PRIORITY_UNCHANGED=0
+declare -a CONNECTION_BASE_URLS=()
+declare -a CONNECTION_MANAGEMENT_TOKENS=()
+declare -a MERGED_AUTH_NAMES=()
+declare -a MERGED_AUTH_NOTES=()
+declare -a MERGED_AUTH_PRIORITIES=()
+declare -a MERGED_AUTH_INDEXES=()
+declare -a MERGED_AUTH_ACCOUNT_IDS=()
+declare -a MERGED_AUTH_PLAN_TYPES=()
+declare -a MERGED_AUTH_SUBSCRIPTION_STARTS=()
+declare -a MERGED_AUTH_SUBSCRIPTION_UNTILS=()
+declare -a MERGED_AUTH_DISABLED_FLAGS=()
+declare -a MERGED_RESULT_ROWS=()
+declare -a MERGED_SUMMARY_5H_ITEMS=()
+declare -a MERGED_SUMMARY_WEEK_ITEMS=()
+declare -a MERGED_SUMMARY_EXPIRY_ITEMS=()
+declare -a MERGED_SUMMARY_FREE_ITEMS=()
+declare -a MERGED_SUMMARY_ERROR_NAMES=()
+declare -a MERGED_SUMMARY_PLAN_CHANGE_ITEMS=()
+declare -a MERGED_AUTO_PRIORITY_LINES=()
+MERGED_SUMMARY_TOTAL=0
+MERGED_SUMMARY_OK=0
+MERGED_SUMMARY_ERROR=0
+MERGED_SUMMARY_SUM_5H=0
+MERGED_SUMMARY_SUM_WEEK=0
+MERGED_SUMMARY_ITEM_ORDER=0
+MERGED_AUTO_PRIORITY_MANAGED=0
+MERGED_AUTO_PRIORITY_RESTORED=0
+MERGED_AUTO_PRIORITY_UNCHANGED=0
 
 usage() {
   cat <<EOF
@@ -194,6 +228,7 @@ usage() {
 说明:
   查询 cliproxyapi remote management 接口。
   默认会先读取当前运行目录下的 cpa.env（${DEFAULT_ENV_FILE}）；如需覆盖路径，可设置 CPA_ENV_FILE。
+  CPA_BASE_URL 和 CPA_MANAGEMENT_TOKEN 支持逗号分隔的多连接配置，会按位置配对后查询并合并输出。
   默认执行 all：先查询 auth-files，再按 name/authIndex 逐个查询 ChatGPT usage 并执行自动禁用，
                然后对未禁用账号自动处理 priority，最后写入 ${PROMPT_FILE}。
   默认查询不会输出看板图片提示词，而是把本次结果写入 ${PROMPT_FILE}。
@@ -208,14 +243,15 @@ usage() {
                  非 free 账号只要订阅剩余 3 天内或已过期未满 10 天，统一调到 9；
                  已过期达到 10 天及以上时，不调整当前优先级；
                  当前 priority 已经 >= 8 的账号跳过自动调整。
+                 priority=1 的正常账号若处于 disabled=true，会输出异常提示。
                  api-call 返回 401 时禁用账号；free 周额度用完时自动禁用，到周刷新时间后自动启用。
                  若同一账号上次 api-call plan_type=plus、本次为 free，会输出套餐提醒。
   --prompt：不发起查询，直接读取 ${PROMPT_FILE} 并生成看板图片提示词。
   若未显式指定动作，但传入了 --field-name/--field-priority，则会自动切到 fields。
 
 必填:
-  --base-url <url>                 管理接口地址，也可用 CPA_BASE_URL
-  --management-token <token>       remote-management Bearer token，也可用 CPA_MANAGEMENT_TOKEN
+  --base-url <url>                 管理接口地址，也可用 CPA_BASE_URL；多连接用英文逗号分隔
+  --management-token <token>       remote-management Bearer token，也可用 CPA_MANAGEMENT_TOKEN；多连接用英文逗号分隔
 
 选项:
   --target-method <method>         api-call 目标方法，默认 ${TARGET_METHOD}
@@ -238,6 +274,7 @@ usage() {
 
 示例:
   CPA_BASE_URL='http://127.0.0.1:3318' CPA_MANAGEMENT_TOKEN='***' ./${SCRIPT_NAME}
+  CPA_BASE_URL='http://127.0.0.1:3318,http://127.0.0.1:4318' CPA_MANAGEMENT_TOKEN='token1,token2' ./${SCRIPT_NAME}
   ./${SCRIPT_NAME} usage --base-url 'http://127.0.0.1:3318' --management-token '***'
   ./${SCRIPT_NAME} management-usage --base-url 'http://127.0.0.1:3318' --management-token '***'
   ./${SCRIPT_NAME} disabled-list --base-url 'http://127.0.0.1:3318' --management-token '***'
@@ -306,6 +343,11 @@ compact_error_reason() {
   reason="${reason//$'\r'/ }"
   reason="${reason//$'\n'/ }"
 
+  if [[ "${reason}" == "priority=1 但 disabled=true" ]]; then
+    printf '%s' "${reason}"
+    return 0
+  fi
+
   if [[ "${reason}" =~ ^(HTTP[[:space:]][0-9]+:[[:space:]]+)(.*)$ ]]; then
     prefix="${BASH_REMATCH[1]}"
     message="${BASH_REMATCH[2]}"
@@ -324,6 +366,91 @@ json_escape() {
   value="${value//$'\r'/\\r}"
   value="${value//$'\t'/\\t}"
   printf '%s' "${value}"
+}
+
+trim_csv_item() {
+  local value="${1:-}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "${value}"
+}
+
+split_csv_items() {
+  local value="${1:-}"
+  local -n output_ref="$2"
+  local -a raw_items=()
+  local item trimmed
+
+  output_ref=()
+  [[ -n "${value}" ]] || return 0
+
+  IFS=',' read -r -a raw_items <<< "${value}"
+  for item in "${raw_items[@]}"; do
+    trimmed="$(trim_csv_item "${item}")"
+    [[ -n "${trimmed}" ]] || continue
+    output_ref+=("${trimmed}")
+  done
+}
+
+prepare_connection_configs() {
+  local -a base_urls=()
+  local -a management_tokens=()
+  local base_count token_count index
+
+  split_csv_items "${BASE_URL}" base_urls
+  split_csv_items "${MANAGEMENT_TOKEN}" management_tokens
+
+  base_count="${#base_urls[@]}"
+  token_count="${#management_tokens[@]}"
+
+  [[ "${base_count}" -gt 0 ]] || die "缺少管理接口地址，请通过 --base-url 或 CPA_BASE_URL 传入"
+  [[ "${token_count}" -gt 0 ]] || die "缺少管理 Token，请通过 --management-token 或 CPA_MANAGEMENT_TOKEN 传入"
+
+  if [[ "${base_count}" -gt 1 && "${token_count}" -eq 1 ]]; then
+    for ((index = 1; index < base_count; index++)); do
+      management_tokens+=("${management_tokens[0]}")
+    done
+  elif [[ "${base_count}" -eq 1 && "${token_count}" -gt 1 ]]; then
+    for ((index = 1; index < token_count; index++)); do
+      base_urls+=("${base_urls[0]}")
+    done
+  elif [[ "${base_count}" -ne "${token_count}" ]]; then
+    die "多连接配置数量不一致：CPA_BASE_URL=${base_count} 个，CPA_MANAGEMENT_TOKEN=${token_count} 个"
+  fi
+
+  CONNECTION_BASE_URLS=()
+  CONNECTION_MANAGEMENT_TOKENS=()
+  for ((index = 0; index < ${#base_urls[@]}; index++)); do
+    CONNECTION_BASE_URLS+=("${base_urls[index]%/}")
+    CONNECTION_MANAGEMENT_TOKENS+=("${management_tokens[index]}")
+  done
+
+  BASE_URL="${CONNECTION_BASE_URLS[0]}"
+  MANAGEMENT_TOKEN="${CONNECTION_MANAGEMENT_TOKENS[0]}"
+}
+
+is_multi_connection() {
+  [[ "${#CONNECTION_BASE_URLS[@]}" -gt 1 ]]
+}
+
+set_connection_config() {
+  local index="$1"
+  BASE_URL="${CONNECTION_BASE_URLS[index]}"
+  MANAGEMENT_TOKEN="${CONNECTION_MANAGEMENT_TOKENS[index]}"
+}
+
+ensure_multi_connection_action_allowed() {
+  if ! is_multi_connection; then
+    return 0
+  fi
+
+  case "${ACTION}" in
+    all|usage|auth-files|disabled-list|disabled|auto-priority)
+      ;;
+    *)
+      die "${ACTION} 动作不支持多连接批量执行，请只配置单个 CPA_BASE_URL/CPA_MANAGEMENT_TOKEN 后重试"
+      ;;
+  esac
 }
 
 parse_args() {
@@ -910,6 +1037,13 @@ is_valid_priority_value() {
   [[ "${priority}" =~ ^-?[0-9]+$ ]]
 }
 
+is_priority_one_disabled() {
+  local priority="${1:-}"
+  local disabled="${2:-false}"
+
+  [[ "${disabled}" == "true" && "${priority}" =~ ^0*1$ ]]
+}
+
 default_priority_for_plan_type() {
   local plan_type="${1:-}"
 
@@ -1001,6 +1135,7 @@ print_auto_priority_rules() {
   printf '5. 非 free 账号只保留 priority 1 和 9：剩余 3 天内或已过期未满 10 天时统一调整到 9；已过期达到 10 天及以上时保持当前优先级。\n'
   printf '6. free 账号只看周额度；周额度用完时自动禁用，到周刷新时间后自动启用。\n'
   printf '7. 已记录的 free 周额度禁用账号，到期后会自动启用。\n'
+  printf '8. priority=1 的正常账号若处于 disabled=true，视为异常并输出提示。\n'
   printf '\n'
 }
 
@@ -1085,6 +1220,10 @@ auto_manage_priorities_for_current_entries() {
 
     if [[ "${disabled_flag}" == "true" ]]; then
       # 禁用账号不再参与 priority 调整，避免刚被禁用的账号继续被调度提权。
+      if is_priority_one_disabled "${priority}" "${disabled_flag}"; then
+        log "异常提示: ${name} 当前 priority=1 但 disabled=true，请检查禁用原因"
+        record_auto_priority_line "异常: ${name} | priority=1 但 disabled=true | 请检查禁用原因"
+      fi
       AUTO_PRIORITY_UNCHANGED=$((AUTO_PRIORITY_UNCHANGED + 1))
       index=$((index + 1))
       continue
@@ -1838,6 +1977,8 @@ render_disabled_list() {
   local name note priority auth_index account_id plan_type subscription_start subscription_until disabled
   local plan_info subscription_info
   local -a disabled_rows=()
+  local -a priority_one_disabled_rows=()
+  local row
 
   while [[ "${index}" -lt "${total}" ]]; do
     disabled="${AUTH_DISABLED_FLAGS[index]:-"false"}"
@@ -1853,6 +1994,9 @@ render_disabled_list() {
       plan_info="${plan_type}"
       subscription_info="$(format_subscription_time "${subscription_start}") -> $(format_subscription_time "${subscription_until}")"
       disabled_rows+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${auth_index}"$'\t'"${plan_info}"$'\t'"${subscription_info}")
+      if is_priority_one_disabled "${priority}" "${disabled}"; then
+        priority_one_disabled_rows+=("${name}"$'\t'"${note}"$'\t'"${auth_index}")
+      fi
     fi
     index=$((index + 1))
   done
@@ -1875,6 +2019,18 @@ render_disabled_list() {
       "$(format_md_cell "${subscription_info}")" \
       "$(format_md_cell "${auth_index}")"
   done
+
+  if [[ "${#priority_one_disabled_rows[@]}" -gt 0 ]]; then
+    printf '\n'
+    printf '### 异常提示\n'
+    for row in "${priority_one_disabled_rows[@]}"; do
+      IFS=$'\t' read -r name note auth_index <<< "${row}"
+      printf -- '- %s：priority=1 但 disabled=true，请检查禁用原因（备注：%s，authIndex：%s）\n' \
+        "$(format_md_cell "${name}")" \
+        "$(format_md_cell "${note}")" \
+        "$(format_md_cell "${auth_index}")"
+    done
+  fi
 }
 
 number_less_than() {
@@ -1917,6 +2073,30 @@ record_error_summary() {
 
   reason="$(compact_error_reason "${reason}")"
 
+  SUMMARY_ERROR_NAMES+=("${name}"$'\t'"${reason}")
+}
+
+summary_error_exists() {
+  local target_name="$1"
+  local target_reason="$2"
+  local item name reason
+
+  for item in "${SUMMARY_ERROR_NAMES[@]}"; do
+    IFS=$'\t' read -r name reason <<< "${item}"
+    if [[ "${name}" == "${target_name}" && "${reason}" == "${target_reason}" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+record_error_summary_once() {
+  local name="$1"
+  local reason="${2:-}"
+
+  reason="$(compact_error_reason "${reason}")"
+  summary_error_exists "${name}" "${reason}" && return 0
   SUMMARY_ERROR_NAMES+=("${name}"$'\t'"${reason}")
 }
 
@@ -2345,10 +2525,6 @@ save_prompt_snapshot() {
       subscription_start="${AUTH_SUBSCRIPTION_STARTS[index]:-"-"}"
       subscription_until="${AUTH_SUBSCRIPTION_UNTILS[index]:-"-"}"
       disabled="${AUTH_DISABLED_FLAGS[index]:-"false"}"
-      if [[ "${disabled}" == "true" ]]; then
-        index=$((index + 1))
-        continue
-      fi
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "${name}" \
         "${note}" \
@@ -2591,6 +2767,33 @@ load_prompt_snapshot() {
   SUMMARY_SUM_5H="$(jq -r '.summary.sum_5h // "0"' "${PROMPT_FILE}")"
   SUMMARY_SUM_WEEK="$(jq -r '.summary.sum_week // "0"' "${PROMPT_FILE}")"
   SUMMARY_ITEM_ORDER=0
+
+  enrich_prompt_error_summary_from_snapshot
+}
+
+enrich_prompt_error_summary_from_snapshot() {
+  local index=0
+  local total="${#AUTH_NAMES[@]}"
+  local name priority disabled row note plan_info subscription_info limits five_hour_reset week_reset status reason
+
+  # 兼容旧快照：若 auth 里已保留 disabled 元数据，--prompt 也能独立识别 priority=1 的禁用异常。
+  while [[ "${index}" -lt "${total}" ]]; do
+    name="${AUTH_NAMES[index]:-"(未命名)"}"
+    priority="${AUTH_PRIORITIES[index]:-"-"}"
+    disabled="${AUTH_DISABLED_FLAGS[index]:-"false"}"
+    if is_priority_one_disabled "${priority}" "${disabled}"; then
+      record_error_summary_once "${name}" "priority=1 但 disabled=true"
+    fi
+    index=$((index + 1))
+  done
+
+  # 兼容已生成 result_rows 但 summary.error_items 缺失的快照。
+  for row in "${RESULT_ROWS[@]}"; do
+    IFS=$'\t' read -r name note priority plan_info subscription_info limits five_hour_reset week_reset status <<< "${row}"
+    [[ -n "${name}" && "${status}" == 异常:* ]] || continue
+    reason="${status#异常: }"
+    record_error_summary_once "${name}" "${reason}"
+  done
 }
 
 build_management_usage_prompt_lines() {
@@ -2680,6 +2883,7 @@ count_prompt_expiring_soon_items() {
     [[ "${remaining_seconds}" =~ ^-?[0-9]+$ ]] || continue
     (( remaining_seconds > 0 && remaining_seconds <= threshold_seconds )) || continue
     auth_index="$(find_auth_index_by_name "${name}" 2>/dev/null)" || continue
+    [[ "${AUTH_DISABLED_FLAGS[auth_index]:-"false"}" == "true" ]] && continue
     plan_type="$(normalize_prompt_plan_type "${AUTH_PLAN_TYPES[auth_index]:-}")"
     [[ "${plan_type}" == "free" ]] && continue
     count=$((count + 1))
@@ -2954,6 +3158,7 @@ build_mobile_expiry_focus_lines() {
     [[ "${remaining_seconds}" =~ ^-?[0-9]+$ ]] || continue
     (( remaining_seconds > 0 )) || continue
     auth_index="$(find_auth_index_by_name "${name}" 2>/dev/null)" || continue
+    [[ "${AUTH_DISABLED_FLAGS[auth_index]:-"false"}" == "true" ]] && continue
     plan_type="$(normalize_prompt_plan_type "${AUTH_PLAN_TYPES[auth_index]:-}")"
     [[ -n "${plan_type}" && "${plan_type}" != "free" ]] || continue
     remaining_days=$((remaining_seconds / 86400))
@@ -3225,14 +3430,26 @@ query_usage_for_auth_entries() {
   for auth_index in "${AUTH_INDEXES[@]}"; do
     current_index="${index}"
     name="${AUTH_NAMES[current_index]:-"(未命名)"}"
+    note="${AUTH_NOTES[current_index]:-"-"}"
+    priority="${AUTH_PRIORITIES[current_index]:-"-"}"
     plan_type="${AUTH_PLAN_TYPES[current_index]:-"-"}"
     disabled_flag="${AUTH_DISABLED_FLAGS[current_index]:-"false"}"
+    subscription_start="${AUTH_SUBSCRIPTION_STARTS[current_index]:-"-"}"
     subscription_until="${AUTH_SUBSCRIPTION_UNTILS[current_index]:-"-"}"
 
     record_expiry_summary "${name}" "${subscription_until}" "${current_index}"
 
     if [[ "${disabled_flag}" == "true" ]]; then
       log "跳过 usage ($((index + 1))/${total}): ${name}（disabled=true）"
+      if is_priority_one_disabled "${priority}" "${disabled_flag}"; then
+        plan_info="${plan_type}"
+        subscription_info="$(format_subscription_time "${subscription_start}") -> $(format_subscription_time "${subscription_until}")"
+        error_reason="priority=1 但 disabled=true"
+        log "异常提示: ${name} 当前 ${error_reason}，请检查禁用原因"
+        SUMMARY_ERROR=$((SUMMARY_ERROR + 1))
+        record_error_summary "${name}" "${error_reason}"
+        RESULT_ROWS+=("${name}"$'\t'"${note}"$'\t'"${priority}"$'\t'"${plan_info}"$'\t'"${subscription_info}"$'\t-\t-\t-\t'"异常: ${error_reason}")
+      fi
       index=$((index + 1))
       continue
     fi
@@ -3334,6 +3551,244 @@ query_usage_for_auth_entries() {
   fi
 }
 
+reset_merged_results() {
+  MERGED_AUTH_NAMES=()
+  MERGED_AUTH_NOTES=()
+  MERGED_AUTH_PRIORITIES=()
+  MERGED_AUTH_INDEXES=()
+  MERGED_AUTH_ACCOUNT_IDS=()
+  MERGED_AUTH_PLAN_TYPES=()
+  MERGED_AUTH_SUBSCRIPTION_STARTS=()
+  MERGED_AUTH_SUBSCRIPTION_UNTILS=()
+  MERGED_AUTH_DISABLED_FLAGS=()
+  MERGED_RESULT_ROWS=()
+  MERGED_SUMMARY_5H_ITEMS=()
+  MERGED_SUMMARY_WEEK_ITEMS=()
+  MERGED_SUMMARY_EXPIRY_ITEMS=()
+  MERGED_SUMMARY_FREE_ITEMS=()
+  MERGED_SUMMARY_ERROR_NAMES=()
+  MERGED_SUMMARY_PLAN_CHANGE_ITEMS=()
+  MERGED_AUTO_PRIORITY_LINES=()
+  MERGED_SUMMARY_TOTAL=0
+  MERGED_SUMMARY_OK=0
+  MERGED_SUMMARY_ERROR=0
+  MERGED_SUMMARY_SUM_5H=0
+  MERGED_SUMMARY_SUM_WEEK=0
+  MERGED_SUMMARY_ITEM_ORDER=0
+  MERGED_AUTO_PRIORITY_MANAGED=0
+  MERGED_AUTO_PRIORITY_RESTORED=0
+  MERGED_AUTO_PRIORITY_UNCHANGED=0
+}
+
+append_current_auth_entries() {
+  MERGED_AUTH_NAMES+=("${AUTH_NAMES[@]}")
+  MERGED_AUTH_NOTES+=("${AUTH_NOTES[@]}")
+  MERGED_AUTH_PRIORITIES+=("${AUTH_PRIORITIES[@]}")
+  MERGED_AUTH_INDEXES+=("${AUTH_INDEXES[@]}")
+  MERGED_AUTH_ACCOUNT_IDS+=("${AUTH_ACCOUNT_IDS[@]}")
+  MERGED_AUTH_PLAN_TYPES+=("${AUTH_PLAN_TYPES[@]}")
+  MERGED_AUTH_SUBSCRIPTION_STARTS+=("${AUTH_SUBSCRIPTION_STARTS[@]}")
+  MERGED_AUTH_SUBSCRIPTION_UNTILS+=("${AUTH_SUBSCRIPTION_UNTILS[@]}")
+  MERGED_AUTH_DISABLED_FLAGS+=("${AUTH_DISABLED_FLAGS[@]}")
+}
+
+append_summary_items_with_new_order() {
+  local target_name="$1"
+  shift
+  local -n target_ref="${target_name}"
+  local item value _order name new_order
+
+  for item in "$@"; do
+    IFS=$'\t' read -r value _order name <<< "${item}"
+    [[ -n "${name}" ]] || continue
+    printf -v new_order '%06d' "${MERGED_SUMMARY_ITEM_ORDER}"
+    MERGED_SUMMARY_ITEM_ORDER=$((MERGED_SUMMARY_ITEM_ORDER + 1))
+    target_ref+=("${value}"$'\t'"${new_order}"$'\t'"${name}")
+  done
+}
+
+append_expiry_items_with_offset() {
+  local auth_offset="$1"
+  local item remaining_seconds order name shifted_order
+
+  for item in "${SUMMARY_EXPIRY_ITEMS[@]}"; do
+    IFS=$'\t' read -r remaining_seconds order name <<< "${item}"
+    [[ -n "${name}" && "${order}" =~ ^[0-9]+$ ]] || continue
+    shifted_order=$((auth_offset + 10#${order}))
+    MERGED_SUMMARY_EXPIRY_ITEMS+=("${remaining_seconds}"$'\t'"${shifted_order}"$'\t'"${name}")
+  done
+}
+
+append_current_connection_results() {
+  local auth_offset="${#MERGED_AUTH_NAMES[@]}"
+  local item
+
+  append_current_auth_entries
+  MERGED_RESULT_ROWS+=("${RESULT_ROWS[@]}")
+
+  MERGED_SUMMARY_TOTAL=$((MERGED_SUMMARY_TOTAL + SUMMARY_TOTAL))
+  MERGED_SUMMARY_OK=$((MERGED_SUMMARY_OK + SUMMARY_OK))
+  MERGED_SUMMARY_ERROR=$((MERGED_SUMMARY_ERROR + SUMMARY_ERROR))
+  MERGED_SUMMARY_SUM_5H="$(number_add "${MERGED_SUMMARY_SUM_5H}" "${SUMMARY_SUM_5H}")"
+  MERGED_SUMMARY_SUM_WEEK="$(number_add "${MERGED_SUMMARY_SUM_WEEK}" "${SUMMARY_SUM_WEEK}")"
+
+  append_summary_items_with_new_order MERGED_SUMMARY_5H_ITEMS "${SUMMARY_5H_ITEMS[@]}"
+  append_summary_items_with_new_order MERGED_SUMMARY_WEEK_ITEMS "${SUMMARY_WEEK_ITEMS[@]}"
+  append_summary_items_with_new_order MERGED_SUMMARY_FREE_ITEMS "${SUMMARY_FREE_ITEMS[@]}"
+  append_expiry_items_with_offset "${auth_offset}"
+  MERGED_SUMMARY_ERROR_NAMES+=("${SUMMARY_ERROR_NAMES[@]}")
+  MERGED_SUMMARY_PLAN_CHANGE_ITEMS+=("${SUMMARY_PLAN_CHANGE_ITEMS[@]}")
+
+  MERGED_AUTO_PRIORITY_MANAGED=$((MERGED_AUTO_PRIORITY_MANAGED + AUTO_PRIORITY_MANAGED))
+  MERGED_AUTO_PRIORITY_RESTORED=$((MERGED_AUTO_PRIORITY_RESTORED + AUTO_PRIORITY_RESTORED))
+  MERGED_AUTO_PRIORITY_UNCHANGED=$((MERGED_AUTO_PRIORITY_UNCHANGED + AUTO_PRIORITY_UNCHANGED))
+  for item in "${AUTO_PRIORITY_LINES[@]}"; do
+    MERGED_AUTO_PRIORITY_LINES+=("${item}")
+  done
+}
+
+restore_merged_results() {
+  AUTH_NAMES=("${MERGED_AUTH_NAMES[@]}")
+  AUTH_NOTES=("${MERGED_AUTH_NOTES[@]}")
+  AUTH_PRIORITIES=("${MERGED_AUTH_PRIORITIES[@]}")
+  AUTH_INDEXES=("${MERGED_AUTH_INDEXES[@]}")
+  AUTH_ACCOUNT_IDS=("${MERGED_AUTH_ACCOUNT_IDS[@]}")
+  AUTH_PLAN_TYPES=("${MERGED_AUTH_PLAN_TYPES[@]}")
+  AUTH_SUBSCRIPTION_STARTS=("${MERGED_AUTH_SUBSCRIPTION_STARTS[@]}")
+  AUTH_SUBSCRIPTION_UNTILS=("${MERGED_AUTH_SUBSCRIPTION_UNTILS[@]}")
+  AUTH_DISABLED_FLAGS=("${MERGED_AUTH_DISABLED_FLAGS[@]}")
+  RESULT_ROWS=("${MERGED_RESULT_ROWS[@]}")
+  SUMMARY_5H_ITEMS=("${MERGED_SUMMARY_5H_ITEMS[@]}")
+  SUMMARY_WEEK_ITEMS=("${MERGED_SUMMARY_WEEK_ITEMS[@]}")
+  SUMMARY_EXPIRY_ITEMS=("${MERGED_SUMMARY_EXPIRY_ITEMS[@]}")
+  SUMMARY_FREE_ITEMS=("${MERGED_SUMMARY_FREE_ITEMS[@]}")
+  SUMMARY_ERROR_NAMES=("${MERGED_SUMMARY_ERROR_NAMES[@]}")
+  SUMMARY_PLAN_CHANGE_ITEMS=("${MERGED_SUMMARY_PLAN_CHANGE_ITEMS[@]}")
+  SUMMARY_TOTAL="${MERGED_SUMMARY_TOTAL}"
+  SUMMARY_OK="${MERGED_SUMMARY_OK}"
+  SUMMARY_ERROR="${MERGED_SUMMARY_ERROR}"
+  SUMMARY_SUM_5H="${MERGED_SUMMARY_SUM_5H}"
+  SUMMARY_SUM_WEEK="${MERGED_SUMMARY_SUM_WEEK}"
+  SUMMARY_ITEM_ORDER="${MERGED_SUMMARY_ITEM_ORDER}"
+  AUTO_PRIORITY_LINES=("${MERGED_AUTO_PRIORITY_LINES[@]}")
+  AUTO_PRIORITY_MANAGED="${MERGED_AUTO_PRIORITY_MANAGED}"
+  AUTO_PRIORITY_RESTORED="${MERGED_AUTO_PRIORITY_RESTORED}"
+  AUTO_PRIORITY_UNCHANGED="${MERGED_AUTO_PRIORITY_UNCHANGED}"
+}
+
+run_multi_usage_action() {
+  local index total auth_files_response
+
+  reset_merged_results
+  print_auto_priority_rules
+  total="${#CONNECTION_BASE_URLS[@]}"
+  for ((index = 0; index < total; index++)); do
+    set_connection_config "${index}"
+    log "处理连接 $((index + 1))/${total}: ${BASE_URL}"
+    log "从 auth-files 自动提取全部 name/authIndex"
+    auth_files_response="$(fetch_auth_files_cached)"
+    resolve_auth_entries_from_auth_files "${auth_files_response}"
+    query_usage_for_auth_entries "false"
+    append_current_connection_results
+  done
+
+  restore_merged_results
+  render_and_save_usage_results
+}
+
+run_multi_all_action() {
+  local index total auth_files_response
+
+  reset_merged_results
+  total="${#CONNECTION_BASE_URLS[@]}"
+  for ((index = 0; index < total; index++)); do
+    set_connection_config "${index}"
+    log "处理连接 $((index + 1))/${total}: ${BASE_URL}"
+    log "查询 auth-files"
+    auth_files_response="$(fetch_auth_files_cached)"
+    resolve_auth_entries_from_auth_files "${auth_files_response}"
+    query_usage_for_auth_entries "false"
+    log "自动处理 priority"
+    auto_manage_priorities_for_current_entries
+    sort_auth_entries_by_priority
+    refresh_result_row_priorities_from_auth_entries
+    append_current_connection_results
+  done
+
+  restore_merged_results
+  render_and_save_usage_results
+  print_auto_priority_report
+}
+
+run_multi_disabled_list_action() {
+  local index total auth_files_response
+
+  reset_merged_results
+  total="${#CONNECTION_BASE_URLS[@]}"
+  for ((index = 0; index < total; index++)); do
+    set_connection_config "${index}"
+    log "处理连接 $((index + 1))/${total}: ${BASE_URL}"
+    auth_files_response="$(fetch_auth_files_cached)"
+    resolve_auth_entries_from_auth_files "${auth_files_response}"
+    append_current_auth_entries
+  done
+
+  restore_merged_results
+  render_disabled_list
+}
+
+run_multi_auth_files_action() {
+  local index total auth_files_response separator=""
+
+  total="${#CONNECTION_BASE_URLS[@]}"
+  printf '[\n'
+  for ((index = 0; index < total; index++)); do
+    set_connection_config "${index}"
+    log "处理连接 $((index + 1))/${total}: ${BASE_URL}"
+    auth_files_response="$(fetch_auth_files_cached)"
+    printf '%s' "${separator}"
+    jq -n \
+      --arg connection_index "$((index + 1))" \
+      --arg base_url "${BASE_URL}" \
+      --argjson auth_files "${auth_files_response}" \
+      '{
+        connection_index: ($connection_index | tonumber),
+        base_url: $base_url,
+        auth_files: $auth_files
+      }'
+    separator=$',\n'
+  done
+  printf '\n]\n'
+}
+
+run_multi_auto_priority_action() {
+  local index total auth_files_response item
+
+  reset_merged_results
+  total="${#CONNECTION_BASE_URLS[@]}"
+  for ((index = 0; index < total; index++)); do
+    set_connection_config "${index}"
+    log "处理连接 $((index + 1))/${total}: ${BASE_URL}"
+    log "从 auth-files 自动处理 priority"
+    auth_files_response="$(fetch_auth_files_cached)"
+    resolve_auth_entries_from_auth_files "${auth_files_response}"
+    auto_manage_priorities_for_current_entries
+    sort_auth_entries_by_priority
+    MERGED_AUTO_PRIORITY_MANAGED=$((MERGED_AUTO_PRIORITY_MANAGED + AUTO_PRIORITY_MANAGED))
+    MERGED_AUTO_PRIORITY_RESTORED=$((MERGED_AUTO_PRIORITY_RESTORED + AUTO_PRIORITY_RESTORED))
+    MERGED_AUTO_PRIORITY_UNCHANGED=$((MERGED_AUTO_PRIORITY_UNCHANGED + AUTO_PRIORITY_UNCHANGED))
+    for item in "${AUTO_PRIORITY_LINES[@]}"; do
+      MERGED_AUTO_PRIORITY_LINES+=("${item}")
+    done
+  done
+
+  AUTO_PRIORITY_LINES=("${MERGED_AUTO_PRIORITY_LINES[@]}")
+  AUTO_PRIORITY_MANAGED="${MERGED_AUTO_PRIORITY_MANAGED}"
+  AUTO_PRIORITY_RESTORED="${MERGED_AUTO_PRIORITY_RESTORED}"
+  AUTO_PRIORITY_UNCHANGED="${MERGED_AUTO_PRIORITY_UNCHANGED}"
+  print_auto_priority_report
+}
+
 run_all_action() {
   local auth_files_response
 
@@ -3394,8 +3849,43 @@ run_disabled_list_action() {
 
 main() {
   parse_args "$@"
-  BASE_URL="${BASE_URL%/}"
+  if [[ "${ACTION}" == "prompt" ]]; then
+    ensure_requirements
+    load_prompt_snapshot
+    print_dashboard_image_prompt
+    return 0
+  fi
+
+  prepare_connection_configs
+  ensure_multi_connection_action_allowed
   ensure_requirements
+
+  if is_multi_connection; then
+    if [[ "${ACTION}" == "all" ]]; then
+      run_multi_all_action
+      return 0
+    fi
+
+    if [[ "${ACTION}" == "usage" ]]; then
+      run_multi_usage_action
+      return 0
+    fi
+
+    if [[ "${ACTION}" == "auth-files" ]]; then
+      run_multi_auth_files_action
+      return 0
+    fi
+
+    if [[ "${ACTION}" == "disabled-list" || "${ACTION}" == "disabled" ]]; then
+      run_multi_disabled_list_action
+      return 0
+    fi
+
+    if [[ "${ACTION}" == "auto-priority" ]]; then
+      run_multi_auto_priority_action
+      return 0
+    fi
+  fi
 
   if [[ "${ACTION}" == "all" ]]; then
     run_all_action
@@ -3439,12 +3929,6 @@ main() {
 
   if [[ "${ACTION}" == "auto-priority" ]]; then
     auto_manage_priorities
-    return 0
-  fi
-
-  if [[ "${ACTION}" == "prompt" ]]; then
-    load_prompt_snapshot
-    print_dashboard_image_prompt
     return 0
   fi
 
