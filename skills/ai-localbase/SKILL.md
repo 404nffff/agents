@@ -46,6 +46,58 @@ description: Use when starting any conversation in a project that uses ai_localb
 5. **文档维护策略**：新文档优先上传；增量内容用 `append`；全文覆盖用 `update`；废弃文档用 `delete`
 6. **依赖前置**：Bash 版本依赖 `bash`、`curl`；PowerShell 版本依赖 `Invoke-RestMethod`
 
+## 检索返回结构
+
+`knowledge_base.search` 返回的是 MCP tool result 外层对象，不能只读取 `content[].text`。`content` 通常只包含“共检索到 N 条结果”这类摘要，真正可用的命中片段在 `structuredContent.items`。
+
+入参结构：
+
+```json
+{
+  "query": "搜索关键词",
+  "knowledgeBaseId": "",
+  "documentId": "",
+  "topK": 5
+}
+```
+
+字段规则：
+
+- `query` 必填
+- `knowledgeBaseId` 为空表示跨知识库搜索；日常项目检索应优先使用 `init` 确认出的当前项目知识库 ID
+- `documentId` 不为空时只检索单个文档
+- `topK` 是 MCP 层二次截断；不传时后端默认跨知识库最多选 10 条、每个文档默认最多 2 条
+- `score` 是检索或重排后的相关性分数，越高越相关
+
+返回结构示例：
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "共检索到 N 条结果"
+    }
+  ],
+  "structuredContent": {
+    "items": [
+      {
+        "knowledgeBaseId": "kb-1",
+        "documentId": "doc-1",
+        "documentName": "xxx.md",
+        "chunkId": "chunk-xxx",
+        "text": "命中的原文片段",
+        "score": 0.83,
+        "index": 0
+      }
+    ]
+  },
+  "isError": false
+}
+```
+
+处理结果时必须遍历 `structuredContent.items`，读取每条命中的 `text`、`documentName`、`documentId`、`chunkId`、`score` 和 `index`。若 `structuredContent.items` 为空，即使 `content[].text` 存在摘要，也应按“未命中可用片段”处理。
+
 ## 快速开始
 
 **1. 配置环境**
@@ -76,6 +128,9 @@ cp .env.example .env
 
 # 检索内容（参数：关键词、目录）
 "${HOME}/.codex/skills/ai-localbase/ai-localbase.sh" search "关键词" "/path/to/project"
+
+# 检索内容并限制返回数量（参数：关键词、目录、topK）
+"${HOME}/.codex/skills/ai-localbase/ai-localbase.sh" search "关键词" "/path/to/project" 5
 
 # 问答（参数：问题、目录）
 "${HOME}/.codex/skills/ai-localbase/ai-localbase.sh" chat "你的问题" "/path/to/project"

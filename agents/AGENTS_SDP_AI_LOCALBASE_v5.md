@@ -50,7 +50,7 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
 ### 4.2 Skill 工具与降级策略
 | 类别 | Skill 名称 | 描述 | 规范与降级策略 |
 | :--- | :--- | :--- | :--- |
-| **项目知识库** | `ai-localbase-background` | 项目知识库管理与检索 | 每次会话开始先执行 `init <当前启动目录>`，按启动目录 basename 确认或创建知识库并缓存真实 `kb_id`；检索优先走同步 `search` / `chat`；文档沉淀与维护默认走 `queue-upload` / `queue-append` / `queue-update` / `queue-delete`。`queue-*` 在 worker 未运行时自动拉起后台 worker，队列清空并空闲后自动退出。 |
+| **项目知识库** | `ai-localbase` | 项目知识库管理与检索 | 每次会话开始先执行 `init <当前启动目录>`，按启动目录 basename 确认或创建知识库并缓存真实 `kb_id`；检索优先走同步 `search` / `chat`；文档沉淀与维护默认走同步 `upload` / `append` / `update` / `delete`，命令返回后必须确认执行结果。 |
 | **数据库查询** | `db-query` | 多数据库统一查询接口 | 只要代码中涉及数据库查询（包含 MySQL、Redis、Mongo、PGSQL），必须先使用 `db-query` skill；若为 MySQL 查询且 `db-query` 连续重试 3 次仍不可用、不存在或执行失败，才允许降级使用 `mysql-query` skill；禁止绕过该流程直接执行数据库查询。 |
 | **数据库查询** | `mysql-query` | MySQL 专用查询接口 | 仅作为 `db-query` 的降级备选，仅限 MySQL 查询场景。 |
 
@@ -67,16 +67,16 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
 | **任务规划** | `shrimp-task-manager` | 任务规模评估与拆解 | 复杂任务必须使用 `plan_task`, `analyze_task`, `reflect_task`, `split_tasks` 做规模评估与任务拆解。 |
 
 ## 5. 项目知识库
-### 5.1 ai-localbase-background skill 优先规范
+### 5.1 ai-localbase skill 优先规范
 
-`ai-localbase-background` skill 是本项目访问 `ai_localbase` 知识库的**默认入口**。对设计文档、施工文档、问题清单、排查记录与阶段结论的沉淀，以及对项目历史经验、需求背景、方案对比、上下文追溯的检索，默认都先遵循 `skills/ai-localbase-background/SKILL.md` 中的统一入口约定。
+`ai-localbase` skill 是本项目访问 `ai_localbase` 知识库的**默认同步入口**。对设计文档、施工文档、问题清单、排查记录与阶段结论的沉淀，以及对项目历史经验、需求背景、方案对比、上下文追溯的检索，默认都先遵循 `skills/ai-localbase/SKILL.md` 中的统一入口约定。
 
-*   **启动协议与知识库命名**：每一轮新会话或项目启动时的首要动作，**必须优先读取 `docs/index.md` 文件了解项目全局上下文和历史工作留痕**；若该文件不存在，必须记录缺失并继续完成知识库握手，禁止因索引缺失跳过 `ai-localbase-background` skill。随后通过该 skill 的统一入口执行 `init <当前启动目录>`，让脚本按启动目录 basename 映射知识库名称（例如当前目录是 `/www/agents` 时，`kb_name=agents`）。`kb_name` 只用于匹配，不能直接当作 `knowledgeBaseId` 使用。
-*   **kb_id 确认握手（每轮新会话都要执行）**：每轮新会话启动时都必须先执行一次 `init`。`init` 必须负责确认项目知识库、返回真实 `kb_id`（例如 `kb-3`），并把当前目录 basename 与 `kb_id` 的映射写入项目运行状态目录 `.ai-localbase-background/knowledge.json`。只有完成 `init` 并确认真实 `kb_id` 后，才允许继续执行检索、问答或文档写入；禁止绕过 `init` 直接手写或猜测 `knowledgeBaseId`。
-*   **查询优先级 (先想再开口)**：每轮任务开始、回复前、进入设计前、进入施工前，优先通过 `ai-localbase-background` skill 检索当前项目历史文档。片段检索默认走同步 `search`，基于知识库上下文的问答默认走同步 `chat`；默认仅检索当前 `kb_id` 对应的知识库，未命中时需先征得用户同意再扩展检索范围；仅当 `ai-localbase-background` skill 无结果或结果不足时，才降级查本地文件。
-*   **错误恢复规则**：如果通过 `ai-localbase-background` skill 检索或问答时出现 `knowledge base not found`，必须立刻停止当前检索链路，重新执行一次 `init <当前启动目录>` 以刷新 `kb_id` 映射。禁止直接把目录名（如 `agents`）继续作为 `knowledgeBaseId` 重试。
-*   **写入方式 (增量优先与及时沉淀)**：所有文档必须写入当前启动目录对应的已确认 `kb_id` 中（禁止写入其他知识库），并优先按 `ai-localbase-background` skill 的统一入口执行。新文档首次沉淀默认使用 `queue-upload`；对于已有文档的修改，**优先使用 `queue-append`** 记录核心决策或增量内容，避免高频全量覆盖；仅在最终收尾合并或大范围重构时，才使用 `queue-update`；废弃文档使用 `queue-delete`。`queue-*` 只负责投递任务，需要时会自动拉起后台 worker。
-*   **默认同步规则**：凡是 `docs/[任务目录]/` 下新产出的计划、概要设计、详细设计、施工文档、状态文档、测试文档、排查文档，在对应阶段完成后默认通过 `ai-localbase-background` skill 同步到当前知识库，无需用户再次提醒；日常过程记录（如 `operations-log.md`、排查记录）优先用 `queue-append` 沉淀。凡是触发 `queue-*` 的同步动作，必须继续通过 `job-status` / `job-result` 确认任务完成，禁止只投递任务而不核对结果。
+*   **启动协议与知识库命名**：每一轮新会话或项目启动时的首要动作，**必须优先读取 `docs/index.md` 文件了解项目全局上下文和历史工作留痕**；若该文件不存在，必须记录缺失并继续完成知识库握手，禁止因索引缺失跳过 `ai-localbase` skill。随后通过该 skill 的统一入口执行 `init <当前启动目录>`，让脚本按启动目录 basename 映射知识库名称（例如当前目录是 `/www/agents` 时，`kb_name=agents`）。`kb_name` 只用于匹配，不能直接当作 `knowledgeBaseId` 使用。
+*   **kb_id 确认握手（每轮新会话都要执行）**：每轮新会话启动时都必须先执行一次 `init`。`init` 必须负责确认项目知识库、返回真实 `kb_id`（例如 `kb-3`），并把当前目录 basename 与 `kb_id` 的映射写入 `~/.codex/skills/ai-localbase/knowledge.json`。只有完成 `init` 并确认真实 `kb_id` 后，才允许继续执行检索、问答或文档写入；禁止绕过 `init` 直接手写或猜测 `knowledgeBaseId`。
+*   **查询优先级 (先想再开口)**：每轮任务开始、回复前、进入设计前、进入施工前，优先通过 `ai-localbase` skill 检索当前项目历史文档。片段检索默认走同步 `search`，基于知识库上下文的问答默认走同步 `chat`；默认仅检索当前 `kb_id` 对应的知识库，未命中时需先征得用户同意再扩展检索范围；仅当 `ai-localbase` skill 无结果或结果不足时，才降级查本地文件。
+*   **错误恢复规则**：如果通过 `ai-localbase` skill 检索或问答时出现 `knowledge base not found`，必须立刻停止当前检索链路，重新执行一次 `init <当前启动目录>` 以刷新 `kb_id` 映射。禁止直接把目录名（如 `agents`）继续作为 `knowledgeBaseId` 重试。
+*   **写入方式 (增量优先与及时沉淀)**：所有文档必须写入当前启动目录对应的已确认 `kb_id` 中（禁止写入其他知识库），并优先按 `ai-localbase` skill 的同步入口执行。新文档首次沉淀默认使用 `upload`；对于已有文档的修改，**优先使用 `append`** 记录核心决策或增量内容，避免高频全量覆盖；仅在最终收尾合并或大范围重构时，才使用 `update`；废弃文档使用 `delete`。所有写入命令返回后必须检查响应中的 `isError`、`structuredContent` 或错误信息，确认写入成功。
+*   **默认同步规则**：凡是 `docs/[任务目录]/` 下新产出的计划、概要设计、详细设计、施工文档、状态文档、测试文档、排查文档，在对应阶段完成后默认通过 `ai-localbase` skill 同步到当前知识库，无需用户再次提醒；日常过程记录（如 `operations-log.md`、排查记录）优先用 `append` 沉淀。凡是触发 `upload` / `append` / `update` / `delete` 的同步动作，必须直接核对命令返回结果，禁止只执行命令而不检查结果。
 *   **内容范围**：优先沉淀 `docs/`、`plan/` 下的设计文档、施工文档、状态文档、问题清单、测试记录、排查记录、阶段结论；发现重复需合并提炼，避免把短期噪音或纯临时输出写入知识库。
 *   **检索目标**：回答前优先确认知识库中是否已有相同需求、相似模块、既有风险、历史决策、已验证方案；命中后优先复用知识库结论，再结合本地代码上下文落地。
 
@@ -99,7 +99,7 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
    - `verification.md`
    - `review-report.md`
 6. **四步收集法 (鼓励并发收集)**：
-   - 步骤1：结构化快速扫描，输出 `docs/[任务目录]/onlyAI/context-scan.json`，记录位置、现状、技术栈、测试、候选角色与专家观察。默认先用 `codebase-retrieval` 建立语义级全局视图；若 `codebase-retrieval` 不可用、限流、超时或结果不足，必须立刻切换到 `code-index` 做文件级与符号级扫描，并在 `context-scan.json` 中记录降级原因、使用的 `code-index` 工具与命中结果。**鼓励在此时并行调用多个检索工具**（如 `ai-localbase-background` skill 的同步 `search / chat` + `codebase-retrieval`，或降级后 `ai-localbase-background` skill + `code-index`），但原生 `grep`/`rg` 仅作为补充精确匹配，禁止跳过前述链路直接代替语义检索。
+   - 步骤1：结构化快速扫描，输出 `docs/[任务目录]/onlyAI/context-scan.json`，记录位置、现状、技术栈、测试、候选角色与专家观察。默认先用 `codebase-retrieval` 建立语义级全局视图；若 `codebase-retrieval` 不可用、限流、超时或结果不足，必须立刻切换到 `code-index` 做文件级与符号级扫描，并在 `context-scan.json` 中记录降级原因、使用的 `code-index` 工具与命中结果。**鼓励在此时并行调用多个检索工具**（如 `ai-localbase` skill 的同步 `search / chat` + `codebase-retrieval`，或降级后 `ai-localbase` skill + `code-index`），但原生 `grep`/`rg` 仅作为补充精确匹配，禁止跳过前述链路直接代替语义检索。
    - 步骤2：识别关键疑问、已知/未知边界与阶段候选角色，使用 `sequential-thinking` 找出优先级。
    - 步骤3：针对高优疑问深挖，输出 `docs/[任务目录]/onlyAI/context-question-N.json`，建议最多 3 次。深挖时同样遵循“`codebase-retrieval` 优先，失败后强制切 `code-index`”的链路；需要定位具体符号、调用关系、文件摘要时，优先使用 `code-index` 的对应能力补齐证据。同样鼓励并行获取信息。只有在确实命中阶段候选角色时，才按需读取对应的 `skills/who/roles/*.md` 文件。
    - 步骤4：充分性检查，确认接口契约、技术理由、主要风险、验证方式与当前阶段角色边界已清晰；若未满足，必须回溯补充上下文。
@@ -160,7 +160,7 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
 3. **数据库链路验证补充**：质量验证默认以项目现有测试体系下的单元测试、冒烟测试和功能测试为主；若验证目标涉及真实数据库状态、跨服务链路、数据一致性或线上等价只读核验，必须额外生成待确认验证方案，经用户确认后再执行数据库链路验证。数据库链路验证脚本必须放入 `docs/[任务目录]/sql/`，按业务正向调用链路组织，只允许只读核验，优先使用 `db-query`；仅当 MySQL 场景下 `db-query` 连续 3 次不可用或执行失败，才允许降级为 `mysql-query`。链路脚本不得内嵌凭证、不得执行写操作、不得替代自动化测试。
 4. **审查报告**：自我审查结论统一写入 `docs/[任务目录]/onlyAI/review-report.md`。
 5. **专项复核**：若 `003-施工文档.md` 中为高风险任务指定了 `Security Engineer`、`SRE`、`Code Reviewer` 等复核角色，收尾阶段必须明确对应复核结论或未执行原因。
-6. **强制更新与知识库瘦身**：任务完成后必须优先通过 `ai-localbase-background` skill 将设计结论、施工结果、测试结论同步到当前知识库。默认使用 `queue-upload` / `queue-append` / `queue-update` / `queue-delete` 投递写入任务，并继续通过 `job-status` / `job-result` 确认异步任务完成。必须对沉淀的零散文档进行合并、提炼和瘦身，提取最终的 API 契约和架构设计更新到主文档，并清理开发过程中的废弃方案。**同步时必须强制写入当前启动目录对应的知识库中**。
+6. **强制更新与知识库瘦身**：任务完成后必须优先通过 `ai-localbase` skill 将设计结论、施工结果、测试结论同步到当前知识库。默认使用同步 `upload` / `append` / `update` / `delete` 写入，并直接核对命令返回结果确认写入完成。必须对沉淀的零散文档进行合并、提炼和瘦身，提取最终的 API 契约和架构设计更新到主文档，并清理开发过程中的废弃方案。**同步时必须强制写入当前启动目录对应的知识库中**。
 7. **全局索引强制更新（收尾检查点）**：每个任务完成收尾前，**必须**执行以下流程，这是任务交付的强制前置条件：
    - 读取 `docs/index.md`（不存在则创建）
    - 新增/更新当前任务条目：任务名称、任务目录路径、核心交付物、当前状态、完成日期

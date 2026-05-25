@@ -63,6 +63,58 @@ description: Use when starting any conversation in a project that uses ai_localb
 9. `worker-start / worker-stop` 只用于调试或批量任务排查
 10. 若当前环境没有 Python，继续使用同一个 Bash 入口；`queue-*` 会自动回退为同步写入
 
+## 检索返回结构
+
+`knowledge_base.search` 返回的是 MCP tool result 外层对象，不能只读取 `content[].text`。`content` 通常只包含“共检索到 N 条结果”这类摘要，真正可用的命中片段在 `structuredContent.items`。
+
+入参结构：
+
+```json
+{
+  "query": "搜索关键词",
+  "knowledgeBaseId": "",
+  "documentId": "",
+  "topK": 5
+}
+```
+
+字段规则：
+
+- `query` 必填
+- `knowledgeBaseId` 为空表示跨知识库搜索；项目内默认先执行 `init`，再使用当前项目对应的真实 `knowledgeBaseId`
+- `documentId` 不为空时只检索单个文档
+- `topK` 是 MCP 层二次截断；不传时后端默认跨知识库最多选 10 条、每个文档默认最多 2 条
+- `score` 是检索或重排后的相关性分数，越高越相关
+
+返回结构示例：
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "共检索到 N 条结果"
+    }
+  ],
+  "structuredContent": {
+    "items": [
+      {
+        "knowledgeBaseId": "kb-1",
+        "documentId": "doc-1",
+        "documentName": "xxx.md",
+        "chunkId": "chunk-xxx",
+        "text": "命中的原文片段",
+        "score": 0.83,
+        "index": 0
+      }
+    ]
+  },
+  "isError": false
+}
+```
+
+处理结果时必须遍历 `structuredContent.items`，读取每条命中的 `text`、`documentName`、`documentId`、`chunkId`、`score` 和 `index`。若 `structuredContent.items` 为空，即使 `content[].text` 存在摘要，也应按“未命中可用片段”处理。
+
 ## Bash 示例
 
 ```bash

@@ -41,6 +41,12 @@
 | file-naming-helper | file-naming-helper | 根据中文描述生成英文文件名，触发词：命名、起名、文件名 |
 | day-log | day-log | 根据当前会话生成日报 markdown |
 
+### 沟通模式
+
+| Name | Directory | Description |
+| --- | --- | --- |
+| caveman | caveman | 超压缩沟通模式，触发词：caveman mode、talk like caveman、use caveman、less tokens、be brief、/caveman |
+
 ### 数据库查询
 
 | Name | Directory | Description |
