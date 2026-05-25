@@ -50,6 +50,8 @@ GITHUB_AGENTS_PATH="${DEFAULT_GITHUB_AGENTS_PATH}"
 AUTO_YES="false"
 
 TMP_FILES=()
+TMP_DIRS=()
+REMOTE_CLONE_DIR=""
 
 new_tmp_file() {
   local p
@@ -58,10 +60,20 @@ new_tmp_file() {
   printf "%s\n" "${p}"
 }
 
+new_tmp_dir() {
+  local p
+  p="$(mktemp -d)"
+  TMP_DIRS+=("${p}")
+  printf "%s\n" "${p}"
+}
+
 cleanup() {
   local f
   for f in "${TMP_FILES[@]:-}"; do
     [[ -n "${f}" && -f "${f}" ]] && rm -f "${f}" || true
+  done
+  for f in "${TMP_DIRS[@]:-}"; do
+    [[ -n "${f}" && -d "${f}" ]] && rm -rf "${f}" || true
   done
 }
 
@@ -87,7 +99,7 @@ usage() {
   1) 本地执行优先扫描本地 agents 目录
   2) 网络请求执行时，先读取远程 agents/README.md 展示可选 agent 文件列表
   3) 只能单选一个 agent 文件，安装时同时覆盖 ~/.codex/AGENTS.md 与当前项目目录 AGENTS.md
-  4) 可通过 --github / --ref / --agents-path 指定远程来源
+  4) 可通过 --github / --ref / --agents-path 指定远程来源；远程安装时实际文件会先 git clone 到临时目录，再拷贝到目标位置
   5) 若本地存在同名文件，提示是否覆盖（--yes 自动覆盖）
   6) 兼容单文件安装：可使用 --source 或 --file 直接安装单个文件
 
@@ -163,6 +175,62 @@ normalize_github_repo() {
   repo="${repo#http://github.com/}"
   repo="${repo%.git}"
   printf "%s\n" "${repo}"
+}
+
+sanitize_temp_path_component() {
+  local value="$1"
+  value="$(printf "%s" "${value}" | tr '/:@?&=% ' '_' | tr -cd '[:alnum:]_.-')"
+  [[ -z "${value}" ]] && value="item"
+  printf "%s\n" "${value}"
+}
+
+resolve_persistent_remote_clone_dir() {
+  local scope="$1"
+  local repo="$2"
+  local ref="$3"
+  local path="$4"
+  local base_dir="${TMPDIR:-/tmp}/codex-install_agents-clones"
+  local repo_part ref_part path_part
+
+  repo_part="$(sanitize_temp_path_component "${repo}")"
+  ref_part="$(sanitize_temp_path_component "${ref}")"
+  path_part="$(sanitize_temp_path_component "${path}")"
+  printf "%s/%s-%s-%s-%s\n" "${base_dir}" "${scope}" "${repo_part}" "${ref_part}" "${path_part}"
+}
+
+clone_github_repo_to_dir() {
+  local repo="$1"
+  local ref="$2"
+  local clone_dir="$3"
+  local repo_url="https://github.com/${repo}.git"
+
+  if ! command -v git >/dev/null 2>&1; then
+    echo "错误: 远程安装需要 git。" >&2
+    exit 1
+  fi
+
+  if [[ -e "${clone_dir}" ]]; then
+    echo "检测到上次保留的 git clone 目录，先删除: ${clone_dir}"
+    rm -rf "${clone_dir}"
+  fi
+
+  mkdir -p "$(dirname "${clone_dir}")"
+  echo "正在 git clone 远程仓库到临时目录: ${repo}@${ref}"
+  git clone --depth 1 --branch "${ref}" "${repo_url}" "${clone_dir}" >/dev/null 2>&1
+}
+
+cleanup_remote_clone_dir_with_prompt() {
+  local clone_dir="$1"
+  [[ -z "${clone_dir}" ]] && return 0
+
+  echo
+  if confirm "是否删除本次 git clone 临时目录? ${clone_dir}" "Y"; then
+    rm -rf "${clone_dir}"
+    echo "已删除 git clone 临时目录: ${clone_dir}"
+  else
+    echo "已保留 git clone 临时目录: ${clone_dir}"
+    echo "下次远程安装时会先删除该目录，再重新 git clone。"
+  fi
 }
 
 fetch_raw_from_github() {
@@ -591,21 +659,23 @@ fi
 
 if [[ "${SOURCE_MODE}" == "github" && -n "${GITHUB_FILE}" ]]; then
   REMOTE_REPO="$(normalize_github_repo "${GITHUB_REPO}")"
-  tmp_source="$(new_tmp_file)"
   tmp_template="$(new_tmp_file)"
-  fetch_raw_from_github "${REMOTE_REPO}" "${GITHUB_REF}" "${GITHUB_FILE}" "${tmp_source}"
+  REMOTE_CLONE_DIR="$(resolve_persistent_remote_clone_dir "agents" "${REMOTE_REPO}" "${GITHUB_REF}" "${GITHUB_FILE}")"
+  clone_github_repo_to_dir "${REMOTE_REPO}" "${GITHUB_REF}" "${REMOTE_CLONE_DIR}"
+  tmp_source="${REMOTE_CLONE_DIR}/${GITHUB_FILE}"
 
-  if [[ ! -s "${tmp_source}" ]]; then
-    echo "错误: 获取到的 agent 文件为空: ${GITHUB_FILE}" >&2
+  if [[ ! -f "${tmp_source}" || ! -s "${tmp_source}" ]]; then
+    echo "错误: 获取到的 agent 文件为空或不存在: ${GITHUB_FILE}" >&2
     exit 1
   fi
 
   file_name="$(basename "${GITHUB_FILE}")"
   install_file_with_prompt "${TARGET_ROOT}/${TARGET_AGENT_FILE}" "${tmp_source}" "~/.codex/${TARGET_AGENT_FILE}"
   install_file_with_prompt "${PROJECT_TARGET_FILE}" "${tmp_source}" "当前项目 AGENTS.md"
-  if prepare_agents_v2_template_payload "${file_name}" "github_file" "${GITHUB_FILE}" "${REMOTE_REPO}" "${GITHUB_REF}" "" "" "${tmp_template}"; then
+  if prepare_agents_v2_template_payload "${file_name}" "source" "${tmp_source}" "${REMOTE_REPO}" "${GITHUB_REF}" "" "" "${tmp_template}"; then
     install_agents_v2_template_for_project "${file_name}" "${tmp_template}"
   fi
+  cleanup_remote_clone_dir_with_prompt "${REMOTE_CLONE_DIR}"
   echo "完成。"
   exit 0
 fi
@@ -661,6 +731,11 @@ if (( selected_count != 1 )); then
 fi
 
 echo
+if [[ -n "${REMOTE_REPO}" ]]; then
+  REMOTE_CLONE_DIR="$(resolve_persistent_remote_clone_dir "agents" "${REMOTE_REPO}" "${GITHUB_REF}" "${REMOTE_PATH}")"
+  clone_github_repo_to_dir "${REMOTE_REPO}" "${GITHUB_REF}" "${REMOTE_CLONE_DIR}"
+fi
+
 echo "开始安装到: ${TARGET_ROOT}"
 for idx in "${!AGENT_NAMES[@]}"; do
   [[ "${SELECTED[idx]}" -ne 1 ]] && continue
@@ -671,14 +746,14 @@ for idx in "${!AGENT_NAMES[@]}"; do
   tmp_template="$(new_tmp_file)"
 
   if [[ -n "${REMOTE_REPO}" ]]; then
-    tmp_source="$(new_tmp_file)"
-    if ! fetch_raw_from_github "${REMOTE_REPO}" "${GITHUB_REF}" "${REMOTE_PATH}/${rel_path}" "${tmp_source}" >/dev/null 2>&1; then
+    tmp_source="${REMOTE_CLONE_DIR}/${REMOTE_PATH}/${rel_path}"
+    if [[ ! -f "${tmp_source}" ]]; then
       echo "错误: 无法获取远程 agent 文件: ${REMOTE_PATH}/${rel_path}" >&2
       exit 1
     fi
     install_file_with_prompt "${dest_file}" "${tmp_source}" "~/.codex/${TARGET_AGENT_FILE}"
     install_file_with_prompt "${PROJECT_TARGET_FILE}" "${tmp_source}" "当前项目 AGENTS.md"
-    if prepare_agents_v2_template_payload "${file_name}" "catalog_remote" "" "${REMOTE_REPO}" "${GITHUB_REF}" "${REMOTE_PATH}" "" "${tmp_template}"; then
+    if prepare_agents_v2_template_payload "${file_name}" "catalog_local" "" "" "" "" "${REMOTE_CLONE_DIR}/${REMOTE_PATH}" "${tmp_template}"; then
       install_agents_v2_template_for_project "${file_name}" "${tmp_template}"
     fi
   else
@@ -695,4 +770,5 @@ for idx in "${!AGENT_NAMES[@]}"; do
   fi
 done
 
+cleanup_remote_clone_dir_with_prompt "${REMOTE_CLONE_DIR}"
 echo "完成。"

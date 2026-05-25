@@ -41,6 +41,8 @@ TMP_FETCH_DIR=""
 TMP_SOURCE_FILE=""
 TMP_STATUS_DIR=""
 TMP_PARSE_DIR=""
+REMOTE_REPO_RESOLVED=""
+REMOTE_CLONE_DIR=""
 
 declare -a SERVER_NAMES=()
 declare -a SERVER_TITLES=()
@@ -81,7 +83,7 @@ usage() {
   1) 默认从远程仓库读取 404nffff/agents@master:mcp 目录下的单服务 Markdown
   2) 读取 ~/.codex/config.toml 的 mcp_servers 相关配置并对比
   3) 交互勾选要安装/更新的 mcp server
-  4) 若目标已存在且配置不同，会逐项询问是否覆盖
+  4) 若目标已存在且配置不同，会逐项询问是否覆盖；远程安装时实际文件会先 git clone 到临时目录，再从 clone 内容生成配置
   5) 只修改 mcp_servers 相关段落，不改动 config.toml 其他内容
 
 参数:
@@ -141,6 +143,62 @@ normalize_github_repo() {
   repo="${repo#http://github.com/}"
   repo="${repo%.git}"
   echo "${repo}"
+}
+
+sanitize_temp_path_component() {
+  local value="$1"
+  value="$(printf "%s" "${value}" | tr '/:@?&=% ' '_' | tr -cd '[:alnum:]_.-')"
+  [[ -z "${value}" ]] && value="item"
+  printf "%s\n" "${value}"
+}
+
+resolve_persistent_remote_clone_dir() {
+  local scope="$1"
+  local repo="$2"
+  local ref="$3"
+  local path="$4"
+  local base_dir="${TMPDIR:-/tmp}/codex-install_mcp-clones"
+  local repo_part ref_part path_part
+
+  repo_part="$(sanitize_temp_path_component "${repo}")"
+  ref_part="$(sanitize_temp_path_component "${ref}")"
+  path_part="$(sanitize_temp_path_component "${path}")"
+  printf "%s/%s-%s-%s-%s\n" "${base_dir}" "${scope}" "${repo_part}" "${ref_part}" "${path_part}"
+}
+
+clone_github_repo_to_dir() {
+  local repo="$1"
+  local ref="$2"
+  local clone_dir="$3"
+  local repo_url="https://github.com/${repo}.git"
+
+  if ! command -v git >/dev/null 2>&1; then
+    echo "错误: 远程安装需要 git。" >&2
+    exit 1
+  fi
+
+  if [[ -e "${clone_dir}" ]]; then
+    echo "检测到上次保留的 git clone 目录，先删除: ${clone_dir}"
+    rm -rf "${clone_dir}"
+  fi
+
+  mkdir -p "$(dirname "${clone_dir}")"
+  echo "正在 git clone 远程仓库到临时目录: ${repo}@${ref}"
+  git clone --depth 1 --branch "${ref}" "${repo_url}" "${clone_dir}" >/dev/null 2>&1
+}
+
+cleanup_remote_clone_dir_with_prompt() {
+  local clone_dir="$1"
+  [[ -z "${clone_dir}" ]] && return 0
+
+  echo
+  if confirm "是否删除本次 git clone 临时目录? ${clone_dir}" "Y"; then
+    rm -rf "${clone_dir}"
+    echo "已删除 git clone 临时目录: ${clone_dir}"
+  else
+    echo "已保留 git clone 临时目录: ${clone_dir}"
+    echo "下次远程安装时会先删除该目录，再重新 git clone。"
+  fi
 }
 
 # 统一远程下载超时与重试，避免 GitHub 单次网络抖动让交互式安装看起来“卡死”。
@@ -218,6 +276,40 @@ use_local_fallback() {
   return 1
 }
 
+load_source_from_cloned_repo() {
+  local clone_dir="$1"
+  local clone_path=""
+  local bundle_path=""
+
+  TMP_SOURCE_FILE="$(mktemp)"
+
+  if [[ "${GITHUB_MCP_PATH}" != *.md ]]; then
+    clone_path="${clone_dir}/${GITHUB_MCP_PATH}"
+    if [[ ! -d "${clone_path}" ]]; then
+      echo "错误: 远程 MCP 目录不存在: ${clone_path}" >&2
+      exit 1
+    fi
+
+    bundle_path="${clone_path%/}/mcp.md"
+    if [[ -f "${bundle_path}" ]]; then
+      cp "${bundle_path}" "${TMP_SOURCE_FILE}"
+    else
+      bundle_local_directory "${clone_path}"
+    fi
+    SOURCE_LABEL="远程目录 ${REMOTE_REPO_RESOLVED}@${GITHUB_REF}:${GITHUB_MCP_PATH}（git clone）"
+    return
+  fi
+
+  clone_path="${clone_dir}/${GITHUB_MCP_PATH}"
+  if [[ ! -f "${clone_path}" ]]; then
+    echo "错误: 远程 MCP 文件不存在: ${clone_path}" >&2
+    exit 1
+  fi
+
+  cp "${clone_path}" "${TMP_SOURCE_FILE}"
+  SOURCE_LABEL="远程文件 ${REMOTE_REPO_RESOLVED}@${GITHUB_REF}:${GITHUB_MCP_PATH}（git clone）"
+}
+
 fetch_github_directory() {
   local repo="$1"
   local path="$2"
@@ -259,6 +351,7 @@ fetch_github_directory() {
 
 fetch_source_file() {
   TMP_SOURCE_FILE="$(mktemp)"
+  REMOTE_REPO_RESOLVED=""
 
   if [[ "${SOURCE_MODE}" == "source" ]]; then
     if [[ -d "${SOURCE_INPUT}" ]]; then
@@ -290,10 +383,12 @@ fetch_source_file() {
 
   local repo raw_url bundle_path
   repo="$(normalize_github_repo "${GITHUB_REPO}")"
+  REMOTE_REPO_RESOLVED="${repo}"
 
   echo "正在拉取远程 MCP 清单: ${repo}@${GITHUB_REF}:${GITHUB_MCP_PATH}"
   if ! command -v curl >/dev/null 2>&1; then
     if use_local_fallback; then
+      REMOTE_REPO_RESOLVED=""
       echo "警告: 未安装 curl，已回退到本地文件: ${SOURCE_LABEL#本地回退 }" >&2
       return
     fi
@@ -326,6 +421,7 @@ fetch_source_file() {
   fi
 
   if use_local_fallback; then
+    REMOTE_REPO_RESOLVED=""
     echo "警告: 远程拉取失败，已回退到本地文件: ${SOURCE_LABEL#本地回退 }" >&2
     return
   fi
@@ -693,6 +789,55 @@ interactive_select() {
   exit 0
 }
 
+reload_selected_source_from_clone() {
+  local -a saved_selected_names=()
+  local i name found
+
+  [[ -z "${REMOTE_REPO_RESOLVED}" ]] && return 0
+
+  for i in "${!SELECTED[@]}"; do
+    [[ "${SELECTED[i]}" -eq 1 ]] && saved_selected_names+=("${SERVER_NAMES[i]}")
+  done
+
+  if [[ ${#saved_selected_names[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  REMOTE_CLONE_DIR="$(resolve_persistent_remote_clone_dir "mcp" "${REMOTE_REPO_RESOLVED}" "${GITHUB_REF}" "${GITHUB_MCP_PATH}")"
+  clone_github_repo_to_dir "${REMOTE_REPO_RESOLVED}" "${GITHUB_REF}" "${REMOTE_CLONE_DIR}"
+  load_source_from_cloned_repo "${REMOTE_CLONE_DIR}"
+
+  SERVER_NAMES=()
+  SERVER_TITLES=()
+  SERVER_DESCS=()
+  SELECTED=()
+  UPSERT=()
+  for name in "${!SOURCE_BLOCK_BY_NAME[@]}"; do
+    unset 'SOURCE_BLOCK_BY_NAME[$name]'
+  done
+
+  discover_servers
+
+  for i in "${!SELECTED[@]}"; do
+    SELECTED[i]=0
+  done
+
+  for name in "${saved_selected_names[@]}"; do
+    found="false"
+    for i in "${!SERVER_NAMES[@]}"; do
+      if [[ "${SERVER_NAMES[i]}" == "${name}" ]]; then
+        SELECTED[i]=1
+        found="true"
+        break
+      fi
+    done
+    if [[ "${found}" != "true" ]]; then
+      echo "错误: git clone 后未找到已选 MCP server: ${name}" >&2
+      exit 1
+    fi
+  done
+}
+
 extract_server_block_to_file() {
   local file="$1"
   local server="$2"
@@ -969,8 +1114,10 @@ main() {
   fetch_source_file
   discover_servers
   interactive_select
+  reload_selected_source_from_clone
   collect_upsert_targets
   apply_merge
+  cleanup_remote_clone_dir_with_prompt "${REMOTE_CLONE_DIR}"
 
   echo
   echo "处理完成，目标文件: ${TARGET_CONFIG}"

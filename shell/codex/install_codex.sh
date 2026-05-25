@@ -118,7 +118,7 @@ agents_usage() {
   1) 本地执行优先扫描本地 agents 目录
   2) 网络请求执行时，先读取远程 agents/README.md 展示可选 agent 文件列表
   3) 只能单选一个 agent 文件；选择 README 入口或 *GLOBAL*.md 时写入 ~/.codex/AGENTS.md，选择其他 agent 文件时写入当前项目 AGENTS.md
-  4) 可通过 --github / --ref / --agents-path 指定远程来源
+  4) 可通过 --github / --ref / --agents-path 指定远程来源；远程安装时实际文件会先 git clone 到临时目录，再拷贝到目标位置
   5) 若本地存在同名文件，提示是否覆盖
   6) 兼容单文件安装：可使用 --source 或 --file 直接安装单个文件
   7) 必须手动选择要安装的 agent 文件
@@ -139,10 +139,10 @@ skills_usage() {
 
 说明:
   1) 本地执行优先扫描本地 skills 目录
-  2) 网络请求执行时，先读取远程 skills/README.md 展示可选 skill 列表
+  2) 网络请求执行时，先读取远程 skills/README.md 获取目录，再读取每个选项下的 SKILL.md/skill.md 展示可选 skill 列表
   3) 必须手动勾选要安装的 skill
   4) 可通过 --github / --ref / --skills-path 指定远程来源
-  5) 安装到 ~/.codex/skills/
+  5) 远程安装时使用 git clone 到临时目录，再拷贝到 ~/.codex/skills/
   6) 若本地存在同名 skill，提示是否覆盖
 
 db-query 二进制发布地址可通过以下环境变量覆盖：
@@ -164,7 +164,7 @@ mcp_usage() {
   1) 默认来源会自动判断：本地执行优先本地 mcp/*.md，网络请求执行优先远程仓库（404nffff/agents@master:mcp）
   2) 读取 ~/.codex/config.toml 的 mcp_servers 相关配置并对比
   3) 必须手动勾选要安装/更新的 mcp server
-  4) 若目标已存在且配置不同，会逐项询问是否覆盖
+  4) 若目标已存在且配置不同，会逐项询问是否覆盖；远程安装时实际文件会先 git clone 到临时目录，再从 clone 内容生成配置
   5) 仅修改 mcp_servers 段落，不改动 config.toml 其他内容
   6) 若选中配置包含空 token 或占位 token，会在写入前交互输入
 EOF
@@ -304,6 +304,70 @@ git_sparse_checkout_repo_path() {
   fi
 
   printf "%s\n" "${clone_dir}/${root_path}"
+}
+
+sanitize_temp_path_component() {
+  local value="$1"
+
+  value="$(printf "%s" "${value}" | tr '/:@?&=% ' '_' | tr -cd '[:alnum:]_.-')"
+  [[ -z "${value}" ]] && value="item"
+  printf "%s\n" "${value}"
+}
+
+resolve_persistent_remote_clone_dir() {
+  local scope="$1"
+  local repo="$2"
+  local ref="$3"
+  local path="$4"
+  local base_dir="${TMPDIR:-/tmp}/codex-install_codex-clones"
+  local repo_part ref_part path_part
+
+  repo_part="$(sanitize_temp_path_component "${repo}")"
+  ref_part="$(sanitize_temp_path_component "${ref}")"
+  path_part="$(sanitize_temp_path_component "${path}")"
+
+  printf "%s/%s-%s-%s-%s\n" "${base_dir}" "${scope}" "${repo_part}" "${ref_part}" "${path_part}"
+}
+
+clone_github_repo_to_dir() {
+  local repo="$1"
+  local ref="$2"
+  local clone_dir="$3"
+  local repo_url="https://github.com/${repo}.git"
+
+  if ! command -v git >/dev/null 2>&1; then
+    echo "错误: 远程安装需要 git。" >&2
+    return 1
+  fi
+
+  if [[ -e "${clone_dir}" ]]; then
+    echo "检测到上次保留的 git clone 目录，先删除: ${clone_dir}"
+    rm -rf "${clone_dir}"
+  fi
+
+  mkdir -p "$(dirname "${clone_dir}")"
+  echo "正在 git clone 远程仓库到临时目录: ${repo}@${ref}"
+  if ! run_with_timeout_if_available 180 git clone --depth 1 --branch "${ref}" "${repo_url}" "${clone_dir}"; then
+    echo "错误: git clone 失败: ${repo}@${ref}" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+cleanup_remote_clone_dir_with_prompt() {
+  local clone_dir="$1"
+
+  [[ -z "${clone_dir}" ]] && return 0
+
+  echo
+  if confirm "是否删除本次 git clone 临时目录? ${clone_dir}" "Y"; then
+    rm -rf "${clone_dir}"
+    echo "已删除 git clone 临时目录: ${clone_dir}"
+  else
+    echo "已保留 git clone 临时目录: ${clone_dir}"
+    echo "下次远程安装时会先删除该目录，再重新 git clone。"
+  fi
 }
 
 preview_file_head() {
@@ -958,6 +1022,39 @@ read_frontmatter_field() {
   printf "%s\n" "${value}"
 }
 
+fetch_remote_skill_frontmatter_metadata() {
+  local repo="$1"
+  local ref="$2"
+  local skills_root="$3"
+  local rel_path="$4"
+  local fallback_name="$5"
+  local fallback_desc="$6"
+  local tmp_skill_file=""
+  local metadata_name=""
+  local metadata_desc=""
+  local skill_doc_path=""
+  local -a candidate_paths=(
+    "${skills_root}/${rel_path}/SKILL.md"
+    "${skills_root}/${rel_path}/skill.md"
+  )
+
+  for skill_doc_path in "${candidate_paths[@]}"; do
+    tmp_skill_file="$(new_tmp_file)"
+    if fetch_raw_from_github "${repo}" "${ref}" "${skill_doc_path}" "${tmp_skill_file}" >/dev/null 2>&1; then
+      metadata_name="$(read_frontmatter_field "${tmp_skill_file}" "name")"
+      metadata_desc="$(read_frontmatter_field "${tmp_skill_file}" "description")"
+      [[ -z "${metadata_name}" ]] && metadata_name="${fallback_name}"
+      if [[ -z "${metadata_desc}" || "${metadata_desc}" == ">" || "${metadata_desc}" == "|" ]]; then
+        metadata_desc="${fallback_desc}"
+      fi
+      printf "%s\t%s\n" "${metadata_name}" "${metadata_desc}"
+      return 0
+    fi
+  done
+
+  printf "%s\t%s\n" "${fallback_name}" "${fallback_desc}"
+}
+
 choose_target_interactive() {
   local input=""
   local tty_opened="false"
@@ -1032,6 +1129,8 @@ install_agents_main() {
   local source_label=""
   local remote_repo=""
   local remote_path=""
+  local remote_agents_root=""
+  local remote_clone_dir=""
   local tmp_catalog_file=""
   local tmp_source=""
   local file_name=""
@@ -1140,30 +1239,34 @@ install_agents_main() {
 
   if [[ "${source_mode}" == "github" && -n "${github_file}" ]]; then
     remote_repo="$(normalize_github_repo "${github_repo}")"
-    tmp_source="$(new_tmp_file)"
-    fetch_raw_from_github "${remote_repo}" "${github_ref}" "${github_file}" "${tmp_source}"
-    if [[ ! -s "${tmp_source}" ]]; then
-      echo "错误: 获取到的 agent 文件为空: ${github_file}" >&2
+    remote_clone_dir="$(resolve_persistent_remote_clone_dir "agents" "${remote_repo}" "${github_ref}" "${github_file}")"
+    if ! clone_github_repo_to_dir "${remote_repo}" "${github_ref}" "${remote_clone_dir}"; then
+      return 1
+    fi
+
+    src="${remote_clone_dir}/${github_file}"
+    if is_agents_readme_entry "${github_file}"; then
+      global_source="$(find_local_global_agent_file "$(dirname "${src}")")"
+      if [[ -z "${global_source}" ]]; then
+        echo "错误: 未在 $(dirname "${src}") 下找到匹配 *GLOBAL*.md 的 agent 文件。" >&2
+        return 1
+      fi
+      src="${global_source}"
+    elif [[ ! -f "${src}" ]]; then
+      echo "错误: 获取到的 agent 文件不存在: ${github_file}" >&2
       return 1
     fi
 
     file_name="$(basename "${github_file}")"
-    if is_agents_readme_entry "${github_file}"; then
-      global_source="$(resolve_github_global_agent_path "${remote_repo}" "${github_ref}" "${github_file}")"
-      fetch_raw_from_github "${remote_repo}" "${github_ref}" "${global_source}" "${tmp_source}"
-      if [[ ! -s "${tmp_source}" ]]; then
-        echo "错误: 获取 README 对应的 GLOBAL agent 文件失败: ${global_source}" >&2
-        return 1
-      fi
-    fi
     dest="$(resolve_agents_install_target_path "${github_file}" "${target_root}" "${target_agent_file}" "${project_target_file}")"
     target_label="$(resolve_agents_install_target_label "${github_file}" "${target_agent_file}")"
     echo "准备安装 ${file_name} -> ${target_label} ..."
-    install_file_with_prompt "${dest}" "${tmp_source}" "${target_label}"
+    install_file_with_prompt "${dest}" "${src}" "${target_label}"
     tmp_template="$(new_tmp_file)"
-    if prepare_agents_v2_template_payload "${file_name}" "github_file" "${github_file}" "${remote_repo}" "${github_ref}" "" "" "${tmp_template}"; then
+    if prepare_agents_v2_template_payload "${file_name}" "source" "${src}" "${remote_repo}" "${github_ref}" "" "" "${tmp_template}"; then
       install_agents_v2_template_for_project "${file_name}" "${tmp_template}"
     fi
+    cleanup_remote_clone_dir_with_prompt "${remote_clone_dir}"
     echo "Agents 安装完成。"
     return 0
   fi
@@ -1334,6 +1437,20 @@ install_agents_main() {
     echo "请选择且仅选择一个 agent 文件，已取消安装。"
     return 0
   fi
+
+  if [[ -n "${remote_repo}" ]]; then
+    remote_clone_dir="$(resolve_persistent_remote_clone_dir "agents" "${remote_repo}" "${github_ref}" "${remote_path}")"
+    echo "开始 git clone 远程 agents 仓库: ${remote_repo}@${github_ref}"
+    if ! clone_github_repo_to_dir "${remote_repo}" "${github_ref}" "${remote_clone_dir}"; then
+      return 1
+    fi
+    remote_agents_root="${remote_clone_dir}/${remote_path}"
+    if [[ ! -d "${remote_agents_root}" ]]; then
+      echo "错误: 远程 agents 目录不存在: ${remote_repo}@${github_ref}:${remote_path}" >&2
+      return 1
+    fi
+  fi
+
   echo "开始安装 agents 文件..."
   for idx in "${!agent_names[@]}"; do
     [[ "${selected[idx]}" -ne 1 ]] && continue
@@ -1343,20 +1460,20 @@ install_agents_main() {
     target_label="$(resolve_agents_install_target_label "${rel_path}" "${target_agent_file}")"
 
     if [[ -n "${remote_repo}" ]]; then
-      tmp_source="$(new_tmp_file)"
       if is_agents_readme_entry "${rel_path}"; then
-        global_source="$(resolve_github_global_agent_path "${remote_repo}" "${github_ref}" "${remote_path}/${rel_path}")"
-        if ! fetch_raw_from_github "${remote_repo}" "${github_ref}" "${global_source}" "${tmp_source}" >/dev/null 2>&1; then
-          echo "错误: 无法获取 README 对应的远程 GLOBAL agent 文件: ${global_source}" >&2
+        global_source="$(find_local_global_agent_file "${remote_agents_root}")"
+        if [[ -z "${global_source}" ]]; then
+          echo "错误: 未在 ${remote_agents_root} 下找到匹配 *GLOBAL*.md 的 agent 文件。" >&2
           return 1
         fi
+        src="${global_source}"
       else
-        if ! fetch_raw_from_github "${remote_repo}" "${github_ref}" "${remote_path}/${rel_path}" "${tmp_source}" >/dev/null 2>&1; then
+        src="${remote_agents_root}/${rel_path}"
+        if [[ ! -f "${src}" ]]; then
           echo "错误: 无法获取远程 agent 文件: ${remote_path}/${rel_path}" >&2
           return 1
         fi
       fi
-      src="${tmp_source}"
     else
       src="${agents_root}/${rel_path}"
       if is_agents_readme_entry "${rel_path}"; then
@@ -1375,7 +1492,7 @@ install_agents_main() {
     install_file_with_prompt "${dest}" "${src}" "${target_label}"
     tmp_template="$(new_tmp_file)"
     if [[ -n "${remote_repo}" ]]; then
-      if prepare_agents_v2_template_payload "${file_name}" "catalog_remote" "" "${remote_repo}" "${github_ref}" "${remote_path}" "" "${tmp_template}"; then
+      if prepare_agents_v2_template_payload "${file_name}" "catalog_local" "" "" "" "" "${remote_agents_root}" "${tmp_template}"; then
         install_agents_v2_template_for_project "${file_name}" "${tmp_template}"
       fi
     else
@@ -1385,6 +1502,7 @@ install_agents_main() {
     fi
   done
 
+  cleanup_remote_clone_dir_with_prompt "${remote_clone_dir}"
   echo
   echo "Agents 安装完成。"
 }
@@ -1401,9 +1519,9 @@ install_skills_main() {
   local remote_repo=""
   local remote_path=""
   local remote_skills_root=""
-  local tmp_fetch_dir=""
+  local remote_clone_dir=""
   local tmp_catalog_file=""
-  local archive_url archive_file extract_root candidate archive_extract_dir sparse_clone_dir
+  local candidate=""
   local dir skill_file name desc rel_path
   local cmd token idx tty_opened
   local installed overwritten skipped selected_count
@@ -1417,7 +1535,6 @@ install_skills_main() {
   local -a skill_descs=()
   local -a skill_paths=()
   local -a selected=()
-  local -a selected_sparse_paths=()
   local -a visible_skill_indices=()
   declare -A seen_names=()
   declare -A seen_dirs=()
@@ -1523,8 +1640,14 @@ install_skills_main() {
     fi
 
     while IFS=$'\t' read -r name rel_path desc; do
+      local metadata_name=""
+      local metadata_desc=""
       [[ -z "${name}" || -z "${rel_path}" ]] && continue
       [[ -z "${desc}" ]] && desc="(无 description)"
+
+      IFS=$'\t' read -r metadata_name metadata_desc <<<"$(fetch_remote_skill_frontmatter_metadata "${remote_repo}" "${github_ref}" "${remote_path}" "${rel_path}" "${name}" "${desc}")"
+      [[ -n "${metadata_name}" ]] && name="${metadata_name}"
+      [[ -n "${metadata_desc}" ]] && desc="${metadata_desc}"
 
       if [[ -n "${seen_names[${name}]+x}" ]]; then
         echo "警告: 发现重复 skill 名称 '${name}'，已忽略目录: ${rel_path}" >&2
@@ -1578,6 +1701,7 @@ install_skills_main() {
             next
           }
 
+          gsub(/`/, "", path)
           gsub(/\r/, "", desc)
           print name "\t" path "\t" desc
         }
@@ -1588,7 +1712,7 @@ install_skills_main() {
       echo "错误: 远程 skills README.md 未包含可解析目录（缺少 SKILL_CATALOG 标记或内容为空）" >&2
       return 1
     fi
-    source_label="远程目录 ${remote_repo}@${github_ref}:${remote_path}（先读取 README 列表）"
+    source_label="远程目录 ${remote_repo}@${github_ref}:${remote_path}（先读取 README 列表，再读取每个 skill 的 SKILL.md）"
   fi
 
   skills_string_contains_ci() {
@@ -1867,47 +1991,21 @@ install_skills_main() {
   skipped=0
 
   if [[ -n "${remote_repo}" ]]; then
-    if ! command -v curl >/dev/null 2>&1; then
-      echo "错误: 需要 curl 来拉取远程仓库压缩包。" >&2
-      return 1
-    fi
-    if ! command -v tar >/dev/null 2>&1; then
-      echo "错误: 需要 tar 来解压远程仓库压缩包。" >&2
+    if ! command -v git >/dev/null 2>&1; then
+      echo "错误: 远程安装 skill 需要 git。" >&2
       return 1
     fi
 
-    tmp_fetch_dir="$(new_tmp_dir)"
-    archive_extract_dir="${tmp_fetch_dir}/archive"
-    sparse_clone_dir="${tmp_fetch_dir}/sparse-repo"
-    mkdir -p "${archive_extract_dir}"
-    archive_url="https://codeload.github.com/${remote_repo}/tar.gz/${github_ref}"
-    archive_file="${tmp_fetch_dir}/repo.tar.gz"
-    echo "已选择 ${selected_count} 个 skill，开始拉取远程仓库: ${remote_repo}@${github_ref}"
-    echo "提示: 若压缩包下载超过约 10 秒，将自动切换为按所选 skill 稀疏拉取。"
-
-    candidate=""
-    if curl_download_with_retry "${archive_url}" "${archive_file}" 1 5 10; then
-      if run_with_timeout_if_available 20 tar -xzf "${archive_file}" -C "${archive_extract_dir}"; then
-        extract_root="$(find "${archive_extract_dir}" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
-        if [[ -n "${extract_root}" ]]; then
-          candidate="${extract_root}/${remote_path}"
-        fi
-      fi
+    remote_clone_dir="$(resolve_persistent_remote_clone_dir "skills" "${remote_repo}" "${github_ref}" "${remote_path}")"
+    echo "已选择 ${selected_count} 个 skill，开始 git clone 远程仓库: ${remote_repo}@${github_ref}"
+    if ! clone_github_repo_to_dir "${remote_repo}" "${github_ref}" "${remote_clone_dir}"; then
+      return 1
     fi
 
-    if [[ -z "${candidate}" || ! -d "${candidate}" ]]; then
-      selected_sparse_paths=()
-      for idx in "${!skill_names[@]}"; do
-        [[ "${selected[idx]}" -ne 1 ]] && continue
-        selected_sparse_paths+=("${remote_path}/${skill_paths[idx]}")
-      done
-      echo "警告: 远程仓库压缩包下载较慢或失败，尝试按目录稀疏拉取: ${remote_repo}@${github_ref}:${remote_path}" >&2
-      candidate="$(git_sparse_checkout_repo_path "${remote_repo}" "${github_ref}" "${remote_path}" "${sparse_clone_dir}" "${selected_sparse_paths[@]}" || true)"
-    fi
-
+    candidate="${remote_clone_dir}/${remote_path}"
     if [[ -z "${candidate}" || ! -d "${candidate}" ]]; then
       echo "错误: 无法获取远程 skills 目录 ${remote_repo}@${github_ref}:${remote_path}" >&2
-      echo "已尝试: codeload 压缩包、git sparse-checkout" >&2
+      echo "已尝试: git clone 到临时目录" >&2
       return 1
     fi
     remote_skills_root="${candidate}"
@@ -1999,6 +2097,7 @@ install_skills_main() {
 
   echo
   echo "Skills 安装完成: 新增 ${installed} 个，覆盖 ${overwritten} 个，跳过 ${skipped} 个。"
+  cleanup_remote_clone_dir_with_prompt "${remote_clone_dir}"
 }
 
 install_mcp_main() {
@@ -2009,6 +2108,8 @@ install_mcp_main() {
   local github_mcp_path="mcp"
   local target_config="${HOME}/.codex/config.toml"
   local source_label=""
+  local remote_repo_resolved=""
+  local remote_clone_dir=""
   local local_fallback_source="${REPO_ROOT}/mcp"
   local cwd_fallback_source_1="$(pwd)/mcp"
   local cwd_fallback_source_2="$(pwd)/mcp.md"
@@ -2067,6 +2168,98 @@ install_mcp_main() {
     return 1
   }
 
+  mcp_load_source_from_cloned_repo() {
+    local clone_dir="$1"
+    local clone_path=""
+    local bundle_path=""
+
+    tmp_source_file="$(new_tmp_file)"
+
+    if [[ "${github_mcp_path}" != *.md ]]; then
+      clone_path="${clone_dir}/${github_mcp_path}"
+      if [[ ! -d "${clone_path}" ]]; then
+        echo "错误: 远程 MCP 目录不存在: ${clone_path}" >&2
+        return 1
+      fi
+
+      bundle_path="${clone_path%/}/mcp.md"
+      if [[ -f "${bundle_path}" ]]; then
+        cp "${bundle_path}" "${tmp_source_file}"
+      else
+        mcp_bundle_local_directory "${clone_path}"
+      fi
+      source_label="远程目录 ${remote_repo_resolved}@${github_ref}:${github_mcp_path}（git clone）"
+      return 0
+    fi
+
+    clone_path="${clone_dir}/${github_mcp_path}"
+    if [[ ! -f "${clone_path}" ]]; then
+      echo "错误: 远程 MCP 文件不存在: ${clone_path}" >&2
+      return 1
+    fi
+
+    cp "${clone_path}" "${tmp_source_file}"
+    source_label="远程文件 ${remote_repo_resolved}@${github_ref}:${github_mcp_path}（git clone）"
+    return 0
+  }
+
+  mcp_reload_selected_source_from_clone() {
+    local -a saved_selected_names=()
+    local missing_name=""
+
+    [[ -z "${remote_repo_resolved}" ]] && return 0
+
+    for i in "${!selected[@]}"; do
+      [[ "${selected[i]}" -eq 1 ]] && saved_selected_names+=("${server_names[i]}")
+    done
+
+    if [[ ${#saved_selected_names[@]} -eq 0 ]]; then
+      return 0
+    fi
+
+    remote_clone_dir="$(resolve_persistent_remote_clone_dir "mcp" "${remote_repo_resolved}" "${github_ref}" "${github_mcp_path}")"
+    echo "开始 git clone 远程 MCP 仓库: ${remote_repo_resolved}@${github_ref}"
+    if ! clone_github_repo_to_dir "${remote_repo_resolved}" "${github_ref}" "${remote_clone_dir}"; then
+      return 1
+    fi
+
+    if ! mcp_load_source_from_cloned_repo "${remote_clone_dir}"; then
+      return 1
+    fi
+
+    server_names=()
+    server_titles=()
+    server_descs=()
+    selected=()
+    selected_names=()
+    upsert=()
+    for missing_name in "${!source_block_by_name[@]}"; do
+      unset 'source_block_by_name[$missing_name]'
+    done
+
+    mcp_discover_servers
+
+    for i in "${!selected[@]}"; do
+      selected[i]=0
+    done
+    for missing_name in "${saved_selected_names[@]}"; do
+      local found="false"
+      for i in "${!server_names[@]}"; do
+        if [[ "${server_names[i]}" == "${missing_name}" ]]; then
+          selected[i]=1
+          found="true"
+          break
+        fi
+      done
+      if [[ "${found}" != "true" ]]; then
+        echo "错误: git clone 后未找到已选 MCP server: ${missing_name}" >&2
+        return 1
+      fi
+    done
+
+    return 0
+  }
+
   mcp_fetch_github_directory() {
     local repo="$1"
     local path="$2"
@@ -2103,6 +2296,7 @@ install_mcp_main() {
   mcp_fetch_source_file() {
     local repo raw_url bundle_path
     tmp_source_file="$(new_tmp_file)"
+    remote_repo_resolved=""
 
     if [[ "${source_mode}" == "source" ]]; then
       if [[ -d "${source_input}" ]]; then
@@ -2122,15 +2316,18 @@ install_mcp_main() {
 
     if [[ "${source_mode}" != "github" && "${IS_NETWORK_REQUEST_EXECUTION}" != "true" ]]; then
       if mcp_use_local_fallback; then
+        remote_repo_resolved=""
         return
       fi
     fi
 
     repo="$(normalize_github_repo "${github_repo}")"
+    remote_repo_resolved="${repo}"
     echo "正在拉取远程 MCP 清单: ${repo}@${github_ref}:${github_mcp_path}"
 
     if ! command -v curl >/dev/null 2>&1; then
       if mcp_use_local_fallback; then
+        remote_repo_resolved=""
         echo "警告: 未安装 curl，已回退到本地文件: ${source_label#本地回退 }" >&2
         return
       fi
@@ -2163,6 +2360,7 @@ install_mcp_main() {
     fi
 
     if mcp_use_local_fallback; then
+      remote_repo_resolved=""
       echo "警告: 远程拉取失败，已回退到本地文件: ${source_label#本地回退 }" >&2
       return
     fi
@@ -2902,8 +3100,12 @@ install_mcp_main() {
   if ! mcp_interactive_select; then
     return 0
   fi
+  if ! mcp_reload_selected_source_from_clone; then
+    return 1
+  fi
   mcp_collect_upsert_targets
   mcp_apply_merge
+  cleanup_remote_clone_dir_with_prompt "${remote_clone_dir}"
 
   echo
   echo "MCP 处理完成，目标文件: ${target_config}"
