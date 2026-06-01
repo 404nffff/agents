@@ -43,12 +43,13 @@ load_sub2api_env_file() {
 usage() {
   cat <<EOF
 用法:
-  ./${SCRIPT_NAME} [all|accounts|keys|usage|schedulable|disable|enable|delete|priority|bulk-update|raw] [选项]
+  ./${SCRIPT_NAME} [all|report|accounts|keys|usage|schedulable|disable|enable|delete|priority|bulk-update|raw] [选项]
 
 说明:
   查询或更新 Sub2API 管理端账号状态。
   默认读取 ${DEFAULT_ENV_FILE}；如需覆盖路径，可设置 SUB2API_ENV_FILE。
   默认动作是 all，会先输出账号汇总，再输出令牌汇总。
+  report 会输出卡片 1-6 汇报，整合账号额度、异常、过期和今日令牌用量。
   accounts/keys 列表默认写入:
     ${SCRIPT_DIR}/accounts.json
     ${SCRIPT_DIR}/keys.json
@@ -71,6 +72,7 @@ usage() {
   SUB2API_BASE_URL='http://127.0.0.1:3335' SUB2API_API_KEY='***' ./${SCRIPT_NAME}
   ./${SCRIPT_NAME} accounts --base-url 'http://127.0.0.1:3335' --api-key '***'
   ./${SCRIPT_NAME} keys --base-url 'http://127.0.0.1:3335' --api-key '***'
+  ./${SCRIPT_NAME} report
   ./${SCRIPT_NAME} usage --account-id '15'
   ./${SCRIPT_NAME} disable --account-id '16'
   ./${SCRIPT_NAME} enable --account-id '16'
@@ -117,6 +119,7 @@ import argparse
 import concurrent.futures
 import datetime as dt
 import json
+import math
 import os
 import ssl
 import sys
@@ -232,6 +235,21 @@ def format_tokens_m(value):
         return str(value)
 
 
+def format_tokens_detail(value):
+    try:
+        raw = int(float(value or 0))
+        return f"{raw:,} ({format_tokens_m(raw)})"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def format_tokens_m_plain(value):
+    try:
+        return f"{float(value or 0) / 1_000_000:.2f}M"
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def format_display_time(value):
     if value in (None, "", "null", "-"):
         return "-"
@@ -276,6 +294,8 @@ class Client:
             return f"{self.base_url}/keys"
         if kind == "key_usage_internal":
             return f"{self.base_url}/admin/usage/stats"
+        if kind == "key_usage_records_internal":
+            return f"{self.base_url}/admin/usage"
         return f"{self.base_url}/admin/accounts"
 
     def request(self, method, url, kind, account_id=None, body=None):
@@ -358,6 +378,23 @@ def build_key_usage_stats_url(client, api_key_id):
     return client.url(
         "/api/v1/admin/usage/stats",
         {"start_date": TODAY_DATE, "end_date": TODAY_DATE, "api_key_id": api_key_id, "timezone": TIMEZONE},
+    )
+
+
+def build_key_usage_records_url(client, api_key_id, page):
+    return client.url(
+        "/api/v1/admin/usage",
+        {
+            "page": page,
+            "page_size": DEFAULT_KEY_USAGE_PAGE_SIZE,
+            "exact_total": "false",
+            "start_date": TODAY_DATE,
+            "end_date": TODAY_DATE,
+            "api_key_id": api_key_id,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "timezone": TIMEZONE,
+        },
     )
 
 
@@ -679,8 +716,23 @@ def fetch_key_usage_stats(client, key_id):
     return data if isinstance(data, dict) else {}
 
 
-def build_key_item(key, usage_stats=None, usage_error=None):
+def fetch_key_usage_records(client, key_id):
+    first = client.get_json(build_key_usage_records_url(client, key_id, 1), "key_usage_records_internal")
+    # 明细只用于恢复账号、模型、IP；token 以 stats 聚合接口为准，避免翻页拖慢报告。
+    return extract_page_items(first, ["items", "usages", "list"])
+
+
+def build_key_item(key, usage_stats=None, usage_records=None, usage_error=None):
     usage_stats = usage_stats or {}
+    usage_records = usage_records or []
+    usage_context = [
+        {
+            "account_name": first_value(record, [("account", "name"), ("account_name",), ("accountName",), ("account", "email"), ("account_id",)]),
+            "model": first_value(record, [("model",), ("model_name",), ("request_model",)]),
+            "ip_address": first_value(record, [("ip_address",), ("ip",), ("client_ip",), ("remote_addr",)]),
+        }
+        for record in usage_records
+    ]
     status = key.get("status")
     if status is None:
         status = "disabled" if key.get("disabled") is True or key.get("enabled") is False else "active"
@@ -703,9 +755,11 @@ def build_key_item(key, usage_stats=None, usage_error=None):
             ),
             "input_tokens": number(usage_stats.get("total_input_tokens"), 0),
             "output_tokens": number(usage_stats.get("total_output_tokens"), 0),
-            "account_names": [],
-            "models": [],
-            "ip_addresses": [],
+            "cache_tokens": number(usage_stats.get("total_cache_tokens"), 0),
+            "total_tokens": number(usage_stats.get("total_tokens"), 0),
+            "account_names": unique_text(item["account_name"] for item in usage_context),
+            "models": unique_text(item["model"] for item in usage_context),
+            "ip_addresses": unique_text(item["ip_address"] for item in usage_context),
             "stats": usage_stats,
         },
     }
@@ -723,7 +777,10 @@ def fetch_all_keys(client, parallelism):
     def with_usage(key):
         key_id = key.get("id")
         try:
-            return build_key_item(key, fetch_key_usage_stats(client, key_id))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as key_pool:
+                stats_future = key_pool.submit(fetch_key_usage_stats, client, key_id)
+                records_future = key_pool.submit(fetch_key_usage_records, client, key_id)
+                return build_key_item(key, stats_future.result(), records_future.result())
         except Exception:
             return build_key_item(key, None, "usage_request_failed")
 
@@ -744,6 +801,8 @@ def fetch_all_keys(client, parallelism):
                 "request_count": sum(number(get_path(item, "usage", "request_count"), 0) for item in items),
                 "input_tokens": sum(number(get_path(item, "usage", "input_tokens"), 0) for item in items),
                 "output_tokens": sum(number(get_path(item, "usage", "output_tokens"), 0) for item in items),
+                "cache_tokens": sum(number(get_path(item, "usage", "cache_tokens"), 0) for item in items),
+                "total_tokens": sum(number(get_path(item, "usage", "total_tokens"), 0) for item in items),
             },
             "items": items,
         },
@@ -847,20 +906,22 @@ def render_keys(payload):
         f"| 每页条数 | {data.get('page_size', '-')} |",
         f"| 令牌总数 | {data.get('total', '-')} |",
         f"| 今日请求数 | {summary.get('request_count', 0)} |",
-        f"| 输入 tokens | {summary.get('input_tokens', 0)}（{format_tokens_m(summary.get('input_tokens', 0))}） |",
-        f"| 输出 tokens | {summary.get('output_tokens', 0)}（{format_tokens_m(summary.get('output_tokens', 0))}） |",
+        f"| 输入 tokens | {format_tokens_detail(summary.get('input_tokens', 0))} |",
+        f"| 输出 tokens | {format_tokens_detail(summary.get('output_tokens', 0))} |",
+        f"| 缓存 tokens | {format_tokens_detail(summary.get('cache_tokens', 0))} |",
+        f"| 总量 tokens | {format_tokens_detail(summary.get('total_tokens', 0))} |",
         "",
         "## 令牌列表",
         "",
-        "| ID | 名称 | 令牌 | 状态 | 创建时间 | 最近使用时间 | 今日请求 | 账号 | 模型 | IP | 输入tokens(M) | 输出tokens(M) |",
-        "| --- | --- | --- | --- | --- | --- | ---: | --- | --- | --- | ---: | ---: |",
+        "| ID | 名称 | 令牌 | 状态 | 创建时间 | 最近使用时间 | 今日请求 | 账号 | 模型 | IP | 输入tokens | 输出tokens | 缓存tokens | 总量tokens |",
+        "| --- | --- | --- | --- | --- | --- | ---: | --- | --- | --- | ---: | ---: | ---: | ---: |",
     ]
     if not data.get("items"):
-        lines.append("| - | - | - | - | - | - | - | - | - | - | - | - |")
+        lines.append("| - | - | - | - | - | - | - | - | - | - | - | - | - | - |")
     for item in data.get("items", []):
         usage = item.get("usage", {})
         lines.append(
-            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
                 markdown_cell(item.get("id")),
                 markdown_cell(item.get("name")),
                 markdown_cell(item.get("key_preview")),
@@ -871,10 +932,183 @@ def render_keys(payload):
                 markdown_cell(", ".join(usage.get("account_names") or []) or "-"),
                 markdown_cell(", ".join(usage.get("models") or []) or "-"),
                 markdown_cell(", ".join(usage.get("ip_addresses") or []) or "-"),
-                markdown_cell(format_tokens_m(usage.get("input_tokens", 0))),
-                markdown_cell(format_tokens_m(usage.get("output_tokens", 0))),
+                markdown_cell(format_tokens_detail(usage.get("input_tokens", 0))),
+                markdown_cell(format_tokens_detail(usage.get("output_tokens", 0))),
+                markdown_cell(format_tokens_detail(usage.get("cache_tokens", 0))),
+                markdown_cell(format_tokens_detail(usage.get("total_tokens", 0))),
             )
         )
+    return "\n".join(lines) + "\n"
+
+
+def render_card_report(accounts_payload, keys_payload):
+    accounts = accounts_payload.get("data", {}).get("items", [])
+    keys = keys_payload.get("data", {}).get("items", [])
+    total = len(accounts)
+    normal_rows = []
+    abnormal_rows = []
+    card2_rows = []
+    weekly_rows = []
+    expiring_rows = []
+    now = dt.datetime.now(dt.timezone.utc)
+
+    for account in accounts:
+        usage = account.get("usage") if isinstance(account.get("usage"), dict) else {}
+        credentials = account.get("credentials") if isinstance(account.get("credentials"), dict) else {}
+        five_used = get_path(usage, "five_hour", "utilization")
+        week_used = get_path(usage, "seven_day", "utilization")
+        five_remaining_raw = None if five_used is None else max(0, 100 - int(number(five_used, 0)))
+        week_remaining = None if week_used is None else max(0, 100 - int(number(week_used, 0)))
+        five_remaining = None if five_remaining_raw is None or week_remaining is None else (0 if week_remaining <= 0 else five_remaining_raw)
+        row = {
+            "id": account.get("id"),
+            "name": account.get("name"),
+            "status": account.get("status"),
+            "schedulable": account.get("schedulable"),
+            "summary_status": account.get("summary_status") or "-",
+            "priority": account.get("priority") if account.get("priority") is not None else credentials.get("priority", 9999),
+            "five_remaining": five_remaining or 0,
+            "week_remaining": week_remaining or 0,
+            "five_reset_at": get_path(usage, "five_hour", "resets_at"),
+            "week_reset_at": get_path(usage, "seven_day", "resets_at"),
+            "error_message": account.get("error_message") or "",
+        }
+        is_normal = account.get("summary_status") == "正常"
+        if is_normal:
+            normal_rows.append(row)
+            if row["week_reset_at"] and row["five_remaining"] == 0 and row["week_remaining"] > 0:
+                weekly_rows.append(row)
+            expires_at = credentials.get("expires_at") or account.get("expires_at")
+            if expires_at:
+                try:
+                    if isinstance(expires_at, (int, float)) or (isinstance(expires_at, str) and expires_at.isdigit()):
+                        expires_dt = dt.datetime.fromtimestamp(int(expires_at), tz=dt.timezone.utc) if int(expires_at) > 0 else None
+                    else:
+                        expires_dt = dt.datetime.fromisoformat(str(expires_at).replace("Z", "+00:00")).astimezone(dt.timezone.utc)
+                    if expires_dt is not None:
+                        days_left = (expires_dt - now).total_seconds() / 86400
+                        expiring_rows.append((account.get("name"), math.floor(days_left), days_left))
+                except (TypeError, ValueError, OverflowError, OSError):
+                    pass
+        else:
+            abnormal_rows.append(account)
+        if row["five_reset_at"] and row["week_remaining"] > 0:
+            card2_rows.append(row)
+        if not is_normal and row["week_reset_at"] and row["five_remaining"] == 0 and row["week_remaining"] > 0:
+            weekly_rows.append(row)
+
+    card2_rows.sort(key=lambda item: (number(item.get("priority"), 9999), str(item.get("five_reset_at") or "")))
+    weekly_rows.sort(key=lambda item: (number(item.get("priority"), 9999), str(item.get("week_reset_at") or "")))
+    expiring_rows.sort(key=lambda item: item[2])
+
+    token_revoked = []
+    refresh_bad = []
+    missing_refresh = []
+    for account in abnormal_rows:
+        name = account.get("name") or "-"
+        reasons = account.get("summary_reasons") or []
+        reason_text = " ".join(str(item) for item in reasons).lower()
+        if "token revoked" in reason_text:
+            token_revoked.append(name)
+        elif "refresh_token_reused" in reason_text or "refresh token" in reason_text:
+            refresh_bad.append(name)
+        else:
+            missing_refresh.append(name)
+
+    used_keys = [
+        key for key in keys
+        if number(get_path(key, "usage", "input_tokens"), 0)
+        or number(get_path(key, "usage", "output_tokens"), 0)
+        or number(get_path(key, "usage", "cache_tokens"), 0)
+        or number(get_path(key, "usage", "total_tokens"), 0)
+    ]
+    used_keys.sort(key=lambda key: number(get_path(key, "usage", "total_tokens"), 0), reverse=True)
+
+    normal_count = len(normal_rows)
+    abnormal_count = len(abnormal_rows)
+    five_total = sum(number(item["five_remaining"], 0) for item in normal_rows)
+    week_total = sum(number(item["week_remaining"], 0) for item in normal_rows)
+    markers = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"]
+
+    def marker(index):
+        return markers[index - 1] if index <= len(markers) else str(index)
+
+    lines = [
+        "# Sub2API 卡片版汇报",
+        "",
+        "## 📊 卡片 1｜总体情况",
+        f"`账号` **{total}** ｜ `正常` **{normal_count}** ｜ `异常` **{abnormal_count}**  ",
+        f"`5h总剩余` **{five_total:g}** ｜ `周总剩余` **{week_total:g}**",
+        "",
+        "> 本版数据按实时接口组装，已排除异常账号对额度汇总的干扰。",
+        "",
+        "## ⏱️ 卡片 2｜最近 5h 可用账号",
+        f"`可用账号数` **{len(card2_rows)}** ｜ `5h可用汇总` **{five_total:g}** ｜ `周可用汇总` **{week_total:g}**",
+        "",
+        "> 仅保留 **周额度仍大于 0** 的账号，按 **优先级 + 5h 时间升序** 展示。",
+        "",
+    ]
+    for index, row in enumerate(card2_rows, 1):
+        lines.extend([
+            f"**{marker(index)} {row['name']}**  ",
+            f"`{format_display_time(row['five_reset_at'])}` ｜ 状态 **{row['summary_status']}** ｜ "
+            f"5h/week **({row['five_remaining']:g}/{row['week_remaining']:g})**",
+            "",
+        ])
+
+    lines.extend([
+        f"## 🔄 卡片 3｜周刷新列表（{len(weekly_rows)}）",
+        "",
+        "> 仅保留 **5h = 0 且周额度仍大于 0** 的账号，按 **优先级 + 周刷新时间升序** 展示。",
+        "",
+    ])
+    for index, row in enumerate(weekly_rows, 1):
+        lines.extend([
+            f"**{marker(index)} {row['name']}**  ",
+            f"`{format_display_time(row['week_reset_at'])}` ｜ 5h/week **({row['five_remaining']:g}/{row['week_remaining']:g})**",
+            "",
+        ])
+
+    lines.extend([
+        "## ⚠️ 卡片 4｜异常账号情况",
+        f"`异常账号数` **{abnormal_count}** ｜ `Token revoked` **{len(token_revoked)}** ｜ `Refresh异常` **{len(refresh_bad)}** ｜ `缺refresh_token` **{len(missing_refresh)}**",
+        "",
+    ])
+    if token_revoked:
+        lines.append("- **Token revoked**：" + "、".join(f"`{item}`" for item in token_revoked))
+    if refresh_bad:
+        lines.append("- **Refresh token 失效 / 复用**：" + "、".join(f"`{item}`" for item in refresh_bad))
+    if missing_refresh:
+        lines.append("- **Access token 过期且缺少 refresh token**：" + "、".join(f"`{item}`" for item in missing_refresh))
+    lines.extend([
+        "",
+        "> 说明：异常分类来自账号错误信息和 usage 拉取状态。",
+        "",
+        "## ⌛ 卡片 5｜快过期账号",
+    ])
+    top_expiring = expiring_rows[:3]
+    lines.extend([f"`快过期账号数` **{len(top_expiring)}**", ""])
+    for index, (name, days_label, _) in enumerate(top_expiring, 1):
+        lines.append(f"{marker(index)} `{name}` ｜ 剩余 **{days_label}天**")
+    lines.extend([
+        "",
+        "> 说明：仅保留当前正常账号，并按到期时间从近到远展示。过期时间取自 `credentials.expires_at`。",
+        "",
+        "## 🔑 卡片 6｜今日令牌用量",
+        f"`令牌数` **{len(keys)}** ｜ `今日有用量` **{len(used_keys)}**",
+        "",
+    ])
+    for index, key in enumerate(used_keys, 1):
+        usage = key.get("usage", {})
+        lines.append(
+            f"{marker(index)} `{key.get('name') or '-'}` ｜ "
+            f"最近调用 **{format_display_time(key.get('last_used_at'))}** ｜ "
+            f"输入 **{format_tokens_m_plain(usage.get('input_tokens', 0))}** ｜ "
+            f"输出 **{format_tokens_m_plain(usage.get('output_tokens', 0))}** ｜ "
+            f"缓存 **{format_tokens_m_plain(usage.get('cache_tokens', 0))}** ｜ "
+            f"总量 **{format_tokens_m_plain(usage.get('total_tokens', 0))}**"
+        )
+    lines.extend(["", "> 说明：令牌 token 用量来自 `/api/v1/admin/usage/stats` 聚合字段。"])
     return "\n".join(lines) + "\n"
 
 
@@ -998,7 +1232,7 @@ def normalize_bool(value):
 
 
 def validate(ns):
-    allowed = {"all", "accounts", "keys", "usage", "schedulable", "disable", "enable", "delete", "priority", "bulk-update", "raw"}
+    allowed = {"all", "report", "accounts", "keys", "usage", "schedulable", "disable", "enable", "delete", "priority", "bulk-update", "raw"}
     if ns.action not in allowed:
         fail(f"未知动作: {ns.action}")
     if ns.action == "priority":
@@ -1040,13 +1274,25 @@ def main(argv):
     if ns.action == "all":
         accounts_output = str(SCRIPT_DIR / "accounts.json")
         keys_output = str(SCRIPT_DIR / "keys.json")
-        accounts = fetch_all_accounts(client, parallelism)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            accounts_future = pool.submit(fetch_all_accounts, client, parallelism)
+            keys_future = pool.submit(fetch_all_keys, client, parallelism)
+            accounts = accounts_future.result()
+            keys = keys_future.result()
         write_json(accounts_output, accounts)
+        write_json(keys_output, keys)
         print(render_accounts(accounts), end="")
         print()
-        keys = fetch_all_keys(client, parallelism)
-        write_json(keys_output, keys)
         print(render_keys(keys), end="")
+        return
+
+    if ns.action == "report":
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            accounts_future = pool.submit(fetch_all_accounts, client, parallelism)
+            keys_future = pool.submit(fetch_all_keys, client, parallelism)
+            accounts = accounts_future.result()
+            keys = keys_future.result()
+        print(render_card_report(accounts, keys), end="")
         return
 
     output_file = resolved_output(ns.action, ns.output)
