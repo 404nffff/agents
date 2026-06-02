@@ -1077,7 +1077,10 @@ def render_card_report(accounts_payload, keys_payload):
     five_total = sum(number(item["five_remaining"], 0) for item in normal_rows)
     week_total = sum(number(item["week_remaining"], 0) for item in normal_rows)
     card2_five_total = sum(number(item["five_remaining"], 0) for item in card2_rows)
-    card2_week_total = sum(number(item["week_remaining"], 0) for item in card2_rows)
+    card2_week_total = (
+        sum(number(item["week_remaining"], 0) for item in card2_rows)
+        + sum(number(item["week_remaining"], 0) for item in weekly_rows)
+    )
     five_depleted_week_available_count = len(weekly_rows)
     week_depleted_count = sum(1 for item in normal_rows if number(item["week_remaining"], 0) <= 0)
     markers = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"]
