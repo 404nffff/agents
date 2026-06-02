@@ -2,6 +2,37 @@
 
 本目录包含各个 MCP server 的独立配置文件，每个文件对应一个 MCP server。
 
+## 工具安装
+node -v
+npm -v
+npx -v
+uv --version
+uvx --version
+mcp-proxy --version
+git --version
+python3 --version
+
+
+
+## uv安装
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+
+## 安装mcp-proxy
+
+# 1. 安装工具
+uv tool install git+https://github.com/sparfenyuk/mcp-proxy
+
+# 2. 配置 PATH (只需执行一次)
+uv tool update-shell
+
+# 3. 应用配置
+source ~/.bashrc  # 或 ~/.zshrc，根据提示
+# 或直接重启终端
+
+# 4. 验证
+mcp-proxy --help
+
 ## 目录结构
 
 ```

@@ -240,16 +240,17 @@ function Get-NotifyTitle {
 
   $baseTitle = Get-EnvOrDefault "FEISHU_CODEX_NOTIFY_TITLE" "Codex 任务完成"
   $normalizedCwd = $Cwd.Trim() -replace "[\\/]+$", ""
+  $pushTime = Get-Date -Format "HH:mm:ss"
   if ([string]::IsNullOrWhiteSpace($normalizedCwd)) {
-    return $baseTitle
+    return "{0} {1}" -f $baseTitle, $pushTime
   }
 
   # 兼容 Windows 和 Unix 路径，取工作目录最后一级作为通知标题前缀。
   $projectName = ($normalizedCwd -split "[\\/]+")[-1]
   if ([string]::IsNullOrWhiteSpace($projectName)) {
-    return $baseTitle
+    return "{0} {1}" -f $baseTitle, $pushTime
   }
-  return "[{0}] {1}" -f $projectName, $baseTitle
+  return "[{0}] {1} {2}" -f $projectName, $baseTitle, $pushTime
 }
 
 function Send-MarkdownCard {

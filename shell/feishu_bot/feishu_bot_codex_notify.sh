@@ -160,6 +160,7 @@ main() {
   if [[ -n "${project}" && "${send_title}" != "[${project}]"* ]]; then
     send_title="[${project}] ${send_title}"
   fi
+  send_title="${send_title} $(date +%H:%M:%S)"
 
   if "${PUSH_SCRIPT}" app-markdown --title "${send_title}" --template "${NOTIFY_TEMPLATE}" --markdown "${markdown}" >/tmp/feishu_codex_notify.out 2>/tmp/feishu_codex_notify.err; then
     log_line "sent"
