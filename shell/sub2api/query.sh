@@ -1011,7 +1011,7 @@ def render_card_report(accounts_payload, keys_payload):
                     pass
         else:
             abnormal_rows.append(account)
-        if is_normal and row["five_reset_at"] and row["five_remaining"] > 0 and row["week_remaining"] > 0:
+        if is_normal and row["five_reset_at"] and row["week_remaining"] > 0:
             card2_rows.append(row)
         if not is_normal and row["week_reset_at"] and row["five_remaining"] == 0 and row["week_remaining"] > 0:
             weekly_rows.append(row)
@@ -1077,10 +1077,7 @@ def render_card_report(accounts_payload, keys_payload):
     five_total = sum(number(item["five_remaining"], 0) for item in normal_rows)
     week_total = sum(number(item["week_remaining"], 0) for item in normal_rows)
     card2_five_total = sum(number(item["five_remaining"], 0) for item in card2_rows)
-    card2_week_total = (
-        sum(number(item["week_remaining"], 0) for item in card2_rows)
-        + sum(number(item["week_remaining"], 0) for item in weekly_rows)
-    )
+    card2_week_total = sum(number(item["week_remaining"], 0) for item in card2_rows)
     five_depleted_week_available_count = len(weekly_rows)
     week_depleted_count = sum(1 for item in normal_rows if number(item["week_remaining"], 0) <= 0)
     markers = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"]
@@ -1099,9 +1096,9 @@ def render_card_report(accounts_payload, keys_payload):
         "> 本版数据按实时接口组装，已排除异常账号对额度汇总的干扰。",
         "",
         "## ⏱️ 卡片 2｜最近 5h 可用账号",
-        f"`可用账号数` **{len(card2_rows)}** ｜ `5h可用汇总` **{card2_five_total:g}** ｜ `周可用汇总` **{card2_week_total:g}**",
+        f"`周可用账号数` **{len(card2_rows)}** ｜ `5h可用汇总` **{card2_five_total:g}** ｜ `周可用汇总` **{card2_week_total:g}**",
         "",
-        "> 仅保留 **状态正常、5h > 0 且周额度仍大于 0** 的账号，按 **优先级 + 5h 时间升序** 展示。",
+        "> 仅保留 **状态正常且周额度仍大于 0** 的账号，按 **优先级 + 5h 时间升序** 展示；包含 5h = 0 的账号。",
         "",
     ]
     for index, row in enumerate(card2_rows, 1):
@@ -1113,7 +1110,7 @@ def render_card_report(accounts_payload, keys_payload):
         ])
 
     lines.extend([
-        f"## 🔄 卡片 3｜5h耗尽待恢复（{len(weekly_rows)}）",
+        f"## 🔄 卡片 3｜周刷新待恢复（{len(weekly_rows)}）",
         "",
         "> 仅保留 **5h = 0 且周额度仍大于 0** 的账号，按 **优先级 + 周刷新时间升序** 展示。",
         "",
