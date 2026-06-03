@@ -123,6 +123,7 @@ import math
 import os
 import ssl
 import sys
+import time
 import tempfile
 import urllib.error
 import urllib.parse
@@ -250,6 +251,16 @@ def format_tokens_m_plain(value):
         return str(value)
 
 
+def format_percent(numerator, denominator):
+    try:
+        denominator_value = float(denominator or 0)
+        if denominator_value <= 0:
+            return "0.0%"
+        return f"{float(numerator or 0) / denominator_value * 100:.1f}%"
+    except (TypeError, ValueError):
+        return "-"
+
+
 def format_display_time(value):
     if value in (None, "", "null", "-"):
         return "-"
@@ -311,21 +322,29 @@ class Client:
             headers["Content-Type"] = "application/json"
             data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout, context=self.ssl_context) as response:
-                payload = response.read()
-        except urllib.error.HTTPError as exc:
-            body_text = exc.read().decode("utf-8", "replace")[:800]
-            print(
-                f"[query.sh] HTTP_STATUS={exc.code} CONTENT_TYPE={exc.headers.get('content-type', 'unknown')} BODY_BYTES={len(body_text)}",
-                file=sys.stderr,
-            )
-            if body_text:
-                print(body_text, file=sys.stderr)
-            raise
-        except urllib.error.URLError as exc:
-            print(f"[query.sh] 请求失败: {exc}", file=sys.stderr)
-            raise
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout, context=self.ssl_context) as response:
+                    payload = response.read()
+                break
+            except urllib.error.HTTPError as exc:
+                body_text = exc.read().decode("utf-8", "replace")[:800]
+                if exc.code in {502, 503, 504} and attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                print(
+                    f"[query.sh] HTTP_STATUS={exc.code} CONTENT_TYPE={exc.headers.get('content-type', 'unknown')} BODY_BYTES={len(body_text)}",
+                    file=sys.stderr,
+                )
+                if body_text:
+                    print(body_text, file=sys.stderr)
+                raise
+            except urllib.error.URLError as exc:
+                if attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                print(f"[query.sh] 请求失败: {exc}", file=sys.stderr)
+                raise
         if not payload:
             return {}
         try:
@@ -992,7 +1011,7 @@ def render_card_report(accounts_payload, keys_payload):
                     pass
         else:
             abnormal_rows.append(account)
-        if row["five_reset_at"] and row["week_remaining"] > 0:
+        if is_normal and row["five_reset_at"] and row["week_remaining"] > 0:
             card2_rows.append(row)
         if not is_normal and row["week_reset_at"] and row["five_remaining"] == 0 and row["week_remaining"] > 0:
             weekly_rows.append(row)
@@ -1003,17 +1022,46 @@ def render_card_report(accounts_payload, keys_payload):
 
     token_revoked = []
     refresh_bad = []
-    missing_refresh = []
+    unschedulable = []
+    status_bad = []
+    usage_failed = []
+    quota_missing = []
+    other_errors = []
+    abnormal_details = []
     for account in abnormal_rows:
         name = account.get("name") or "-"
         reasons = account.get("summary_reasons") or []
         reason_text = " ".join(str(item) for item in reasons).lower()
+        matched = False
+        detail_reasons = []
         if "token revoked" in reason_text:
             token_revoked.append(name)
-        elif "refresh_token_reused" in reason_text or "refresh token" in reason_text:
+            detail_reasons.append("Token revoked")
+            matched = True
+        if "refresh_token_reused" in reason_text or "refresh token" in reason_text:
             refresh_bad.append(name)
-        else:
-            missing_refresh.append(name)
+            detail_reasons.append("Refresh异常")
+            matched = True
+        if account.get("schedulable") is not True:
+            unschedulable.append(name)
+            detail_reasons.append("不可调度")
+            matched = True
+        if (account.get("status") or "") != "active":
+            status_bad.append(name)
+            detail_reasons.append(f"status={account.get('status') or 'unknown'}")
+            matched = True
+        if "usage 拉取失败" in reason_text or "usage_request_failed" in reason_text:
+            usage_failed.append(name)
+            detail_reasons.append("usage拉取失败")
+            matched = True
+        if "resets_at=null" in reason_text or "utilization=null" in reason_text:
+            quota_missing.append(name)
+            detail_reasons.append("额度字段缺失")
+            matched = True
+        if not matched:
+            other_errors.append(name)
+            detail_reasons.append("其他异常" if not reasons else "其他异常：" + "；".join(str(item) for item in reasons))
+        abnormal_details.append((name, detail_reasons))
 
     used_keys = [
         key for key in keys
@@ -1028,6 +1076,10 @@ def render_card_report(accounts_payload, keys_payload):
     abnormal_count = len(abnormal_rows)
     five_total = sum(number(item["five_remaining"], 0) for item in normal_rows)
     week_total = sum(number(item["week_remaining"], 0) for item in normal_rows)
+    card2_five_total = sum(number(item["five_remaining"], 0) for item in card2_rows)
+    card2_week_total = sum(number(item["week_remaining"], 0) for item in card2_rows)
+    five_depleted_week_available_count = len(weekly_rows)
+    week_depleted_count = sum(1 for item in normal_rows if number(item["week_remaining"], 0) <= 0)
     markers = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"]
 
     def marker(index):
@@ -1039,13 +1091,14 @@ def render_card_report(accounts_payload, keys_payload):
         "## 📊 卡片 1｜总体情况",
         f"`账号` **{total}** ｜ `正常` **{normal_count}** ｜ `异常` **{abnormal_count}**  ",
         f"`5h总剩余` **{five_total:g}** ｜ `周总剩余` **{week_total:g}**",
+        f"`5h可用账号` **{len(card2_rows)}** ｜ `5h耗尽但周可用` **{five_depleted_week_available_count}** ｜ `周耗尽` **{week_depleted_count}**",
         "",
         "> 本版数据按实时接口组装，已排除异常账号对额度汇总的干扰。",
         "",
         "## ⏱️ 卡片 2｜最近 5h 可用账号",
-        f"`可用账号数` **{len(card2_rows)}** ｜ `5h可用汇总` **{five_total:g}** ｜ `周可用汇总` **{week_total:g}**",
+        f"`周可用账号数` **{len(card2_rows)}** ｜ `5h可用汇总` **{card2_five_total:g}** ｜ `周可用汇总` **{card2_week_total:g}**",
         "",
-        "> 仅保留 **周额度仍大于 0** 的账号，按 **优先级 + 5h 时间升序** 展示。",
+        "> 仅保留 **状态正常且周额度仍大于 0** 的账号，按 **优先级 + 5h 时间升序** 展示；包含 5h = 0 的账号。",
         "",
     ]
     for index, row in enumerate(card2_rows, 1):
@@ -1057,7 +1110,7 @@ def render_card_report(accounts_payload, keys_payload):
         ])
 
     lines.extend([
-        f"## 🔄 卡片 3｜周刷新列表（{len(weekly_rows)}）",
+        f"## 🔄 卡片 3｜周刷新待恢复（{len(weekly_rows)}）",
         "",
         "> 仅保留 **5h = 0 且周额度仍大于 0** 的账号，按 **优先级 + 周刷新时间升序** 展示。",
         "",
@@ -1065,34 +1118,35 @@ def render_card_report(accounts_payload, keys_payload):
     for index, row in enumerate(weekly_rows, 1):
         lines.extend([
             f"**{marker(index)} {row['name']}**  ",
-            f"`{format_display_time(row['week_reset_at'])}` ｜ 5h/week **({row['five_remaining']:g}/{row['week_remaining']:g})**",
+            f"`{format_display_time(row['week_reset_at'])}` ｜ 状态 **{row['summary_status']}** ｜ 5h/week **({row['five_remaining']:g}/{row['week_remaining']:g})**",
             "",
         ])
 
     lines.extend([
         "## ⚠️ 卡片 4｜异常账号情况",
-        f"`异常账号数` **{abnormal_count}** ｜ `Token revoked` **{len(token_revoked)}** ｜ `Refresh异常` **{len(refresh_bad)}** ｜ `缺refresh_token` **{len(missing_refresh)}**",
+        f"`异常账号数` **{abnormal_count}** ｜ `Token revoked` **{len(token_revoked)}** ｜ `Refresh异常` **{len(refresh_bad)}** ｜ `不可调度` **{len(unschedulable)}** ｜ `status异常` **{len(status_bad)}** ｜ `usage失败` **{len(usage_failed)}** ｜ `额度缺失` **{len(quota_missing)}**",
         "",
     ])
-    if token_revoked:
-        lines.append("- **Token revoked**：" + "、".join(f"`{item}`" for item in token_revoked))
-    if refresh_bad:
-        lines.append("- **Refresh token 失效 / 复用**：" + "、".join(f"`{item}`" for item in refresh_bad))
-    if missing_refresh:
-        lines.append("- **Access token 过期且缺少 refresh token**：" + "、".join(f"`{item}`" for item in missing_refresh))
+    if abnormal_details:
+        for index, (name, detail_reasons) in enumerate(abnormal_details, 1):
+            lines.append(f"{marker(index)} `{name}` ｜ 原因：**{'、'.join(detail_reasons)}**")
+    else:
+        lines.append("暂无异常账号")
     lines.extend([
         "",
         "> 说明：异常分类来自账号错误信息和 usage 拉取状态。",
         "",
-        "## ⌛ 卡片 5｜快过期账号",
+        "## ⌛ 卡片 5｜快过期账号（<=7天）",
     ])
-    top_expiring = expiring_rows[:3]
+    top_expiring = [item for item in expiring_rows if item[2] <= 7]
     lines.extend([f"`快过期账号数` **{len(top_expiring)}**", ""])
     for index, (name, days_label, _) in enumerate(top_expiring, 1):
         lines.append(f"{marker(index)} `{name}` ｜ 剩余 **{days_label}天**")
+    if not top_expiring:
+        lines.append("暂无 7 天内过期账号")
     lines.extend([
         "",
-        "> 说明：仅保留当前正常账号，并按到期时间从近到远展示。过期时间取自 `credentials.expires_at`。",
+        "> 说明：仅保留当前正常账号，展示 7 天内过期账号，并按到期时间从近到远展示。过期时间取自 `credentials.expires_at`。",
         "",
         "## 🔑 卡片 6｜今日令牌用量",
         f"`令牌数` **{len(keys)}** ｜ `今日有用量` **{len(used_keys)}**",
@@ -1103,12 +1157,14 @@ def render_card_report(accounts_payload, keys_payload):
         lines.append(
             f"{marker(index)} `{key.get('name') or '-'}` ｜ "
             f"最近调用 **{format_display_time(key.get('last_used_at'))}** ｜ "
+            f"请求 **{int(number(usage.get('request_count'), 0))}** ｜ "
             f"输入 **{format_tokens_m_plain(usage.get('input_tokens', 0))}** ｜ "
             f"输出 **{format_tokens_m_plain(usage.get('output_tokens', 0))}** ｜ "
             f"缓存 **{format_tokens_m_plain(usage.get('cache_tokens', 0))}** ｜ "
-            f"总量 **{format_tokens_m_plain(usage.get('total_tokens', 0))}**"
+            f"总量 **{format_tokens_m_plain(usage.get('total_tokens', 0))}** ｜ "
+            f"缓存占比 **{format_percent(usage.get('cache_tokens', 0), usage.get('total_tokens', 0))}**"
         )
-    lines.extend(["", "> 说明：令牌 token 用量来自 `/api/v1/admin/usage/stats` 聚合字段。"])
+    lines.extend(["", "> 说明：令牌 token 用量来自 `/api/v1/admin/usage/stats` 聚合字段，按总量 tokens 倒序展示。"])
     return "\n".join(lines) + "\n"
 
 
