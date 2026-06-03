@@ -3,6 +3,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -111,7 +112,21 @@ def write_json_atomic(path: Path, payload: Any) -> None:
 
 
 def read_kb_map(paths: Dict[str, Path]) -> Dict[str, str]:
-    raw = read_json_file(paths["knowledge"], {})
+    knowledge_path = paths["knowledge"]
+    try:
+        raw = read_json_file(knowledge_path, {})
+    except json.JSONDecodeError:
+        text = knowledge_path.read_text(encoding="utf-8", errors="replace")
+        raw = {}
+        for raw_key, raw_value in re.findall(r'"((?:[^"\\]|\\.)+)"\s*:\s*"((?:[^"\\]|\\.)+)"', text):
+            try:
+                key = json.loads(f'"{raw_key}"')
+                value = json.loads(f'"{raw_value}"')
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, str) and value.startswith("kb-"):
+                raw[str(key)] = value
+        write_json_atomic(knowledge_path, raw)
     if not isinstance(raw, dict):
         return {}
     result: Dict[str, str] = {}

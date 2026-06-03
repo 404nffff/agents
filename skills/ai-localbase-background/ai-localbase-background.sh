@@ -32,7 +32,7 @@ usage() {
   ./ai-localbase-background.sh job-result [jobId] [目录]
 
 说明:
-  - init: 初始化当前项目对应的知识库映射与运行状态目录；无 Python 时自动走同步初始化
+  - init: 初始化当前项目对应的知识库映射与运行状态目录
   - upload: 立即同步上传文本内容
   - append: 立即同步追加文档内容
   - update: 立即同步覆盖文档内容
@@ -41,10 +41,10 @@ usage() {
   - worker-status: 查看当前项目后台 worker 状态
   - worker-logs: 输出当前项目 worker 日志尾部
   - worker-stop: 停止当前项目后台 worker
-  - queue-upload: 将上传任务写入后台队列；无 Python 时回退为同步 upload
-  - queue-append: 将追加文档任务写入后台队列；无 Python 时回退为同步 append
-  - queue-update: 将覆盖文档任务写入后台队列；无 Python 时回退为同步 update
-  - queue-delete: 将删除文档任务写入后台队列；无 Python 时回退为同步 delete
+  - queue-upload: 将上传任务写入后台队列
+  - queue-append: 将追加文档任务写入后台队列
+  - queue-update: 将覆盖文档任务写入后台队列
+  - queue-delete: 将删除文档任务写入后台队列
   - search: 同步检索
   - chat: 同步问答
   - job-status: 查看指定任务状态
@@ -79,7 +79,7 @@ find_python_error_text() {
 
 find_python_async_error_text() {
   local action="$1"
-  printf '%s\n' "$(python_hint_text)，无法执行 $action。当前只支持同步命令 init/upload/append/update/delete/search/chat，或让 queue-* 自动回退同步写入。"
+  printf '%s\n' "$(python_hint_text)，无法执行 $action。"
 }
 
 warn_sync_fallback() {
@@ -117,12 +117,8 @@ main() {
 
   case "$action" in
     init)
-      if has_python; then
-        run_worker init --workdir "${1:-$(pwd)}"
-      else
-        warn_sync_fallback "init"
-        ai_localbase_background_sync_init "${1:-$(pwd)}"
-      fi
+      require_python_for_async "init"
+      run_worker init --workdir "${1:-$(pwd)}"
       ;;
     upload)
       ai_localbase_background_sync_upload "${1:-example.md}" "${2:-# 示例文档
@@ -155,36 +151,20 @@ main() {
       run_worker worker-stop --workdir "${1:-$(pwd)}"
       ;;
     queue-upload)
-      if has_python; then
-        run_worker queue-upload --filename "${1:-}" --content "${2:-}" --workdir "${3:-$(pwd)}"
-      else
-        warn_sync_fallback "queue-upload"
-        ai_localbase_background_sync_upload "${1:-}" "${2:-}" "${3:-$(pwd)}"
-      fi
+      require_python_for_async "queue-upload"
+      run_worker queue-upload --filename "${1:-}" --content "${2:-}" --workdir "${3:-$(pwd)}"
       ;;
     queue-append)
-      if has_python; then
-        run_worker queue-append --document-id "${1:-}" --content "${2:-}" --workdir "${3:-$(pwd)}"
-      else
-        warn_sync_fallback "queue-append"
-        ai_localbase_background_sync_append "${1:-}" "${2:-}" "${3:-$(pwd)}"
-      fi
+      require_python_for_async "queue-append"
+      run_worker queue-append --document-id "${1:-}" --content "${2:-}" --workdir "${3:-$(pwd)}"
       ;;
     queue-update)
-      if has_python; then
-        run_worker queue-update --document-id "${1:-}" --content "${2:-}" --workdir "${3:-$(pwd)}"
-      else
-        warn_sync_fallback "queue-update"
-        ai_localbase_background_sync_update "${1:-}" "${2:-}" "${3:-$(pwd)}"
-      fi
+      require_python_for_async "queue-update"
+      run_worker queue-update --document-id "${1:-}" --content "${2:-}" --workdir "${3:-$(pwd)}"
       ;;
     queue-delete)
-      if has_python; then
-        run_worker queue-delete --document-id "${1:-}" --workdir "${2:-$(pwd)}"
-      else
-        warn_sync_fallback "queue-delete"
-        ai_localbase_background_sync_delete "${1:-}" "${2:-$(pwd)}"
-      fi
+      require_python_for_async "queue-delete"
+      run_worker queue-delete --document-id "${1:-}" --workdir "${2:-$(pwd)}"
       ;;
     search)
       ai_localbase_background_sync_search "$@"

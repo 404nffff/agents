@@ -1,6 +1,6 @@
 ---
 name: ai-localbase-background
-description: Use when starting any conversation in a project that uses ai_localbase as its primary knowledge base and may require background queueing, async polling, or automatic sync fallback when Python 3 is unavailable.
+description: Use when starting any conversation in a project that uses ai_localbase as its primary knowledge base and may require background queueing, async polling, or project-local sync state.
 ---
 
 ## 运行位置
@@ -17,7 +17,7 @@ description: Use when starting any conversation in a project that uses ai_localb
 - 需要先返回 `jobId`，稍后轮询状态
 - 需要把 worker、日志、任务队列和结果按项目隔离
 - 需要保持 `search / chat` 同步返回，不走后台队列
-- 需要在没有 Python 的环境里继续可用
+- 需要把知识库映射、worker 日志、任务队列和结果放在项目本地状态目录
 
 ## 当前范围
 
@@ -48,7 +48,7 @@ description: Use when starting any conversation in a project that uses ai_localb
 - `queue-*` 在发现 worker 未运行时会自动拉起后台 worker
 - 自动拉起的 worker 在队列清空并空闲一小段时间后会自行退出
 - `search / chat` 保持同步执行，不进后台队列
-- 若 Bash 入口未检测到 Python，则 `init` 和 `queue-*` 会自动回退为同步执行；`worker-*` 与 `job-*` 不可用
+- Bash 入口依赖 Python 3 标准库读写 JSON 状态，避免项目级 `knowledge.json` 被字符串拼接写坏
 
 ## 使用流程
 
@@ -61,7 +61,7 @@ description: Use when starting any conversation in a project that uses ai_localb
 7. 需要即时检索或问答时，直接调用同步 `search / chat`
 8. 一般不用手动停 worker；队列处理完并空闲后会自动退出
 9. `worker-start / worker-stop` 只用于调试或批量任务排查
-10. 若当前环境没有 Python，继续使用同一个 Bash 入口；`queue-*` 会自动回退为同步写入
+10. 当前环境必须具备 Python 3；缺失时先安装 Python 3 再使用后台版入口
 
 ## 检索返回结构
 
@@ -194,8 +194,7 @@ description: Use when starting any conversation in a project that uses ai_localb
 - Bash 入口现在同时支持同步 `upload / append / update / delete / search / chat`
 - `queue-upload / queue-append / queue-update / queue-delete` 在有 Python 时只负责投递任务，不保证任务立刻完成
 - 若 `worker` 没启动，`queue-*` 会自动拉起一个后台 worker
-- 若当前环境没有 Python，`queue-*` 会自动回退成对应的同步写入命令
-- 无 Python 时，`worker-*` 和 `job-*` 不可用
+- Bash 入口需要 Python 3；缺失时 `init`、同步命令、`queue-*`、`worker-*` 和 `job-*` 都不可用
 - `job-result` 只有在任务成功或失败后才有结果
 - `search / chat` 不依赖 worker，继续按同步方式立即返回
 - 自动拉起的 worker 会在队列清空并空闲后自动退出

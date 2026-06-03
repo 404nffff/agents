@@ -44,7 +44,7 @@ description: Use when starting any conversation in a project that uses ai_localb
 3. **目录隔离**：每个启动目录映射到其 basename 对应的独立知识库，映射缓存写入 `knowledge.json`
 4. **检索 vs 问答**：`search` 用于片段检索，`chat` 用于基于知识库上下文的直接问答
 5. **文档维护策略**：新文档优先上传；增量内容用 `append`；全文覆盖用 `update`；废弃文档用 `delete`
-6. **依赖前置**：Bash 版本依赖 `bash`、`curl`；PowerShell 版本依赖 `Invoke-RestMethod`
+6. **依赖前置**：Bash 版本依赖 `bash`、`curl`、`python3`；PowerShell 版本依赖 `Invoke-RestMethod`
 
 ## 检索返回结构
 

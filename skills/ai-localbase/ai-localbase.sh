@@ -40,25 +40,53 @@ json_escape() {
   printf '%s' "$value"
 }
 
-# 从简单 JSON 响应里提取目标字符串字段。
+# 从 JSON 响应里提取目标字符串字段，兼容 structuredContent 等嵌套结构。
 extract_json_string_field() {
   local json="$1"
   local field="$2"
-  local needle rest
 
-  needle="\"$field\":\""
-  json=${json//$'\n'/}
-  json=${json//$'\r'/}
-  rest="${json#*"$needle"}"
-  if [ "$rest" = "$json" ]; then
-    return 1
-  fi
-  printf '%s' "${rest%%\"*}"
+  JSON_INPUT="$json" FIELD="$field" python3 - <<'PY'
+import json
+import os
+import sys
+
+field = os.environ["FIELD"]
+raw = os.environ["JSON_INPUT"]
+
+def find_value(value):
+    if isinstance(value, dict):
+        if isinstance(value.get(field), str):
+            return value[field]
+        for item in value.values():
+            found = find_value(item)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = find_value(item)
+            if found:
+                return found
+    return None
+
+try:
+    data = json.loads(raw)
+except Exception:
+    sys.exit(1)
+
+result = find_value(data)
+if not result:
+    sys.exit(1)
+print(result)
+PY
 }
 
 ensure_requirements() {
   if ! command -v curl >/dev/null 2>&1; then
     echo "错误: 未找到 curl，请先安装 curl"
+    exit 1
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "错误: 未找到 python3，请先安装 Python 3"
     exit 1
   fi
 }
@@ -100,36 +128,103 @@ ensure_kb_config() {
   if [ ! -f "$KB_CONFIG" ]; then
     printf '{}\n' > "$KB_CONFIG"
   fi
+  normalize_kb_config
+}
+
+normalize_kb_config() {
+  # 读取缓存时先规范化；若旧版纯 shell 拼接导致 JSON 损坏，则尽量恢复已有 kb-* 映射。
+  python3 - "$KB_CONFIG" <<'PY'
+import json
+import os
+import re
+import sys
+
+path = sys.argv[1]
+
+try:
+    with open(path, "r", encoding="utf-8-sig") as fh:
+        raw = fh.read()
+except FileNotFoundError:
+    raw = ""
+
+def recover_pairs(text):
+    pairs = {}
+    pattern = r'"((?:[^"\\]|\\.)+)"\s*:\s*"((?:[^"\\]|\\.)+)"'
+    for raw_key, raw_value in re.findall(pattern, text):
+        try:
+            key = json.loads(f'"{raw_key}"')
+            value = json.loads(f'"{raw_value}"')
+        except Exception:
+            continue
+        if isinstance(value, str) and value.startswith("kb-"):
+            pairs[str(key)] = value
+    return pairs
+
+try:
+    data = json.loads(raw) if raw.strip() else {}
+    if not isinstance(data, dict):
+        data = {}
+    data = {
+        str(key): str(value)
+        for key, value in data.items()
+        if isinstance(value, str) and value
+    }
+except Exception:
+    data = recover_pairs(raw)
+
+tmp_path = f"{path}.tmp"
+with open(tmp_path, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, ensure_ascii=False, indent=2, sort_keys=True)
+    fh.write("\n")
+os.replace(tmp_path, path)
+PY
 }
 
 read_cached_kb_id() {
   local dir="$1"
-  local content needle rest
 
-  content="$(tr -d '\r\n' < "$KB_CONFIG")"
-  needle="\"$(json_escape "$dir")\":\""
-  rest="${content#*"$needle"}"
-  if [ "$rest" = "$content" ]; then
-    return 1
-  fi
-  printf '%s' "${rest%%\"*}"
+  python3 - "$KB_CONFIG" "$dir" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+key = sys.argv[2]
+
+with open(path, "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+value = data.get(key)
+if not isinstance(value, str) or not value:
+    sys.exit(1)
+print(value)
+PY
 }
 
 write_cached_kb_id() {
   local dir="$1"
   local id="$2"
-  local content key value
 
-  content="$(tr -d '\r\n' < "$KB_CONFIG")"
-  key="$(json_escape "$dir")"
-  value="$(json_escape "$id")"
+  python3 - "$KB_CONFIG" "$dir" "$id" <<'PY'
+import json
+import os
+import sys
 
-  if [ "$content" = "{}" ]; then
-    printf '{"%s":"%s"}\n' "$key" "$value" > "$KB_CONFIG.tmp"
-  else
-    printf '%s,"%s":"%s"}\n' "${content%}}" "$key" "$value" > "$KB_CONFIG.tmp"
-  fi
-  mv "$KB_CONFIG.tmp" "$KB_CONFIG"
+path = sys.argv[1]
+key = sys.argv[2]
+value = sys.argv[3]
+
+with open(path, "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+if not isinstance(data, dict):
+    data = {}
+
+data[key] = value
+tmp_path = f"{path}.tmp"
+with open(tmp_path, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, ensure_ascii=False, indent=2, sort_keys=True)
+    fh.write("\n")
+os.replace(tmp_path, path)
+PY
 }
 
 post_tool_call() {

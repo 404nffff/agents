@@ -17,20 +17,44 @@ ai_localbase_background_sync_json_escape() {
   printf '%s' "$value"
 }
 
-# 从简单 JSON 响应里提取目标字符串字段。
+# 从 JSON 响应里提取目标字符串字段，兼容 structuredContent 等嵌套结构。
 ai_localbase_background_sync_extract_json_string_field() {
   local json="$1"
   local field="$2"
-  local needle rest
 
-  needle="\"$field\":\""
-  json=${json//$'\n'/}
-  json=${json//$'\r'/}
-  rest="${json#*"$needle"}"
-  if [ "$rest" = "$json" ]; then
-    return 1
-  fi
-  printf '%s' "${rest%%\"*}"
+  JSON_INPUT="$json" FIELD="$field" python3 - <<'PY'
+import json
+import os
+import sys
+
+field = os.environ["FIELD"]
+raw = os.environ["JSON_INPUT"]
+
+def find_value(value):
+    if isinstance(value, dict):
+        if isinstance(value.get(field), str):
+            return value[field]
+        for item in value.values():
+            found = find_value(item)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = find_value(item)
+            if found:
+                return found
+    return None
+
+try:
+    data = json.loads(raw)
+except Exception:
+    sys.exit(1)
+
+result = find_value(data)
+if not result:
+    sys.exit(1)
+print(result)
+PY
 }
 
 ai_localbase_background_sync_fail() {
@@ -41,6 +65,9 @@ ai_localbase_background_sync_fail() {
 ai_localbase_background_sync_ensure_requirements() {
   if ! command -v curl >/dev/null 2>&1; then
     ai_localbase_background_sync_fail "未找到 curl，请先安装 curl"
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    ai_localbase_background_sync_fail "未找到 python3，请先安装 Python 3"
   fi
 }
 
@@ -100,36 +127,103 @@ ai_localbase_background_sync_ensure_runtime_dirs() {
   if [ ! -f "$AI_LOCALBASE_BACKGROUND_SYNC_KB_CONFIG" ]; then
     printf '{}\n' > "$AI_LOCALBASE_BACKGROUND_SYNC_KB_CONFIG"
   fi
+  ai_localbase_background_sync_normalize_kb_config
+}
+
+ai_localbase_background_sync_normalize_kb_config() {
+  # 旧版同步 fallback 使用字符串拼接写 JSON；这里先规范化并尽量恢复已有 kb-* 映射。
+  python3 - "$AI_LOCALBASE_BACKGROUND_SYNC_KB_CONFIG" <<'PY'
+import json
+import os
+import re
+import sys
+
+path = sys.argv[1]
+
+try:
+    with open(path, "r", encoding="utf-8-sig") as fh:
+        raw = fh.read()
+except FileNotFoundError:
+    raw = ""
+
+def recover_pairs(text):
+    pairs = {}
+    pattern = r'"((?:[^"\\]|\\.)+)"\s*:\s*"((?:[^"\\]|\\.)+)"'
+    for raw_key, raw_value in re.findall(pattern, text):
+        try:
+            key = json.loads(f'"{raw_key}"')
+            value = json.loads(f'"{raw_value}"')
+        except Exception:
+            continue
+        if isinstance(value, str) and value.startswith("kb-"):
+            pairs[str(key)] = value
+    return pairs
+
+try:
+    data = json.loads(raw) if raw.strip() else {}
+    if not isinstance(data, dict):
+        data = {}
+    data = {
+        str(key): str(value)
+        for key, value in data.items()
+        if isinstance(value, str) and value
+    }
+except Exception:
+    data = recover_pairs(raw)
+
+tmp_path = f"{path}.tmp"
+with open(tmp_path, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, ensure_ascii=False, indent=2, sort_keys=True)
+    fh.write("\n")
+os.replace(tmp_path, path)
+PY
 }
 
 ai_localbase_background_sync_read_cached_kb_id() {
   local key="$1"
-  local content needle rest
 
-  content="$(tr -d '\r\n' < "$AI_LOCALBASE_BACKGROUND_SYNC_KB_CONFIG")"
-  needle="\"$(ai_localbase_background_sync_json_escape "$key")\":\""
-  rest="${content#*"$needle"}"
-  if [ "$rest" = "$content" ]; then
-    return 1
-  fi
-  printf '%s' "${rest%%\"*}"
+  python3 - "$AI_LOCALBASE_BACKGROUND_SYNC_KB_CONFIG" "$key" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+key = sys.argv[2]
+
+with open(path, "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+value = data.get(key)
+if not isinstance(value, str) or not value:
+    sys.exit(1)
+print(value)
+PY
 }
 
 ai_localbase_background_sync_write_cached_kb_id() {
   local key="$1"
   local id="$2"
-  local content escaped_key escaped_value
 
-  content="$(tr -d '\r\n' < "$AI_LOCALBASE_BACKGROUND_SYNC_KB_CONFIG")"
-  escaped_key="$(ai_localbase_background_sync_json_escape "$key")"
-  escaped_value="$(ai_localbase_background_sync_json_escape "$id")"
+  python3 - "$AI_LOCALBASE_BACKGROUND_SYNC_KB_CONFIG" "$key" "$id" <<'PY'
+import json
+import os
+import sys
 
-  if [ "$content" = "{}" ]; then
-    printf '{"%s":"%s"}\n' "$escaped_key" "$escaped_value" > "$AI_LOCALBASE_BACKGROUND_SYNC_KB_CONFIG.tmp"
-  else
-    printf '%s,"%s":"%s"}\n' "${content%}}" "$escaped_key" "$escaped_value" > "$AI_LOCALBASE_BACKGROUND_SYNC_KB_CONFIG.tmp"
-  fi
-  mv "$AI_LOCALBASE_BACKGROUND_SYNC_KB_CONFIG.tmp" "$AI_LOCALBASE_BACKGROUND_SYNC_KB_CONFIG"
+path = sys.argv[1]
+key = sys.argv[2]
+value = sys.argv[3]
+
+with open(path, "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+if not isinstance(data, dict):
+    data = {}
+
+data[key] = value
+tmp_path = f"{path}.tmp"
+with open(tmp_path, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, ensure_ascii=False, indent=2, sort_keys=True)
+    fh.write("\n")
+os.replace(tmp_path, path)
+PY
 }
 
 ai_localbase_background_sync_post_tool_call() {
