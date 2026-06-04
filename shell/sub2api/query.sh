@@ -1154,10 +1154,12 @@ def render_card_report(accounts_payload, keys_payload):
     ])
     for index, key in enumerate(used_keys, 1):
         usage = key.get("usage", {})
+        models = "、".join(usage.get("models") or []) or "-"
         lines.append(
             f"{marker(index)} `{key.get('name') or '-'}` ｜ "
             f"最近调用 **{format_display_time(key.get('last_used_at'))}** ｜ "
             f"请求 **{int(number(usage.get('request_count'), 0))}** ｜ "
+            f"模型 **{models}** ｜ "
             f"输入 **{format_tokens_m_plain(usage.get('input_tokens', 0))}** ｜ "
             f"输出 **{format_tokens_m_plain(usage.get('output_tokens', 0))}** ｜ "
             f"缓存 **{format_tokens_m_plain(usage.get('cache_tokens', 0))}** ｜ "
