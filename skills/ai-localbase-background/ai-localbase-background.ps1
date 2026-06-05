@@ -16,6 +16,12 @@ function Show-Usage {
   @"
 用法:
   ./ai-localbase-background.ps1 init [目录]
+  ./ai-localbase-background.ps1 tools
+  ./ai-localbase-background.ps1 list
+  ./ai-localbase-background.ps1 upload [文件名] [内容] [目录]
+  ./ai-localbase-background.ps1 append [documentId] [内容] [目录]
+  ./ai-localbase-background.ps1 update [documentId] [内容] [目录]
+  ./ai-localbase-background.ps1 delete [documentId] [目录]
   ./ai-localbase-background.ps1 worker-start [目录]
   ./ai-localbase-background.ps1 worker-status [目录]
   ./ai-localbase-background.ps1 worker-logs [目录] [行数]
@@ -24,7 +30,7 @@ function Show-Usage {
   ./ai-localbase-background.ps1 queue-append [documentId] [内容] [目录]
   ./ai-localbase-background.ps1 queue-update [documentId] [内容] [目录]
   ./ai-localbase-background.ps1 queue-delete [documentId] [目录]
-  ./ai-localbase-background.ps1 search [关键词] [目录]
+  ./ai-localbase-background.ps1 search [关键词] [目录] [topK]
   ./ai-localbase-background.ps1 chat [问题] [目录]
   ./ai-localbase-background.ps1 job-status [jobId] [目录]
   ./ai-localbase-background.ps1 job-result [jobId] [目录]
@@ -72,6 +78,41 @@ switch ($Action) {
   "init" {
     $workDir = if ($Arguments.Count -ge 1) { $Arguments[0] } else { (Get-Location).ProviderPath }
     Invoke-Worker @("init", "--workdir", $workDir)
+    break
+  }
+  "tools" {
+    Invoke-SyncSkill @("tools")
+    break
+  }
+  "list" {
+    Invoke-SyncSkill @("list")
+    break
+  }
+  "upload" {
+    $filename = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "example.md" }
+    $content = if ($Arguments.Count -ge 2) { $Arguments[1] } else { "# 示例文档`n`n这是测试内容。" }
+    $workDir = if ($Arguments.Count -ge 3) { $Arguments[2] } else { (Get-Location).ProviderPath }
+    Invoke-SyncSkill @("upload", $filename, $content, $workDir)
+    break
+  }
+  "append" {
+    $documentId = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "" }
+    $content = if ($Arguments.Count -ge 2) { $Arguments[1] } else { "" }
+    $workDir = if ($Arguments.Count -ge 3) { $Arguments[2] } else { (Get-Location).ProviderPath }
+    Invoke-SyncSkill @("append", $documentId, $content, $workDir)
+    break
+  }
+  "update" {
+    $documentId = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "" }
+    $content = if ($Arguments.Count -ge 2) { $Arguments[1] } else { "" }
+    $workDir = if ($Arguments.Count -ge 3) { $Arguments[2] } else { (Get-Location).ProviderPath }
+    Invoke-SyncSkill @("update", $documentId, $content, $workDir)
+    break
+  }
+  "delete" {
+    $documentId = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "" }
+    $workDir = if ($Arguments.Count -ge 2) { $Arguments[1] } else { (Get-Location).ProviderPath }
+    Invoke-SyncSkill @("delete", $documentId, $workDir)
     break
   }
   "worker-start" {
@@ -125,7 +166,8 @@ switch ($Action) {
   "search" {
     $query = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "示例" }
     $workDir = if ($Arguments.Count -ge 2) { $Arguments[1] } else { (Get-Location).ProviderPath }
-    Invoke-SyncSkill @("search", $query, $workDir)
+    $topK = if ($Arguments.Count -ge 3) { $Arguments[2] } else { "3" }
+    Invoke-SyncSkill @("search", $query, $workDir, $topK)
     break
   }
   "chat" {

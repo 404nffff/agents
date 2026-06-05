@@ -1,6 +1,12 @@
 param(
   [Parameter(Position = 0)]
-  [string]$Payload
+  [string]$Payload,
+
+  [Alias("h")]
+  [switch]$Help,
+
+  [Parameter(ValueFromRemainingArguments = $true)]
+  [string[]]$RemainingArguments
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,16 +16,10 @@ $ErrorActionPreference = "Stop"
 # UserPromptSubmit / SubagentStop / Stop。
 #
 # Windows hooks.json 配置可参考同目录 hooks_win.json。
-# .env 可选配置：
-#   FEISHU_CODEX_HOOK_TEMPLATE='blue'
-#   FEISHU_CODEX_HOOK_FOOTER='由 Codex hooks 自动发送'
-#   FEISHU_CODEX_HOOK_EVENTS=''          # 空表示全部；也可填 Stop,PostToolUse
-#   FEISHU_CODEX_HOOK_INCLUDE_PAYLOAD='false'
-#   FEISHU_CODEX_HOOK_MAX_CHARS='3000'
-#   FEISHU_CODEX_HOOK_PAYLOAD_LOG_PATH=''
-#   FEISHU_CODEX_HOOK_ENABLE_PUSH='false'   # true 时才发送飞书通知
-#   FEISHU_CODEX_HOOK_UPDATE_SESSION_TITLE='false' # true 时用官方 app-server 更新会话标题
-#   FEISHU_CODEX_HOOK_CODEX_APP_SERVER_DRAIN_SECONDS='0.5' # 写入后等待 app-server 处理
+# .env 常用配置：
+#   FEISHU_CODEX_HOOK_ENABLE_PUSH='false'        # true 时发送飞书通知
+#   FEISHU_CODEX_HOOK_EVENTS=''                  # 空表示全部；也可填 Stop,PostToolUse
+#   FEISHU_CODEX_HOOK_UPDATE_SESSION_TITLE='false' # true 时同步更新 Codex 会话标题
 #
 # Codex hooks stdin payload 字段说明（自动含义）：
 # 1. SessionStart
@@ -83,6 +83,106 @@ $EnvFile = if ($env:FEISHU_ENV_FILE) {
   $env:FEISHU_BOT_ENV_FILE
 } else {
   $DefaultEnvFile
+}
+
+function Show-Usage {
+  $scriptName = Split-Path -Leaf $MyInvocation.ScriptName
+  @"
+用法:
+  .\$scriptName create [win]
+  .\$scriptName [hook-json-file]
+  .\$scriptName -h|--help
+
+说明:
+  Codex hooks 生命周期通知入口。正常作为 hooks command 运行，从 stdin 读取 Codex hook payload。
+  create 模式会生成 Windows PowerShell hooks 配置，并写入 ~/.codex/hooks.json。
+  默认读取脚本所在目录 .env；也可通过 FEISHU_ENV_FILE 或 FEISHU_BOT_ENV_FILE 指定配置文件。
+
+动作:
+  create              生成 Windows PowerShell hooks 配置
+  create win          同 create
+  hook-json-file      从指定 JSON 文件读取 hook payload，便于本地调试
+
+常用环境变量:
+  FEISHU_CODEX_HOOK_ENABLE_PUSH            true 时发送飞书通知，默认 false
+  FEISHU_CODEX_HOOK_EVENTS                 事件白名单，空表示全部，例如 Stop,PostToolUse
+  FEISHU_CODEX_HOOK_UPDATE_SESSION_TITLE   true 时在 Stop 阶段更新 Codex 会话标题
+
+示例:
+  .\$scriptName create
+  `$env:FEISHU_CODEX_HOOK_ENABLE_PUSH='true'; .\$scriptName .\payload.json
+
+注意:
+  不要把 webhook、app_secret、token 等敏感值写入 README、日志或提交记录。
+"@
+}
+
+function ConvertTo-WindowsHookPath {
+  param([string]$Path)
+
+  return ([System.IO.Path]::GetFullPath($Path))
+}
+
+function New-HookCommand {
+  $scriptPath = ConvertTo-WindowsHookPath (Join-Path $ScriptDir "feishu_codex_hook.ps1")
+  return 'powershell -NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $scriptPath
+}
+
+function Write-HooksJsonFile {
+  param([string]$CommandText)
+
+  $outputDir = Join-Path $HOME ".codex"
+  $outputPath = Join-Path $outputDir "hooks.json"
+  if (-not (Test-Path -LiteralPath $outputDir)) {
+    New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+  }
+
+  $hookEvents = @(
+    @{ Name = "SessionStart"; Matcher = $false },
+    @{ Name = "SubagentStart"; Matcher = $false },
+    @{ Name = "PreToolUse"; Matcher = $true },
+    @{ Name = "PermissionRequest"; Matcher = $true },
+    @{ Name = "PostToolUse"; Matcher = $true },
+    @{ Name = "PreCompact"; Matcher = $false },
+    @{ Name = "PostCompact"; Matcher = $false },
+    @{ Name = "UserPromptSubmit"; Matcher = $false },
+    @{ Name = "SubagentStop"; Matcher = $false },
+    @{ Name = "Stop"; Matcher = $false }
+  )
+
+  $hooks = [ordered]@{}
+  foreach ($hookEvent in $hookEvents) {
+    $item = [ordered]@{
+      hooks = @(
+        [ordered]@{
+          type = "command"
+          command = $CommandText
+        }
+      )
+    }
+    if ($hookEvent.Matcher) {
+      $item.matcher = "*"
+    }
+    $hooks[$hookEvent.Name] = @($item)
+  }
+
+  $payload = [ordered]@{ hooks = $hooks }
+  $payload | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $outputPath -Encoding utf8
+  Write-Output "已生成 win hooks 配置:"
+  Write-Output "  $outputPath"
+}
+
+function New-HooksJsonFiles {
+  param([string]$Platform = "win")
+
+  if ([string]::IsNullOrWhiteSpace($Platform)) {
+    $Platform = "win"
+  }
+  if ($Platform -ne "win") {
+    throw "PowerShell 版只支持 create win；Linux/macOS 请使用 feishu_codex_hook.sh create linux"
+  }
+
+  Write-HooksJsonFile -CommandText (New-HookCommand)
 }
 
 function Get-EnvOrDefault {
@@ -156,6 +256,50 @@ function Get-TitleState {
   return ""
 }
 
+function Set-TitleState {
+  param(
+    [string]$SessionId,
+    [string]$TurnId,
+    [string]$Title
+  )
+
+  if ([string]::IsNullOrWhiteSpace($SessionId) -or [string]::IsNullOrWhiteSpace($TurnId) -or [string]::IsNullOrWhiteSpace($Title)) {
+    return
+  }
+
+  try {
+    $stateDir = Split-Path -Parent $TitleStatePath
+    if (-not [string]::IsNullOrWhiteSpace($stateDir) -and -not (Test-Path -LiteralPath $stateDir)) {
+      New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+    }
+
+    $state = [ordered]@{}
+    if (Test-Path -LiteralPath $TitleStatePath) {
+      $loaded = Get-Content -LiteralPath $TitleStatePath -Raw | ConvertFrom-Json
+      if ($loaded) {
+        foreach ($property in $loaded.PSObject.Properties) {
+          $state[$property.Name] = $property.Value
+        }
+      }
+    }
+
+    $key = "$SessionId`:$TurnId"
+    $state[$key] = [ordered]@{
+      session_id = $SessionId
+      turn_id = $TurnId
+      title = $Title
+    }
+
+    $trimmed = [ordered]@{}
+    $properties = @($state.GetEnumerator())
+    foreach ($item in ($properties | Select-Object -Last 50)) {
+      $trimmed[$item.Key] = $item.Value
+    }
+
+    $trimmed | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $TitleStatePath -Encoding utf8
+  } catch {}
+}
+
 function Update-CodexSessionTitle {
   param([string]$RawPayload)
 
@@ -214,6 +358,9 @@ function Load-FeishuEnvFile {
 
 function Read-HookPayload {
   if (-not [string]::IsNullOrWhiteSpace($Payload)) {
+    if (Test-Path -LiteralPath $Payload -PathType Leaf) {
+      return Get-Content -LiteralPath $Payload -Raw
+    }
     return $Payload
   }
 
@@ -395,24 +542,6 @@ function Remove-ForwardedTitlePrefix {
   return $text.Trim()
 }
 
-function Get-LastPromptSegment {
-  param([string]$Value)
-
-  if ([string]::IsNullOrWhiteSpace($Value)) {
-    return ""
-  }
-
-  $segments = @(
-    $Value -split "[`n。！？!?]+" |
-    ForEach-Object { $_.Trim(" ，,。:：;；、-".ToCharArray()) } |
-    Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-  )
-  if ($segments.Count -gt 0) {
-    return [string]$segments[-1]
-  }
-  return $Value.Trim()
-}
-
 function Format-CodeText {
   param([string]$Value)
 
@@ -567,7 +696,7 @@ function Build-HookMarkdown {
     "PreToolUse" { Get-CleanTitleSummary $toolSummary 40; break }
     "PostToolUse" { Get-CleanTitleSummary $toolSummary 40; break }
     "PermissionRequest" { Get-CleanTitleSummary $toolName 32; break }
-    "UserPromptSubmit" { Get-CleanTitleSummary (Get-LastPromptSegment (Remove-ForwardedTitlePrefix $prompt)) 40; break }
+    "UserPromptSubmit" { Get-CleanTitleSummary (Remove-ForwardedTitlePrefix $prompt) 40; break }
     "Stop" { Get-CleanTitleSummary $lastAssistantMessage 24; break }
     "SubagentStart" { Get-CleanTitleSummary $agentType 32; break }
     "SubagentStop" { Get-CleanTitleSummary $agentType 32; break }
@@ -618,7 +747,7 @@ function Build-HookMarkdown {
       $messageBlocks.Add("")
       $messageBlocks.Add("**Payload 摘要**")
       $messageBlocks.Add("")
-      $messageBlocks.Add("```json`n$payloadExcerpt`n```")
+      $messageBlocks.Add(('```json' + "`n" + $payloadExcerpt + "`n" + '```'))
     }
   }
 
@@ -708,6 +837,17 @@ function Send-MarkdownCard {
     -Body $body | Out-Null
 }
 
+if ($Help -or $Payload -in @("--help", "help")) {
+  Show-Usage
+  exit 0
+}
+
+if ($Payload -eq "create") {
+  $platform = if ($RemainingArguments.Count -ge 1) { [string]$RemainingArguments[0] } else { "win" }
+  New-HooksJsonFiles -Platform $platform
+  exit 0
+}
+
 try {
   Load-FeishuEnvFile -Path $EnvFile
   $raw = Read-HookPayload
@@ -728,6 +868,7 @@ try {
   $turnId = [string]$parsed["TurnId"]
   $titleSummary = [string]$parsed["TitleSummary"]
   if ($eventName -eq "UserPromptSubmit") {
+    Set-TitleState -SessionId $sessionId -TurnId $turnId -Title $titleSummary
     Update-CodexSessionTitle -RawPayload $raw
   }
   if ($parsed["Skip"]) {

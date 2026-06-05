@@ -108,6 +108,44 @@ ai_localbase_background_sync_resolve_work_dir() {
   fi
 }
 
+ai_localbase_background_sync_is_project_root() {
+  local path="$1"
+
+  [ -d "$path" ] || return 1
+
+  [ -f "$path/AGENTS.md" ] ||
+    [ -f "$path/agents.md" ] ||
+    [ -d "$path/.git" ] ||
+    [ -f "$path/package.json" ] ||
+    [ -f "$path/composer.json" ] ||
+    [ -f "$path/go.mod" ] ||
+    [ -f "$path/pyproject.toml" ] ||
+    [ -f "$path/README.md" ]
+}
+
+ai_localbase_background_sync_resolve_project_work_dir() {
+  local dir="$1"
+  local normalized="${dir//\\//}"
+  local candidate=""
+
+  case "$normalized" in
+    */docs/*)
+      candidate="${normalized%%/docs/*}"
+      ;;
+    */docs)
+      candidate="${normalized%/docs}"
+      ;;
+  esac
+
+  if [ -n "$candidate" ] && ai_localbase_background_sync_is_project_root "$candidate"; then
+    # docs 下任务目录只承载阶段文档；知识库和后台状态必须按项目启动目录归属。
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  printf '%s\n' "$dir"
+}
+
 ai_localbase_background_sync_resolve_kb_name() {
   local dir="$1"
   basename "$dir"
@@ -236,6 +274,48 @@ ai_localbase_background_sync_post_tool_call() {
     -d "$body"
 }
 
+ai_localbase_background_sync_post_tools_list() {
+  curl -s "$MCP_API_BASE_URL" \
+    -H 'Content-Type: application/json' \
+    -H "$MCP_AUTH_HEADER" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+}
+
+ai_localbase_background_sync_find_kb_id_by_name() {
+  local json="$1"
+  local kb_name="$2"
+
+  JSON_INPUT="$json" KB_NAME_INPUT="$kb_name" python3 - <<'PY'
+import json
+import os
+import sys
+
+target = os.environ["KB_NAME_INPUT"]
+raw = os.environ["JSON_INPUT"]
+
+try:
+    data = json.loads(raw)
+except Exception:
+    sys.exit(1)
+
+items = data.get("structuredContent", {}).get("items", [])
+if not isinstance(items, list):
+    sys.exit(1)
+
+for item in items:
+    if not isinstance(item, dict):
+        continue
+    if item.get("name") != target:
+        continue
+    kb_id = item.get("knowledgeBaseId") or item.get("id")
+    if isinstance(kb_id, str) and kb_id:
+        print(kb_id)
+        sys.exit(0)
+
+sys.exit(1)
+PY
+}
+
 ai_localbase_background_sync_prepare_context() {
   local work_dir_input="${1:-$(pwd)}"
 
@@ -243,7 +323,10 @@ ai_localbase_background_sync_prepare_context() {
   ai_localbase_background_sync_load_env
 
   export AI_LOCALBASE_BACKGROUND_SYNC_WORK_DIR
-  AI_LOCALBASE_BACKGROUND_SYNC_WORK_DIR="$(ai_localbase_background_sync_resolve_work_dir "$work_dir_input")"
+  AI_LOCALBASE_BACKGROUND_SYNC_WORK_DIR="$(
+    ai_localbase_background_sync_resolve_project_work_dir \
+      "$(ai_localbase_background_sync_resolve_work_dir "$work_dir_input")"
+  )"
 
   export AI_LOCALBASE_BACKGROUND_SYNC_KB_NAME
   AI_LOCALBASE_BACKGROUND_SYNC_KB_NAME="$(ai_localbase_background_sync_resolve_kb_name "$AI_LOCALBASE_BACKGROUND_SYNC_WORK_DIR")"
@@ -258,18 +341,28 @@ ai_localbase_background_sync_prepare_context() {
 }
 
 ai_localbase_background_sync_ensure_kb_id() {
-  AI_LOCALBASE_BACKGROUND_SYNC_KB_ID="$(ai_localbase_background_sync_read_cached_kb_id "$AI_LOCALBASE_BACKGROUND_SYNC_KB_NAME" || true)"
+  local tools_response
+  local list_response
 
-  if [ -z "${AI_LOCALBASE_BACKGROUND_SYNC_KB_ID:-}" ]; then
-    AI_LOCALBASE_BACKGROUND_SYNC_KB_ID="$(ai_localbase_background_sync_read_cached_kb_id "$AI_LOCALBASE_BACKGROUND_SYNC_WORK_DIR" || true)"
-    if [ -n "${AI_LOCALBASE_BACKGROUND_SYNC_KB_ID:-}" ]; then
-      ai_localbase_background_sync_write_cached_kb_id \
-        "$AI_LOCALBASE_BACKGROUND_SYNC_KB_NAME" \
-        "$AI_LOCALBASE_BACKGROUND_SYNC_KB_ID"
-    fi
+  tools_response="$(ai_localbase_background_sync_post_tools_list)"
+  if [ -z "$tools_response" ]; then
+    ai_localbase_background_sync_fail "读取 tools/list 失败: 响应为空"
   fi
 
+  list_response="$(ai_localbase_background_sync_post_tool_call "knowledge_base.list" '{"arguments":{}}')"
+  if [ -z "$list_response" ]; then
+    ai_localbase_background_sync_fail "读取 knowledge_base.list 失败: 响应为空"
+  fi
+
+  AI_LOCALBASE_BACKGROUND_SYNC_KB_ID="$(
+    ai_localbase_background_sync_find_kb_id_by_name \
+      "$list_response" \
+      "$AI_LOCALBASE_BACKGROUND_SYNC_KB_NAME" || true
+  )"
   if [ -n "${AI_LOCALBASE_BACKGROUND_SYNC_KB_ID:-}" ]; then
+    ai_localbase_background_sync_write_cached_kb_id \
+      "$AI_LOCALBASE_BACKGROUND_SYNC_KB_NAME" \
+      "$AI_LOCALBASE_BACKGROUND_SYNC_KB_ID"
     export AI_LOCALBASE_BACKGROUND_SYNC_KB_ID
     return 0
   fi
@@ -291,6 +384,18 @@ ai_localbase_background_sync_ensure_kb_id() {
     "$AI_LOCALBASE_BACKGROUND_SYNC_KB_ID"
 
   export AI_LOCALBASE_BACKGROUND_SYNC_KB_ID
+}
+
+ai_localbase_background_sync_tools() {
+  ai_localbase_background_sync_ensure_requirements
+  ai_localbase_background_sync_load_env
+  ai_localbase_background_sync_post_tools_list
+}
+
+ai_localbase_background_sync_list() {
+  ai_localbase_background_sync_ensure_requirements
+  ai_localbase_background_sync_load_env
+  ai_localbase_background_sync_post_tool_call "knowledge_base.list" '{"arguments":{}}'
 }
 
 ai_localbase_background_sync_init() {

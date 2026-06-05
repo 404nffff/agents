@@ -10,6 +10,7 @@ description: Use when starting any conversation in a project that uses ai_localb
 - skill 安装目录：`~/.codex/skills/ai-localbase-background/`
 - 默认配置文件：`~/.codex/skills/ai-localbase-background/.env`
 - 每个项目的运行状态目录：`<project>/docs/.ai-localbase-background/`
+- 若误传 `docs/[任务目录]`、`docs/[任务目录]/onlyAI` 或其子目录，入口脚本会自动回退到项目启动目录，再确认知识库和运行状态目录
 
 ## 适用场景
 
@@ -24,6 +25,8 @@ description: Use when starting any conversation in a project that uses ai_localb
 这是最小后台版本，目前只提供：
 
 - `init`
+- `tools`
+- `list`
 - `upload`
 - `append`
 - `update`
@@ -44,6 +47,9 @@ description: Use when starting any conversation in a project that uses ai_localb
 其中：
 
 - 每次进入项目仍然先执行 `init`，用于确认当前目录对应的 `knowledgeBaseId`
+- `init` 必须先调用 `tools/list` 罗列工具能力，再调用 `knowledge_base.list` 检索已有知识库，并按 `name == basename(项目启动目录)` 精确匹配；匹配成功后把真实 `knowledgeBaseId` 写入项目状态目录的 `knowledge.json`，没有匹配时才调用 `knowledge_base.create`
+- `knowledge.json` 只能作为本地映射缓存，不能只凭缓存跳过服务端 `knowledge_base.list`
+- 所有子命令的目录参数都应传项目启动目录；误传任务目录时会自动归一到项目根目录，避免按任务目录创建知识库
 - Bash 入口同时内置同步 `upload / append / update / delete / search / chat`
 - `queue-*` 在发现 worker 未运行时会自动拉起后台 worker
 - 自动拉起的 worker 在队列清空并空闲一小段时间后会自行退出
@@ -53,15 +59,37 @@ description: Use when starting any conversation in a project that uses ai_localb
 ## 使用流程
 
 1. 每次进入项目先执行 `init`
-2. 需要立刻完成写入时，直接调用同步 `upload / append / update / delete`
-3. 需要异步写入时，把任务写入 `queue-*`
-4. `queue-*` 会在需要时自动启动后台 worker
-5. 通过 `job-status` 轮询任务状态
-6. 通过 `job-result` 查看最终返回结果
-7. 需要即时检索或问答时，直接调用同步 `search / chat`
-8. 一般不用手动停 worker；队列处理完并空闲后会自动退出
-9. `worker-start / worker-stop` 只用于调试或批量任务排查
-10. 当前环境必须具备 Python 3；缺失时先安装 Python 3 再使用后台版入口
+2. 需要审计能力时执行 `tools`，查看服务端开放的工具、调用方式、参数和响应字段
+3. 需要核对知识库时执行 `list`，查看已有知识库名称、真实 ID 与文档数量
+4. 需要立刻完成写入时，直接调用同步 `upload / append / update / delete`
+5. 需要异步写入时，把任务写入 `queue-*`
+6. `queue-*` 会在需要时自动启动后台 worker
+7. 通过 `job-status` 轮询任务状态
+8. 通过 `job-result` 查看最终返回结果
+9. 需要即时检索或问答时，直接调用同步 `search / chat`
+10. 一般不用手动停 worker；队列处理完并空闲后会自动退出
+11. `worker-start / worker-stop` 只用于调试或批量任务排查
+12. 当前环境必须具备 Python 3；缺失时先安装 Python 3 再使用后台版入口
+
+## 工具发现与知识库列表
+
+`tools` 子命令调用 JSON-RPC `tools/list`，用于先罗列当前服务端实际开放的工具能力。返回的每个工具必须关注这些字段：
+
+- `name` / `description`：工具名称与用途
+- `invocation`：调用方式，包含 JSON-RPC `tools/call` 和普通 HTTP `/api/mcp/tools/:name/call`
+- `parameters`：参数列表，包含 `name`、`type`、`required`、`description`
+- `inputSchema`：MCP 兼容 JSON Schema
+- `response`：执行成功后 `structuredContent` 中的关键响应字段
+
+`list` 子命令调用普通 HTTP 工具 `knowledge_base.list`，用于检索已有知识库。返回结构在 `structuredContent.items[]` 中，每项包含：
+
+- `id` / `knowledgeBaseId`：真实知识库 ID，例如 `kb-3`
+- `name`：知识库名称，初始化时必须用它精确匹配项目启动目录 basename
+- `description`：知识库描述
+- `createdAt`：创建时间
+- `documentCount`：文档数量
+
+初始化和 `queue-*` 入队时只能把匹配出的 `id` / `knowledgeBaseId` 当作后续工具调用的 `knowledgeBaseId`。禁止把目录名或知识库名直接当作 ID。
 
 ## 检索返回结构
 
@@ -121,6 +149,10 @@ description: Use when starting any conversation in a project that uses ai_localb
 # 每次进入项目先 init，确认知识库 ID
 "${HOME}/.codex/skills/ai-localbase-background/ai-localbase-background.sh" init "/path/to/project"
 
+# 初始化前可显式查看工具能力和已有知识库
+"${HOME}/.codex/skills/ai-localbase-background/ai-localbase-background.sh" tools
+"${HOME}/.codex/skills/ai-localbase-background/ai-localbase-background.sh" list
+
 # 直接同步上传
 "${HOME}/.codex/skills/ai-localbase-background/ai-localbase-background.sh" upload "notes.md" "# 内容" "/path/to/project"
 
@@ -167,6 +199,12 @@ description: Use when starting any conversation in a project that uses ai_localb
 
 ```powershell
 & "$HOME/.codex/skills/ai-localbase-background/ai-localbase-background.ps1" init "C:\work\project"
+& "$HOME/.codex/skills/ai-localbase-background/ai-localbase-background.ps1" tools
+& "$HOME/.codex/skills/ai-localbase-background/ai-localbase-background.ps1" list
+& "$HOME/.codex/skills/ai-localbase-background/ai-localbase-background.ps1" upload "notes.md" "# 内容" "C:\work\project"
+& "$HOME/.codex/skills/ai-localbase-background/ai-localbase-background.ps1" append "doc-123" "追加内容" "C:\work\project"
+& "$HOME/.codex/skills/ai-localbase-background/ai-localbase-background.ps1" update "doc-123" "# 新内容" "C:\work\project"
+& "$HOME/.codex/skills/ai-localbase-background/ai-localbase-background.ps1" delete "doc-123" "C:\work\project"
 & "$HOME/.codex/skills/ai-localbase-background/ai-localbase-background.ps1" queue-upload "notes.md" "# 内容" "C:\work\project"
 & "$HOME/.codex/skills/ai-localbase-background/ai-localbase-background.ps1" queue-append "doc-123" "追加内容" "C:\work\project"
 & "$HOME/.codex/skills/ai-localbase-background/ai-localbase-background.ps1" queue-update "doc-123" "# 新内容" "C:\work\project"
@@ -192,6 +230,8 @@ description: Use when starting any conversation in a project that uses ai_localb
 ## 注意点
 
 - Bash 入口现在同时支持同步 `upload / append / update / delete / search / chat`
+- Bash 与 PowerShell 入口都支持 `tools / list`，用于查看工具能力和已有知识库
+- `init` 和 `queue-*` 都会先通过 `knowledge_base.list` 按项目名匹配已有知识库，未命中才创建
 - `queue-upload / queue-append / queue-update / queue-delete` 在有 Python 时只负责投递任务，不保证任务立刻完成
 - 若 `worker` 没启动，`queue-*` 会自动拉起一个后台 worker
 - Bash 入口需要 Python 3；缺失时 `init`、同步命令、`queue-*`、`worker-*` 和 `job-*` 都不可用

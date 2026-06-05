@@ -12,6 +12,8 @@ usage() {
   cat <<'EOF'
 用法:
   ./ai-localbase-background.sh init [目录]
+  ./ai-localbase-background.sh tools
+  ./ai-localbase-background.sh list
   ./ai-localbase-background.sh upload [文件名] [内容] [目录]
   ./ai-localbase-background.sh append [documentId] [内容] [目录]
   ./ai-localbase-background.sh update [documentId] [内容] [目录]
@@ -33,6 +35,8 @@ usage() {
 
 说明:
   - init: 初始化当前项目对应的知识库映射与运行状态目录
+  - tools: 通过 tools/list 列出当前可用工具能力、调用方式、参数和响应字段
+  - list: 通过 knowledge_base.list 列出现有知识库名称和知识库 ID
   - upload: 立即同步上传文本内容
   - append: 立即同步追加文档内容
   - update: 立即同步覆盖文档内容
@@ -119,6 +123,12 @@ main() {
     init)
       require_python_for_async "init"
       run_worker init --workdir "${1:-$(pwd)}"
+      ;;
+    tools)
+      ai_localbase_background_sync_tools
+      ;;
+    list)
+      ai_localbase_background_sync_list
       ;;
     upload)
       ai_localbase_background_sync_upload "${1:-example.md}" "${2:-# 示例文档

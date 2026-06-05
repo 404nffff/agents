@@ -16,15 +16,19 @@ function Show-Usage {
   @"
 用法:
   ./ai-localbase.ps1 init [目录]
+  ./ai-localbase.ps1 tools
+  ./ai-localbase.ps1 list
   ./ai-localbase.ps1 upload [文件名] [内容] [目录]
   ./ai-localbase.ps1 append [documentId] [内容] [目录]
   ./ai-localbase.ps1 update [documentId] [内容] [目录]
   ./ai-localbase.ps1 delete [documentId] [目录]
-  ./ai-localbase.ps1 search [关键词] [目录]
+  ./ai-localbase.ps1 search [关键词] [目录] [topK]
   ./ai-localbase.ps1 chat [问题] [目录]
 
 说明:
   - init: 初始化当前目录对应的知识库映射并输出摘要 JSON
+  - tools: 通过 tools/list 列出当前可用工具能力、调用方式、参数和响应字段
+  - list: 通过 knowledge_base.list 列出现有知识库名称和知识库 ID
   - upload: 上传文本内容到知识库
   - append: 向已有文档追加文本内容
   - update: 用新内容覆盖已有文档
@@ -89,6 +93,54 @@ function Resolve-WorkDir {
   return [System.IO.Path]::GetFullPath($InputPath)
 }
 
+function Test-ProjectRoot {
+  param([string]$Path)
+
+  if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Container)) {
+    return $false
+  }
+
+  $markers = @(
+    "AGENTS.md",
+    "agents.md",
+    ".git",
+    "package.json",
+    "composer.json",
+    "go.mod",
+    "pyproject.toml",
+    "README.md"
+  )
+
+  foreach ($marker in $markers) {
+    if (Test-Path -LiteralPath (Join-Path $Path $marker)) {
+      return $true
+    }
+  }
+
+  return $false
+}
+
+function Resolve-ProjectWorkDir {
+  param([string]$WorkDir)
+
+  $fullPath = [System.IO.Path]::GetFullPath($WorkDir)
+  $segments = $fullPath -split '[\\/]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+  for ($index = $segments.Count - 1; $index -ge 1; $index--) {
+    if ($segments[$index] -ieq "docs") {
+      $candidateSegments = $segments[0..($index - 1)]
+      $candidate = [System.IO.Path]::GetFullPath(($candidateSegments -join [System.IO.Path]::DirectorySeparatorChar))
+
+      if (Test-ProjectRoot $candidate) {
+        # docs 下任务目录只承载阶段文档；知识库必须按项目启动目录归属。
+        return $candidate
+      }
+    }
+  }
+
+  return $fullPath
+}
+
 function Resolve-KbName {
   param([string]$WorkDir)
 
@@ -140,33 +192,88 @@ function Invoke-AiLocalBaseTool {
   Invoke-RestMethod -Uri $uri -Method Post -Headers $script:AuthHeader -ContentType "application/json" -Body $body
 }
 
+function Invoke-ToolsList {
+  $body = @{
+    jsonrpc = "2.0"
+    id      = 1
+    method  = "tools/list"
+    params  = @{}
+  } | ConvertTo-Json -Depth 8 -Compress
+
+  Invoke-RestMethod -Uri $script:MCP_API_BASE_URL -Method Post -Headers $script:AuthHeader -ContentType "application/json" -Body $body
+}
+
+function Invoke-KnowledgeBaseList {
+  Invoke-AiLocalBaseTool -ToolName "knowledge_base.list" -ArgumentsMap @{}
+}
+
+function Find-KbIdByName {
+  param(
+    [object]$ListResponse,
+    [string]$Name
+  )
+
+  if (-not $ListResponse -or -not ($ListResponse.PSObject.Properties.Name -contains "structuredContent")) {
+    return $null
+  }
+  if (-not $ListResponse.structuredContent -or -not ($ListResponse.structuredContent.PSObject.Properties.Name -contains "items")) {
+    return $null
+  }
+
+  foreach ($item in @($ListResponse.structuredContent.items)) {
+    if (-not $item) {
+      continue
+    }
+    if ([string]$item.name -ne $Name) {
+      continue
+    }
+
+    if ($item.PSObject.Properties.Name -contains "knowledgeBaseId" -and -not [string]::IsNullOrWhiteSpace([string]$item.knowledgeBaseId)) {
+      return [string]$item.knowledgeBaseId
+    }
+    if ($item.PSObject.Properties.Name -contains "id" -and -not [string]::IsNullOrWhiteSpace([string]$item.id)) {
+      return [string]$item.id
+    }
+  }
+
+  return $null
+}
+
 function Prepare-Context {
   param([string]$WorkDirInput)
 
   Ensure-Requirements
   Load-EnvFile
-  $script:WorkDir = Resolve-WorkDir $WorkDirInput
+  $resolvedWorkDir = Resolve-WorkDir $WorkDirInput
+  $script:WorkDir = Resolve-ProjectWorkDir $resolvedWorkDir
   $script:KbName = Resolve-KbName $script:WorkDir
 }
 
 function Ensure-KbId {
   $map = Read-KbMap
 
-  if ($map.ContainsKey($script:KbName)) {
-    $script:KbId = $map[$script:KbName]
-    Write-Host "使用已有知识库 ID: $($script:KbId)"
-    return
+  Write-Host "正在读取工具能力列表..."
+  $toolsResponse = Invoke-ToolsList
+  if (-not $toolsResponse) {
+    throw "读取 tools/list 失败: 响应为空"
   }
 
-  if ($map.ContainsKey($script:WorkDir)) {
-    $script:KbId = $map[$script:WorkDir]
+  Write-Host "正在检索已有知识库..."
+  $listResponse = Invoke-KnowledgeBaseList
+  if (-not $listResponse) {
+    throw "读取 knowledge_base.list 失败: 响应为空"
+  }
+
+  $matchedKbId = Find-KbIdByName -ListResponse $listResponse -Name $script:KbName
+  if (-not [string]::IsNullOrWhiteSpace($matchedKbId)) {
+    $script:KbId = $matchedKbId
     $map[$script:KbName] = $script:KbId
     Write-KbMap $map
-    Write-Host "使用已有知识库 ID: $($script:KbId)"
+    Write-Host "匹配到已有知识库: $($script:KbName) (ID: $($script:KbId))"
     return
   }
 
-  Write-Host "目录 $($script:WorkDir) 未找到知识库，正在创建..."
+  Write-Host "未匹配到知识库名 $($script:KbName)，正在创建..."
   $response = Invoke-AiLocalBaseTool -ToolName "knowledge_base.create" -ArgumentsMap @{
     name        = $script:KbName
     description = "目录: $($script:WorkDir)"
@@ -205,6 +312,18 @@ function Invoke-Init {
     knowledgeBaseName = $script:KbName
     knowledgeBaseId = $script:KbId
   } | ConvertTo-Json -Depth 5 -Compress
+}
+
+function Invoke-Tools {
+  Ensure-Requirements
+  Load-EnvFile
+  Invoke-ToolsList | ConvertTo-Json -Depth 12
+}
+
+function Invoke-List {
+  Ensure-Requirements
+  Load-EnvFile
+  Invoke-KnowledgeBaseList | ConvertTo-Json -Depth 12
 }
 
 function Invoke-Upload {
@@ -300,7 +419,8 @@ function Invoke-Delete {
 function Invoke-Search {
   param(
     [string]$Query,
-    [string]$WorkDirInput
+    [string]$WorkDirInput,
+    [int]$TopK = 3
   )
 
   Prepare-Context $WorkDirInput
@@ -310,7 +430,7 @@ function Invoke-Search {
   $response = Invoke-AiLocalBaseTool -ToolName "knowledge_base.search" -ArgumentsMap @{
     knowledgeBaseId = $script:KbId
     query           = $Query
-    topK            = 3
+    topK            = $TopK
   }
 
   $response | ConvertTo-Json -Depth 10
@@ -338,6 +458,14 @@ switch ($Action) {
   "init" {
     $targetDir = if ($Arguments.Count -ge 1) { $Arguments[0] } else { (Get-Location).ProviderPath }
     Invoke-Init $targetDir
+    break
+  }
+  "tools" {
+    Invoke-Tools
+    break
+  }
+  "list" {
+    Invoke-List
     break
   }
   "upload" {
@@ -370,7 +498,8 @@ switch ($Action) {
   "search" {
     $query = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "示例" }
     $workDir = if ($Arguments.Count -ge 2) { $Arguments[1] } else { (Get-Location).ProviderPath }
-    Invoke-Search $query $workDir
+    $topK = if ($Arguments.Count -ge 3) { [int]$Arguments[2] } else { 3 }
+    Invoke-Search $query $workDir $topK
     break
   }
   "chat" {

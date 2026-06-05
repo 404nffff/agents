@@ -25,6 +25,7 @@
 | `AGENTS_SDP_AI_LOCALBASE_v4.md` | SDLC 版操作手册（v4），完全依赖 `ai_localbase` 知识库 |
 | `AGENTS_SDP_AI_LOCALBASE_v5.md` | SDLC 版操作手册（v5），依赖 `ai_localbase` 并默认使用 `software-dev-process-roles` 做阶段选角 |
 | `AGENTS_SDP_AI_LOCALBASE_v6.md` | SDLC 版操作手册（v6），基于 v5 并在会话初始化时自动加载 `caveman` 压缩沟通模式 |
+| `AGENTS_SDP_AI_LOCALBASE_v7.md` | SDLC 版操作手册（v7），依赖 `ai_localbase` + `software-dev-process`，强化知识库真实 kb_id 初始化、代码索引降级和 SQL 编写约束 |
 
 ## 全局级 Agent
 
@@ -39,7 +40,9 @@
 
 ## 版本选择建议
 
-- **新项目:** 推荐使用 `AGENTS_SDP_AI_LOCALBASE_v6.md`（最新版，依赖 ai_localbase + `software-dev-process-roles`，初始化自动加载 `caveman`）
+- **新项目:** 推荐使用 `AGENTS_SDP_AI_LOCALBASE_v7.md`（最新版通用 SDLC，依赖 ai_localbase + `software-dev-process`，初始化自动加载 `caveman`）
+- **知了项目:** 使用 `AGENTS_SDP_AI_LOCALBASE_zl.md`（调用 `software-dev-process-zl`，测试阶段按 `zl_templete.php` 生成 PHP 链路探针）
+- **需要阶段选角:** 使用 `AGENTS_SDP_AI_LOCALBASE_v6.md`（依赖 ai_localbase + `software-dev-process-roles`，初始化自动加载 `caveman`）
 - **需要完整表达、不启用 caveman:** 使用 `AGENTS_SDP_AI_LOCALBASE_v5.md`
 - **仅需 ai_localbase、无需阶段选角:** 使用 `AGENTS_SDP_AI_LOCALBASE_v4.md`
 - **需要记忆功能:** 使用 `AGENTS_MEMORY_v2.md`（支持 Nocturne Memory）

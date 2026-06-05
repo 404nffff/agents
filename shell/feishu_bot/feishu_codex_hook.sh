@@ -21,16 +21,10 @@ set -euo pipefail
 #   }
 # }
 #
-# .env 可选配置：
-#   FEISHU_CODEX_HOOK_TEMPLATE='blue'
-#   FEISHU_CODEX_HOOK_FOOTER='由 Codex hooks 自动发送'
-#   FEISHU_CODEX_HOOK_EVENTS=''          # 空表示全部；也可填 Stop,PostToolUse
-#   FEISHU_CODEX_HOOK_INCLUDE_PAYLOAD='false'
-#   FEISHU_CODEX_HOOK_MAX_CHARS='3000'
-#   FEISHU_CODEX_HOOK_PAYLOAD_LOG_PATH=''
-#   FEISHU_CODEX_HOOK_ENABLE_PUSH='false'   # true 时才发送飞书通知
-#   FEISHU_CODEX_HOOK_UPDATE_SESSION_TITLE='false' # true 时用官方 app-server 更新会话标题
-#   FEISHU_CODEX_HOOK_CODEX_APP_SERVER_DRAIN_SECONDS='0.5' # 写入后等待 app-server 处理
+# .env 常用配置：
+#   FEISHU_CODEX_HOOK_ENABLE_PUSH='false'        # true 时发送飞书通知
+#   FEISHU_CODEX_HOOK_EVENTS=''                  # 空表示全部；也可填 Stop,PostToolUse
+#   FEISHU_CODEX_HOOK_UPDATE_SESSION_TITLE='false' # true 时同步更新 Codex 会话标题
 # create 模式：
 #   ./feishu_codex_hook.sh create             # 按当前系统写入 ~/.codex/hooks.json
 #   ./feishu_codex_hook.sh create linux|win   # 强制按指定平台写入 ~/.codex/hooks.json
@@ -152,8 +146,6 @@ usage() {
 常用环境变量:
   FEISHU_CODEX_HOOK_ENABLE_PUSH            true 时发送飞书通知，默认 false
   FEISHU_CODEX_HOOK_EVENTS                 事件白名单，空表示全部，例如 Stop,PostToolUse
-  FEISHU_CODEX_HOOK_INCLUDE_PAYLOAD        true 时在通知中附带脱敏 payload 摘要，默认 false
-  FEISHU_CODEX_HOOK_PAYLOAD_LOG_PATH       hook payload 日志路径，默认脚本目录 codex_hook_payload.log
   FEISHU_CODEX_HOOK_UPDATE_SESSION_TITLE   true 时在 Stop 阶段更新 Codex 会话标题
 
 示例:
@@ -211,7 +203,7 @@ build_hook_command() {
   local sh_path="${SCRIPT_DIR}/feishu_codex_hook.sh"
   local ps1_path="${SCRIPT_DIR}/feishu_codex_hook.ps1"
   if [[ "${platform}" == "win" ]]; then
-    printf 'powershell -NoProfile -ExecutionPolicy Bypass -File %s\n' "$(to_windows_path "${ps1_path}")"
+    printf 'powershell -NoProfile -ExecutionPolicy Bypass -File "%s"\n' "$(to_windows_path "${ps1_path}")"
     return 0
   fi
   printf 'bash %s\n' "${sh_path}"
@@ -452,16 +444,6 @@ def strip_forwarded_title_prefix(value):
     return cleaned.strip()
 
 
-def extract_last_prompt_segment(value):
-    if not isinstance(value, str):
-        return value
-    parts = re.split(r"[\n。！？!?]+", value)
-    segments = [part.strip(" ，,。:：;；、-") for part in parts if part.strip(" ，,。:：;；、-")]
-    if segments:
-        return segments[-1]
-    return value.strip()
-
-
 def build_title_summary(event_name, tool_name_text, prompt_text, last_message_text):
     tool_input = payload.get("tool_input")
     command_text = ""
@@ -477,7 +459,7 @@ def build_title_summary(event_name, tool_name_text, prompt_text, last_message_te
     if event_name == "PermissionRequest":
         return clean_title_summary(tool_name_text, 32)
     if event_name == "UserPromptSubmit":
-        return clean_title_summary(extract_last_prompt_segment(strip_forwarded_title_prefix(prompt_text)), 40)
+        return clean_title_summary(strip_forwarded_title_prefix(prompt_text), 40)
     if event_name == "Stop":
         return clean_title_summary(last_message_text, 24)
     if event_name in {"SubagentStart", "SubagentStop"}:

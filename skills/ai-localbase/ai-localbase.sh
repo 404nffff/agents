@@ -9,15 +9,19 @@ usage() {
   cat <<'EOF'
 用法:
   ./ai-localbase.sh init [目录]
+  ./ai-localbase.sh tools
+  ./ai-localbase.sh list
   ./ai-localbase.sh upload [文件名] [内容] [目录]
   ./ai-localbase.sh append [documentId] [内容] [目录]
   ./ai-localbase.sh update [documentId] [内容] [目录]
   ./ai-localbase.sh delete [documentId] [目录]
-  ./ai-localbase.sh search [关键词] [目录]
+  ./ai-localbase.sh search [关键词] [目录] [topK]
   ./ai-localbase.sh chat [问题] [目录]
 
 说明:
   - init: 初始化当前目录对应的知识库映射并输出摘要 JSON
+  - tools: 通过 tools/list 列出当前可用工具能力、调用方式、参数和响应字段
+  - list: 通过 knowledge_base.list 列出现有知识库名称和知识库 ID
   - upload: 上传文本内容到知识库
   - append: 向已有文档追加文本内容
   - update: 用新内容覆盖已有文档
@@ -117,6 +121,44 @@ resolve_work_dir() {
   else
     printf '%s\n' "$input"
   fi
+}
+
+is_project_root() {
+  local path="$1"
+
+  [ -d "$path" ] || return 1
+
+  [ -f "$path/AGENTS.md" ] ||
+    [ -f "$path/agents.md" ] ||
+    [ -d "$path/.git" ] ||
+    [ -f "$path/package.json" ] ||
+    [ -f "$path/composer.json" ] ||
+    [ -f "$path/go.mod" ] ||
+    [ -f "$path/pyproject.toml" ] ||
+    [ -f "$path/README.md" ]
+}
+
+resolve_project_work_dir() {
+  local dir="$1"
+  local normalized="${dir//\\//}"
+  local candidate=""
+
+  case "$normalized" in
+    */docs/*)
+      candidate="${normalized%%/docs/*}"
+      ;;
+    */docs)
+      candidate="${normalized%/docs}"
+      ;;
+  esac
+
+  if [ -n "$candidate" ] && is_project_root "$candidate"; then
+    # docs 下任务目录只承载阶段文档；知识库必须按项目启动目录归属。
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  printf '%s\n' "$dir"
 }
 
 resolve_kb_name() {
@@ -237,6 +279,48 @@ post_tool_call() {
     -d "$body"
 }
 
+post_tools_list() {
+  curl -s "$MCP_API_BASE_URL" \
+    -H 'Content-Type: application/json' \
+    -H "$MCP_AUTH_HEADER" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+}
+
+find_kb_id_by_name() {
+  local json="$1"
+  local kb_name="$2"
+
+  JSON_INPUT="$json" KB_NAME_INPUT="$kb_name" python3 - <<'PY'
+import json
+import os
+import sys
+
+target = os.environ["KB_NAME_INPUT"]
+raw = os.environ["JSON_INPUT"]
+
+try:
+    data = json.loads(raw)
+except Exception:
+    sys.exit(1)
+
+items = data.get("structuredContent", {}).get("items", [])
+if not isinstance(items, list):
+    sys.exit(1)
+
+for item in items:
+    if not isinstance(item, dict):
+        continue
+    if item.get("name") != target:
+        continue
+    kb_id = item.get("knowledgeBaseId") or item.get("id")
+    if isinstance(kb_id, str) and kb_id:
+        print(kb_id)
+        sys.exit(0)
+
+sys.exit(1)
+PY
+}
+
 prepare_context() {
   local work_dir_input="${1:-$(pwd)}"
 
@@ -245,28 +329,38 @@ prepare_context() {
   ensure_kb_config
 
   export WORK_DIR
-  WORK_DIR="$(resolve_work_dir "$work_dir_input")"
+  WORK_DIR="$(resolve_project_work_dir "$(resolve_work_dir "$work_dir_input")")"
   export KB_NAME
   KB_NAME="$(resolve_kb_name "$WORK_DIR")"
 }
 
 ensure_kb_id() {
-  KB_ID="$(read_cached_kb_id "$KB_NAME" || true)"
+  local tools_response
+  local list_response
 
-  if [ -z "${KB_ID:-}" ]; then
-    KB_ID="$(read_cached_kb_id "$WORK_DIR" || true)"
-    if [ -n "${KB_ID:-}" ]; then
-      write_cached_kb_id "$KB_NAME" "$KB_ID"
-    fi
+  echo "正在读取工具能力列表..."
+  tools_response="$(post_tools_list)"
+  if [ -z "$tools_response" ]; then
+    echo "读取 tools/list 失败: 响应为空"
+    exit 1
   fi
 
+  echo "正在检索已有知识库..."
+  list_response="$(post_tool_call "knowledge_base.list" '{"arguments":{}}')"
+  if [ -z "$list_response" ]; then
+    echo "读取 knowledge_base.list 失败: 响应为空"
+    exit 1
+  fi
+
+  KB_ID="$(find_kb_id_by_name "$list_response" "$KB_NAME" || true)"
   if [ -n "${KB_ID:-}" ]; then
-    echo "使用已有知识库 ID: $KB_ID"
+    write_cached_kb_id "$KB_NAME" "$KB_ID"
+    echo "匹配到已有知识库: $KB_NAME (ID: $KB_ID)"
     export KB_ID
     return 0
   fi
 
-  echo "目录 $WORK_DIR 未找到知识库，正在创建..."
+  echo "未匹配到知识库名 $KB_NAME，正在创建..."
 
   local response
   response="$(post_tool_call "knowledge_base.create" "$(printf '{"arguments":{"name":"%s","description":"%s"}}' \
@@ -281,6 +375,18 @@ ensure_kb_id() {
   write_cached_kb_id "$KB_NAME" "$KB_ID"
   echo "知识库创建成功: $KB_NAME (ID: $KB_ID)"
   export KB_ID
+}
+
+cmd_tools() {
+  ensure_requirements
+  load_env
+  post_tools_list
+}
+
+cmd_list() {
+  ensure_requirements
+  load_env
+  post_tool_call "knowledge_base.list" '{"arguments":{}}'
 }
 
 cmd_init() {
@@ -373,14 +479,20 @@ cmd_delete() {
 cmd_search() {
   local query="${1:-示例}"
   local work_dir_input="${2:-$(pwd)}"
+  local top_k="${3:-3}"
   local response
+
+  if ! [[ "$top_k" =~ ^[0-9]+$ ]]; then
+    echo "错误: topK 必须是非负整数"
+    exit 1
+  fi
 
   prepare_context "$work_dir_input"
   ensure_kb_id
 
   echo "检索: $query (知识库: $KB_ID)"
-  response="$(post_tool_call "knowledge_base.search" "$(printf '{"arguments":{"knowledgeBaseId":"%s","query":"%s","topK":3}}' \
-    "$(json_escape "$KB_ID")" "$(json_escape "$query")")")"
+  response="$(post_tool_call "knowledge_base.search" "$(printf '{"arguments":{"knowledgeBaseId":"%s","query":"%s","topK":%s}}' \
+    "$(json_escape "$KB_ID")" "$(json_escape "$query")" "$(json_escape "$top_k")")")"
   printf '%s\n' "$response"
 }
 
@@ -406,6 +518,12 @@ main() {
     init)
       cmd_init "${1:-$(pwd)}"
       ;;
+    tools)
+      cmd_tools
+      ;;
+    list)
+      cmd_list
+      ;;
     upload)
       cmd_upload "${1:-example.md}" "${2:-# 示例文档
 
@@ -421,7 +539,7 @@ main() {
       cmd_delete "${1:-}" "${2:-$(pwd)}"
       ;;
     search)
-      cmd_search "${1:-示例}" "${2:-$(pwd)}"
+      cmd_search "${1:-示例}" "${2:-$(pwd)}" "${3:-3}"
       ;;
     chat)
       cmd_chat "${1:-这是什么内容？}" "${2:-$(pwd)}"

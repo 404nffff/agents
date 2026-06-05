@@ -96,15 +96,8 @@ def strip_forwarded_title_prefix(value: str) -> str:
     return text.strip()
 
 
-def extract_last_prompt_segment(value: str) -> str:
-    parts = re.split(r"[\n。！？!?]+", value)
-    segments = [part.strip(" ，,。:：;；、-") for part in parts if part.strip(" ，,。:：;；、-")]
-    return segments[-1] if segments else value.strip()
-
-
 def title_from_prompt(prompt: str) -> str:
     prompt = strip_forwarded_title_prefix(prompt)
-    prompt = extract_last_prompt_segment(prompt)
     return clean_title_summary(prompt, 40)
 
 

@@ -61,8 +61,36 @@ def load_env() -> Dict[str, str]:
 
 def resolve_workdir(raw_path: str) -> Path:
     if not raw_path:
-        return Path.cwd().resolve()
-    return Path(raw_path).expanduser().resolve()
+        return resolve_project_workdir(Path.cwd().resolve())
+    return resolve_project_workdir(Path(raw_path).expanduser().resolve())
+
+
+def is_project_root(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    markers = (
+        "AGENTS.md",
+        "agents.md",
+        ".git",
+        "package.json",
+        "composer.json",
+        "go.mod",
+        "pyproject.toml",
+        "README.md",
+    )
+    return any((path / marker).exists() for marker in markers)
+
+
+def resolve_project_workdir(workdir: Path) -> Path:
+    parts = workdir.parts
+    for index in range(len(parts) - 1, 0, -1):
+        if parts[index].lower() != "docs":
+            continue
+        candidate = Path(*parts[:index])
+        if is_project_root(candidate):
+            # docs 下任务目录只承载阶段文档；知识库和后台状态必须按项目启动目录归属。
+            return candidate.resolve()
+    return workdir
 
 
 def resolve_kb_name(workdir: Path) -> str:
@@ -183,16 +211,70 @@ def post_tool_call(env: Dict[str, str], tool_name: str, arguments_map: Dict[str,
         raise RuntimeError(f"响应不是合法 JSON: {content}") from exc
 
 
+def post_tools_list(env: Dict[str, str]) -> Dict[str, Any]:
+    url = env["MCP_API_BASE_URL"].rstrip("/")
+    body = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        url=url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {env['MCP_AUTH_TOKEN']}",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            content = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"请求失败: {exc}") from exc
+
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"响应不是合法 JSON: {content}") from exc
+
+
+def find_kb_id_by_name(list_response: Dict[str, Any], kb_name: str) -> Optional[str]:
+    structured = list_response.get("structuredContent")
+    if not isinstance(structured, dict):
+        return None
+    items = structured.get("items")
+    if not isinstance(items, list):
+        return None
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("name") != kb_name:
+            continue
+        kb_id = item.get("knowledgeBaseId") or item.get("id")
+        if isinstance(kb_id, str) and kb_id:
+            return kb_id
+    return None
+
+
 def ensure_kb_id(env: Dict[str, str], workdir: Path, paths: Dict[str, Path]) -> str:
     kb_name = resolve_kb_name(workdir)
     mapping = read_kb_map(paths)
 
-    cached = mapping.get(kb_name) or mapping.get(str(workdir))
-    if cached:
-        if kb_name not in mapping:
-            mapping[kb_name] = cached
-            write_kb_map(paths, mapping)
-        return cached
+    tools_response = post_tools_list(env)
+    if not tools_response:
+        raise RuntimeError("读取 tools/list 失败: 响应为空")
+
+    list_response = post_tool_call(env, "knowledge_base.list", {})
+    matched_kb_id = find_kb_id_by_name(list_response, kb_name)
+    if matched_kb_id:
+        mapping[kb_name] = matched_kb_id
+        write_kb_map(paths, mapping)
+        return matched_kb_id
 
     response = post_tool_call(
         env,
