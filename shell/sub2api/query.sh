@@ -49,7 +49,7 @@ usage() {
   查询或更新 Sub2API 管理端账号状态。
   默认读取 ${DEFAULT_ENV_FILE}；如需覆盖路径，可设置 SUB2API_ENV_FILE。
   默认动作是 all，会先输出账号汇总，再输出令牌汇总。
-  report 会输出卡片 1-6 汇报，整合账号额度、异常、过期和今日令牌用量。
+  report 会输出卡片 1-5 汇报，整合账号额度、异常、过期和今日令牌用量。
   accounts/keys 列表默认写入:
     ${SCRIPT_DIR}/accounts.json
     ${SCRIPT_DIR}/keys.json
@@ -307,6 +307,8 @@ class Client:
             return f"{self.base_url}/admin/usage/stats"
         if kind == "key_usage_records_internal":
             return f"{self.base_url}/admin/usage"
+        if kind == "key_model_usage_internal":
+            return f"{self.base_url}/admin/dashboard/models"
         return f"{self.base_url}/admin/accounts"
 
     def request(self, method, url, kind, account_id=None, body=None):
@@ -417,6 +419,19 @@ def build_key_usage_records_url(client, api_key_id, page):
     )
 
 
+def build_key_model_usage_url(client, api_key_id):
+    return client.url(
+        "/api/v1/admin/dashboard/models",
+        {
+            "start_date": TODAY_DATE,
+            "end_date": TODAY_DATE,
+            "api_key_id": api_key_id,
+            "model_source": "requested",
+            "timezone": TIMEZONE,
+        },
+    )
+
+
 def extract_page_items(payload, names):
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
     for name in names:
@@ -424,6 +439,51 @@ def extract_page_items(payload, names):
         if isinstance(items, list):
             return items
     return []
+
+
+def extract_model_usage_items(payload):
+    data = payload.get("data") if isinstance(payload, dict) else payload
+    if isinstance(data, list):
+        return data
+    if not isinstance(data, dict):
+        return []
+    for name in ("models", "items", "list", "usages", "data"):
+        value = data.get(name)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            return [dict({"model": key}, **row) if isinstance(row, dict) else {"model": key, "total_tokens": row} for key, row in value.items()]
+    if any(key in data for key in ("model", "model_name", "total_tokens", "total_input_tokens", "input_tokens")):
+        return [data]
+    return []
+
+
+def normalize_key_model_usage(payload):
+    grouped = {}
+    for row in extract_model_usage_items(payload):
+        if not isinstance(row, dict):
+            continue
+        model = first_value(row, [("model",), ("model_name",), ("requested_model",), ("name",), ("id",)], "-")
+        model = str(model or "-")
+        input_tokens = number(first_value(row, [("total_input_tokens",), ("input_tokens",), ("prompt_tokens",)], 0), 0)
+        output_tokens = number(first_value(row, [("total_output_tokens",), ("output_tokens",), ("completion_tokens",)], 0), 0)
+        raw_cache_tokens = first_value(row, [("total_cache_tokens",), ("cache_tokens",), ("cached_tokens",)], None)
+        raw_total_tokens = first_value(row, [("total_tokens",), ("tokens",)], None)
+        cache_tokens = number(raw_cache_tokens, 0)
+        total_tokens = number(raw_total_tokens, input_tokens + output_tokens + cache_tokens)
+        if raw_cache_tokens is None and raw_total_tokens is not None:
+            cache_tokens = max(0, total_tokens - input_tokens - output_tokens)
+        request_count = number(first_value(row, [("total_requests",), ("requests",), ("request_count",), ("count",)], 0), 0)
+        item = grouped.setdefault(
+            model,
+            {"model": model, "request_count": 0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0},
+        )
+        item["request_count"] += request_count
+        item["input_tokens"] += input_tokens
+        item["output_tokens"] += output_tokens
+        item["cache_tokens"] += cache_tokens
+        item["total_tokens"] += total_tokens
+    return sorted(grouped.values(), key=lambda item: number(item.get("total_tokens"), 0), reverse=True)
 
 
 def page_count(payload):
@@ -741,9 +801,15 @@ def fetch_key_usage_records(client, key_id):
     return extract_page_items(first, ["items", "usages", "list"])
 
 
-def build_key_item(key, usage_stats=None, usage_records=None, usage_error=None):
+def fetch_key_model_usage(client, key_id):
+    payload = client.get_json(build_key_model_usage_url(client, key_id), "key_model_usage_internal")
+    return normalize_key_model_usage(payload)
+
+
+def build_key_item(key, usage_stats=None, usage_records=None, model_usage=None, usage_error=None):
     usage_stats = usage_stats or {}
     usage_records = usage_records or []
+    model_usage = model_usage or []
     usage_context = [
         {
             "account_name": first_value(record, [("account", "name"), ("account_name",), ("accountName",), ("account", "email"), ("account_id",)]),
@@ -777,7 +843,8 @@ def build_key_item(key, usage_stats=None, usage_records=None, usage_error=None):
             "cache_tokens": number(usage_stats.get("total_cache_tokens"), 0),
             "total_tokens": number(usage_stats.get("total_tokens"), 0),
             "account_names": unique_text(item["account_name"] for item in usage_context),
-            "models": unique_text(item["model"] for item in usage_context),
+            "models": unique_text([item.get("model") for item in model_usage] or [item["model"] for item in usage_context]),
+            "model_usage": model_usage,
             "ip_addresses": unique_text(item["ip_address"] for item in usage_context),
             "stats": usage_stats,
         },
@@ -796,12 +863,19 @@ def fetch_all_keys(client, parallelism):
     def with_usage(key):
         key_id = key.get("id")
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as key_pool:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as key_pool:
                 stats_future = key_pool.submit(fetch_key_usage_stats, client, key_id)
                 records_future = key_pool.submit(fetch_key_usage_records, client, key_id)
-                return build_key_item(key, stats_future.result(), records_future.result())
+                models_future = key_pool.submit(fetch_key_model_usage, client, key_id)
+                usage_stats = stats_future.result()
+                usage_records = records_future.result()
+                try:
+                    model_usage = models_future.result()
+                except Exception:
+                    model_usage = []
+                return build_key_item(key, usage_stats, usage_records, model_usage)
         except Exception:
-            return build_key_item(key, None, "usage_request_failed")
+            return build_key_item(key, usage_error="usage_request_failed")
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, parallelism)) as pool:
         items = list(pool.map(with_usage, keys))
@@ -1104,26 +1178,13 @@ def render_card_report(accounts_payload, keys_payload):
     for index, row in enumerate(card2_rows, 1):
         lines.extend([
             f"**{marker(index)} {row['name']}**  ",
-            f"`{format_display_time(row['five_reset_at'])}` ｜ 状态 **{row['summary_status']}** ｜ "
+            f"5h刷新 `{format_display_time(row['five_reset_at'])}` ｜ 周刷新 `{format_display_time(row['week_reset_at'])}` ｜ 状态 **{row['summary_status']}** ｜ "
             f"5h/week **({row['five_remaining']:g}/{row['week_remaining']:g})**",
             "",
         ])
 
     lines.extend([
-        f"## 🔄 卡片 3｜周刷新待恢复（{len(weekly_rows)}）",
-        "",
-        "> 仅保留 **5h = 0 且周额度仍大于 0** 的账号，按 **优先级 + 周刷新时间升序** 展示。",
-        "",
-    ])
-    for index, row in enumerate(weekly_rows, 1):
-        lines.extend([
-            f"**{marker(index)} {row['name']}**  ",
-            f"`{format_display_time(row['week_reset_at'])}` ｜ 状态 **{row['summary_status']}** ｜ 5h/week **({row['five_remaining']:g}/{row['week_remaining']:g})**",
-            "",
-        ])
-
-    lines.extend([
-        "## ⚠️ 卡片 4｜异常账号情况",
+        "## ⚠️ 卡片 3｜异常账号情况",
         f"`异常账号数` **{abnormal_count}** ｜ `Token revoked` **{len(token_revoked)}** ｜ `Refresh异常` **{len(refresh_bad)}** ｜ `不可调度` **{len(unschedulable)}** ｜ `status异常` **{len(status_bad)}** ｜ `usage失败` **{len(usage_failed)}** ｜ `额度缺失` **{len(quota_missing)}**",
         "",
     ])
@@ -1136,7 +1197,7 @@ def render_card_report(accounts_payload, keys_payload):
         "",
         "> 说明：异常分类来自账号错误信息和 usage 拉取状态。",
         "",
-        "## ⌛ 卡片 5｜快过期账号（<=7天）",
+        "## ⌛ 卡片 4｜快过期账号（<=7天）",
     ])
     top_expiring = [item for item in expiring_rows if item[2] <= 7]
     lines.extend([f"`快过期账号数` **{len(top_expiring)}**", ""])
@@ -1148,25 +1209,35 @@ def render_card_report(accounts_payload, keys_payload):
         "",
         "> 说明：仅保留当前正常账号，展示 7 天内过期账号，并按到期时间从近到远展示。过期时间取自 `credentials.expires_at`。",
         "",
-        "## 🔑 卡片 6｜今日令牌用量",
+        "## 🔑 卡片 5｜今日令牌用量",
         f"`令牌数` **{len(keys)}** ｜ `今日有用量` **{len(used_keys)}**",
         "",
     ])
     for index, key in enumerate(used_keys, 1):
         usage = key.get("usage", {})
         models = "、".join(usage.get("models") or []) or "-"
+        model_usage = usage.get("model_usage") or []
+        if model_usage:
+            token_total = number(usage.get("total_tokens"), 0)
+            model_text = "；".join(
+                f"`{row.get('model') or '-'}` **{format_tokens_m_plain(row.get('total_tokens', 0))}**/"
+                f"**{format_percent(row.get('total_tokens', 0), token_total)}**"
+                for row in model_usage
+            )
+        else:
+            model_text = f"模型 **{models}**"
         lines.append(
             f"{marker(index)} `{key.get('name') or '-'}` ｜ "
             f"最近调用 **{format_display_time(key.get('last_used_at'))}** ｜ "
             f"请求 **{int(number(usage.get('request_count'), 0))}** ｜ "
-            f"模型 **{models}** ｜ "
-            f"输入 **{format_tokens_m_plain(usage.get('input_tokens', 0))}** ｜ "
-            f"输出 **{format_tokens_m_plain(usage.get('output_tokens', 0))}** ｜ "
-            f"缓存 **{format_tokens_m_plain(usage.get('cache_tokens', 0))}** ｜ "
-            f"总量 **{format_tokens_m_plain(usage.get('total_tokens', 0))}** ｜ "
-            f"缓存占比 **{format_percent(usage.get('cache_tokens', 0), usage.get('total_tokens', 0))}**"
+            f"模型用量 {model_text} ｜ "
+            f"总量 **{format_tokens_m_plain(usage.get('total_tokens', 0))}**"
+            f"（入 {format_tokens_m_plain(usage.get('input_tokens', 0))} / "
+            f"出 {format_tokens_m_plain(usage.get('output_tokens', 0))} / "
+            f"缓 {format_tokens_m_plain(usage.get('cache_tokens', 0))} · "
+            f"缓存 {format_percent(usage.get('cache_tokens', 0), usage.get('total_tokens', 0))}）"
         )
-    lines.extend(["", "> 说明：令牌 token 用量来自 `/api/v1/admin/usage/stats` 聚合字段，按总量 tokens 倒序展示。"])
+    lines.extend(["", "> 说明：令牌 token 总量来自 `/api/v1/admin/usage/stats` 聚合字段；模型拆分来自 `/api/v1/admin/dashboard/models?model_source=requested`，按总量 tokens 倒序展示。"])
     return "\n".join(lines) + "\n"
 
 
