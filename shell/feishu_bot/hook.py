@@ -130,16 +130,7 @@ def set_title_state(session_id: str, turn_id: str, title: str) -> None:
     if not session_id or not turn_id or not title:
         return
     data = read_title_state()
-    # 同一会话只保留当前待完成 turn 的标题，避免旧 turn 残留干扰后续 Stop。
-    stale_keys = [
-        key
-        for key, value in data.items()
-        if isinstance(value, dict)
-        and value.get("session_id") == session_id
-        and key != state_key(session_id, turn_id)
-    ]
-    for key in stale_keys:
-        data.pop(key, None)
+    # Codex 可能在前一轮 Stop 前收到下一轮 UserPromptSubmit；保留多个 turn，避免提前删掉待完成标题。
     data[state_key(session_id, turn_id)] = {"session_id": session_id, "turn_id": turn_id, "title": title}
     write_title_state(dict(list(data.items())[-50:]))
 
@@ -177,7 +168,8 @@ def thread_ids_from(session_id: str, transcript_path: str) -> list[str]:
 def update_codex_session_title(session_id: str, transcript_path: str, title: str) -> bool:
     if not enabled(env("FEISHU_CODEX_HOOK_UPDATE_SESSION_TITLE", "false")) or not title.strip():
         return True
-    if not shutil.which("codex"):
+    codex_bin = shutil.which("codex")
+    if not codex_bin:
         return False
 
     thread_ids = thread_ids_from(session_id, transcript_path)
@@ -210,7 +202,8 @@ def update_codex_session_title(session_id: str, transcript_path: str, title: str
         drain_seconds = float(env("FEISHU_CODEX_HOOK_CODEX_APP_SERVER_DRAIN_SECONDS", "0.5"))
         request = "\n".join(json.dumps(item, ensure_ascii=False) for item in messages) + "\n"
         proc = subprocess.Popen(
-            ["codex", "app-server", "--listen", "stdio://"],
+            # Windows 下 npm shim 需要先由 shutil.which 解析到 codex.CMD，否则 CreateProcess 找不到裸命令。
+            [codex_bin, "app-server", "--listen", "stdio://"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

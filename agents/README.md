@@ -25,7 +25,7 @@
 | `AGENTS_SDP_AI_LOCALBASE_v4.md` | SDLC 版操作手册（v4），完全依赖 `ai_localbase` 知识库 |
 | `AGENTS_SDP_AI_LOCALBASE_v5.md` | SDLC 版操作手册（v5），依赖 `ai_localbase` 并默认使用 `software-dev-process-roles` 做阶段选角 |
 | `AGENTS_SDP_AI_LOCALBASE_v6.md` | SDLC 版操作手册（v6），基于 v5 并在会话初始化时自动加载 `caveman` 压缩沟通模式 |
-| `AGENTS_SDP_AI_LOCALBASE_v7.md` | SDLC 版操作手册（v7），依赖 `ai_localbase` + `software-dev-process`，强化知识库真实 kb_id 初始化、代码索引降级和 SQL 编写约束 |
+| `AGENTS_SDP_AI_LOCALBASE_v7.md` | SDLC 版操作手册（v7），依赖 `ai_localbase` + `software-dev-process-roles`，强化知识库真实 kb_id 初始化、代码索引降级和 SQL 编写约束 |
 
 ## 全局级 Agent
 

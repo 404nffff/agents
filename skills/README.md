@@ -85,6 +85,21 @@
 | tailwind-design-system | tailwind-design-system | 使用 Tailwind CSS v4 构建可扩展设计系统 |
 | web-design-guidelines | web-design-guidelines | 按 Web Interface Guidelines 审查 UI 代码合规性和可访问性 |
 
+### 动画开发
+
+GSAP 子技能总索引见 `gsap-skills/llms.md`。
+
+| Name | Directory | Description |
+| --- | --- | --- |
+| gsap-core | gsap-skills/gsap-core | GSAP 核心 API：`gsap.to()` / `from()` / `fromTo()`、缓动、时长、stagger、transform、autoAlpha、响应式与 reduced-motion |
+| gsap-timeline | gsap-skills/gsap-timeline | GSAP 时间线：`gsap.timeline()`、position parameter、标签、嵌套、播放控制和多步骤动画编排 |
+| gsap-scrolltrigger | gsap-skills/gsap-scrolltrigger | ScrollTrigger：滚动触发、pin 固定、scrub 拖动、触发点、刷新和清理 |
+| gsap-plugins | gsap-skills/gsap-plugins | GSAP 插件：ScrollTo、ScrollSmoother、Flip、Draggable、SplitText、ScrambleText、SVG、CustomEase、GSDevTools 等 |
+| gsap-utils | gsap-skills/gsap-utils | `gsap.utils` 工具：clamp、mapRange、normalize、interpolate、random、snap、toArray、wrap、pipe |
+| gsap-react | gsap-skills/gsap-react | React / Next.js 动画：`useGSAP`、refs、`gsap.context()`、组件卸载清理和 SSR 注意事项 |
+| gsap-performance | gsap-skills/gsap-performance | GSAP 性能优化：优先 transform、避免布局抖动、will-change、批处理和 ScrollTrigger 性能建议 |
+| gsap-frameworks | gsap-skills/gsap-frameworks | Vue、Nuxt、Svelte 等框架动画：生命周期、选择器作用域、组件卸载清理 |
+
 ### 文档处理
 
 | Name | Directory | Description |

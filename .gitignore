@@ -46,6 +46,7 @@ plan
 
 web/static/uploads/
 logs
+shell/codex_hook/*.log
 
 config.env
 
