@@ -23,7 +23,7 @@ description: Use when starting any conversation in a project that uses ai_localb
 - `ai-localbase.sh`：Bash 版本
 - `ai-localbase.ps1`：Windows / PowerShell 版本
 
-两者都使用同一套子命令：`init`、`tools`、`list`、`upload`、`append`、`update`、`delete`、`search`、`chat`，并按目录自动复用 `knowledgeBaseId`。其中 `init` 会把你传入的启动目录 basename 映射为知识库名，例如 `/mnt/sync2/www/agents -> agents`。若误传 `docs/[任务目录]` 或其子目录，入口脚本会自动回退到项目启动目录后再确认知识库，避免按任务目录创建知识库。
+两者都使用同一套子命令：`init`、`tools`、`list`、`upload`、`append`、`update`、`delete`、`search`、`chat`，并按目录自动复用项目知识库绑定。`init` 会把你传入的启动目录 basename 映射为知识库名，例如 `/mnt/sync2/www/agents -> agents`。若误传 `docs/[任务目录]` 或其子目录，入口脚本会自动回退到项目启动目录后再确认知识库，避免按任务目录创建知识库。
 
 ## 使用场景
 
@@ -42,9 +42,9 @@ description: Use when starting any conversation in a project that uses ai_localb
 
 1. **会话初始化**：每次会话开始时先进入 `${HOME}/.codex/skills/ai-localbase/` 目录并执行 `init` 子命令，让脚本自动加载同目录下的 `.env`，再把启动目录映射到其 basename 对应的知识库名，例如 `/mnt/sync2/www/agents -> agents`
 2. **认证安全**：Token 存入环境变量，避免命令历史泄露
-3. **目录隔离**：每个启动目录映射到其 basename 对应的独立知识库，映射缓存写入 `knowledge.json`
+3. **目录隔离**：每个启动目录映射到其 basename 对应的项目知识库绑定，映射缓存写入 `knowledge.json`
 4. **任务目录归一**：所有子命令的目录参数都应传当前项目启动目录；若传入 `docs/[任务目录]`、`docs/[任务目录]/onlyAI` 或其子目录，脚本会自动归一到项目根目录后再计算知识库名
-5. **初始化握手顺序**：`init` 必须先调用 `tools/list` 罗列工具能力，再调用 `knowledge_base.list` 检索已有知识库，并按 `name == basename(项目启动目录)` 精确匹配；匹配成功后把真实 `knowledgeBaseId` 写入 `knowledge.json`，没有匹配时才调用 `knowledge_base.create`
+5. **初始化握手顺序**：`init` 必须先调用 `tools/list` 罗列工具能力，再调用 `knowledge_base.list` 检索已有知识库；按精确名称、名称前缀和描述路径匹配项目绑定库；匹配成功后把主 `knowledgeBaseId` 继续写入 `knowledge.json` 顶层旧格式字段，并把多库绑定写入 `_bindings`，没有匹配时才调用 `knowledge_base.create`
 6. **禁止缓存短路**：`knowledge.json` 只能作为本地映射缓存，不能只凭缓存跳过服务端 `knowledge_base.list`；每次初始化都必须重新从服务端知识库列表确认当前项目名对应的真实 ID
 7. **检索 vs 问答**：`search` 用于片段检索，`chat` 用于基于知识库上下文的直接问答
 8. **文档维护策略**：新文档优先上传；增量内容用 `append`；全文覆盖用 `update`；废弃文档用 `delete`
@@ -68,7 +68,25 @@ description: Use when starting any conversation in a project that uses ai_localb
 - `createdAt`：创建时间
 - `documentCount`：文档数量
 
-初始化时只能把匹配出的 `id` / `knowledgeBaseId` 当作后续 `search`、`chat`、`upload`、`append`、`update`、`delete` 的 `knowledgeBaseId`。禁止把目录名或知识库名直接当作 ID。
+初始化时只能把匹配出的 `id` / `knowledgeBaseId` 当作真实知识库 ID。`init` 输出中的 `knowledgeBaseId` 是主库 ID，用于 `upload`、`append`、`update`、`delete`；`knowledgeBaseIds` 是绑定库 ID 集合，用于 `search` 和 `chat` 跨库读取。禁止把目录名或知识库名直接当作 ID。
+
+`knowledge.json` 顶层保持旧格式兼容：
+
+```json
+{
+  "agents": "kb-381",
+  "zhiliao_api": "kb-275",
+  "_bindings": {
+    "agents": {
+      "primaryId": "kb-381",
+      "knowledgeBaseIds": ["kb-381", "kb-707"],
+      "boundKnowledgeBases": []
+    }
+  }
+}
+```
+
+旧脚本继续读取 `agents` 字符串；新脚本读取 `_bindings.agents` 获取多 ID 绑定。
 
 ## 检索返回结构
 
@@ -88,7 +106,7 @@ description: Use when starting any conversation in a project that uses ai_localb
 字段规则：
 
 - `query` 必填
-- `knowledgeBaseId` 为空表示跨知识库搜索；日常项目检索应优先使用 `init` 确认出的当前项目知识库 ID
+- `knowledgeBaseId` 为空表示跨知识库搜索；日常项目检索应优先使用 `init` 确认出的当前项目绑定 ID。脚本会对 `knowledgeBaseIds` 逐库检索并合并结果。
 - `documentId` 不为空时只检索单个文档
 - `topK` 是 MCP 层二次截断；不传时后端默认跨知识库最多选 10 条、每个文档默认最多 2 条
 - `score` 是检索或重排后的相关性分数，越高越相关
@@ -194,7 +212,7 @@ cp .env.example .env
 - 加载 `.env` 配置
 - 将 `docs/[任务目录]` 类入参归一到项目启动目录
 - 先调用 `tools/list` 罗列工具能力，再调用 `knowledge_base.list` 检索已有知识库
-- 按项目启动目录 basename 精确匹配知识库名，匹配成功则刷新 `knowledge.json`
+- 按项目启动目录 basename、相似名称前缀和描述路径匹配知识库，匹配成功则刷新 `knowledge.json`
 - 未匹配到已有知识库时才调用 `knowledge_base.create`
 - 执行对应操作
 

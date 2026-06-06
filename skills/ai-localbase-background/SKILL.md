@@ -46,14 +46,14 @@ description: Use when starting any conversation in a project that uses ai_localb
 
 其中：
 
-- 每次进入项目仍然先执行 `init`，用于确认当前目录对应的 `knowledgeBaseId`
-- `init` 必须先调用 `tools/list` 罗列工具能力，再调用 `knowledge_base.list` 检索已有知识库，并按 `name == basename(项目启动目录)` 精确匹配；匹配成功后把真实 `knowledgeBaseId` 写入项目状态目录的 `knowledge.json`，没有匹配时才调用 `knowledge_base.create`
+- 每次进入项目仍然先执行 `init`，用于确认当前目录对应的主 `knowledgeBaseId` 与绑定集合 `knowledgeBaseIds`
+- `init` 必须先调用 `tools/list` 罗列工具能力，再调用 `knowledge_base.list` 检索已有知识库，并按精确名称、名称前缀和描述路径匹配项目绑定库；匹配成功后把主 `knowledgeBaseId` 继续写入项目状态目录 `knowledge.json` 顶层旧格式字段，并把多库绑定写入 `_bindings`，没有匹配时才调用 `knowledge_base.create`
 - `knowledge.json` 只能作为本地映射缓存，不能只凭缓存跳过服务端 `knowledge_base.list`
 - 所有子命令的目录参数都应传项目启动目录；误传任务目录时会自动归一到项目根目录，避免按任务目录创建知识库
 - Bash 入口同时内置同步 `upload / append / update / delete / search / chat`
 - `queue-*` 在发现 worker 未运行时会自动拉起后台 worker
 - 自动拉起的 worker 在队列清空并空闲一小段时间后会自行退出
-- `search / chat` 保持同步执行，不进后台队列
+- `search / chat` 保持同步执行，不进后台队列，并对绑定的多个知识库 ID 逐库读取后合并返回
 - Bash 入口依赖 Python 3 标准库读写 JSON 状态，避免项目级 `knowledge.json` 被字符串拼接写坏
 
 ## 使用流程
@@ -89,7 +89,25 @@ description: Use when starting any conversation in a project that uses ai_localb
 - `createdAt`：创建时间
 - `documentCount`：文档数量
 
-初始化和 `queue-*` 入队时只能把匹配出的 `id` / `knowledgeBaseId` 当作后续工具调用的 `knowledgeBaseId`。禁止把目录名或知识库名直接当作 ID。
+初始化和 `queue-*` 入队时只能把匹配出的 `id` / `knowledgeBaseId` 当作后续工具调用的真实 ID。`knowledgeBaseId` 表示主库，写入类操作只写主库；`knowledgeBaseIds` 表示绑定库集合，读取类操作跨绑定集合合并。禁止把目录名或知识库名直接当作 ID。
+
+项目状态目录中的 `knowledge.json` 顶层保持旧格式兼容：
+
+```json
+{
+  "agents": "kb-381",
+  "zhiliao_api": "kb-275",
+  "_bindings": {
+    "agents": {
+      "primaryId": "kb-381",
+      "knowledgeBaseIds": ["kb-381", "kb-707"],
+      "boundKnowledgeBases": []
+    }
+  }
+}
+```
+
+旧脚本继续读取 `agents` 字符串；新脚本读取 `_bindings.agents` 获取多 ID 绑定。
 
 ## 检索返回结构
 
@@ -109,7 +127,7 @@ description: Use when starting any conversation in a project that uses ai_localb
 字段规则：
 
 - `query` 必填
-- `knowledgeBaseId` 为空表示跨知识库搜索；项目内默认先执行 `init`，再使用当前项目对应的真实 `knowledgeBaseId`
+- `knowledgeBaseId` 为空表示跨知识库搜索；项目内默认先执行 `init`，再使用当前项目对应的真实 `knowledgeBaseIds` 逐库检索并合并结果
 - `documentId` 不为空时只检索单个文档
 - `topK` 是 MCP 层二次截断；不传时后端默认跨知识库最多选 10 条、每个文档默认最多 2 条
 - `score` 是检索或重排后的相关性分数，越高越相关
