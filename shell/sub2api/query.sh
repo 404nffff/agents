@@ -600,8 +600,13 @@ def build_account_item(account, usage=None, usage_error=None):
         "priority": account.get("priority"),
         "rate_multiplier": account.get("rate_multiplier"),
         "notes": account.get("notes"),
+        "extra": account.get("extra") if isinstance(account.get("extra"), dict) else {},
         "error_message": account.get("error_message"),
         "last_used_at": account.get("last_used_at"),
+        "rate_limited_at": account.get("rate_limited_at"),
+        "rate_limit_reset_at": account.get("rate_limit_reset_at"),
+        "temp_unschedulable_until": account.get("temp_unschedulable_until"),
+        "temp_unschedulable_reason": account.get("temp_unschedulable_reason"),
         "group_ids": account.get("group_ids") or [],
         "group_names": [group.get("name") for group in groups if isinstance(group, dict) and group.get("name")],
         "credentials": {
@@ -1048,8 +1053,13 @@ def render_card_report(accounts_payload, keys_payload):
     for account in accounts:
         usage = account.get("usage") if isinstance(account.get("usage"), dict) else {}
         credentials = account.get("credentials") if isinstance(account.get("credentials"), dict) else {}
+        extra = account.get("extra") if isinstance(account.get("extra"), dict) else {}
         five_used = get_path(usage, "five_hour", "utilization")
         week_used = get_path(usage, "seven_day", "utilization")
+        if five_used is None:
+            five_used = extra.get("codex_5h_used_percent")
+        if week_used is None:
+            week_used = extra.get("codex_7d_used_percent")
         five_remaining_raw = None if five_used is None else max(0, 100 - int(number(five_used, 0)))
         week_remaining = None if week_used is None else max(0, 100 - int(number(week_used, 0)))
         five_remaining = None if five_remaining_raw is None or week_remaining is None else (0 if week_remaining <= 0 else five_remaining_raw)
@@ -1062,8 +1072,8 @@ def render_card_report(accounts_payload, keys_payload):
             "priority": account.get("priority") if account.get("priority") is not None else credentials.get("priority", 9999),
             "five_remaining": five_remaining or 0,
             "week_remaining": week_remaining or 0,
-            "five_reset_at": get_path(usage, "five_hour", "resets_at"),
-            "week_reset_at": get_path(usage, "seven_day", "resets_at"),
+            "five_reset_at": get_path(usage, "five_hour", "resets_at") or extra.get("codex_5h_reset_at"),
+            "week_reset_at": get_path(usage, "seven_day", "resets_at") or extra.get("codex_7d_reset_at"),
             "error_message": account.get("error_message") or "",
         }
         is_normal = account.get("summary_status") == "正常"
@@ -1085,12 +1095,12 @@ def render_card_report(accounts_payload, keys_payload):
                     pass
         else:
             abnormal_rows.append(account)
-        if is_normal and row["five_reset_at"] and row["week_remaining"] > 0:
+        if row["summary_status"] != "异常":
             card2_rows.append(row)
         if not is_normal and row["week_reset_at"] and row["five_remaining"] == 0 and row["week_remaining"] > 0:
             weekly_rows.append(row)
 
-    card2_rows.sort(key=lambda item: (number(item.get("priority"), 9999), str(item.get("five_reset_at") or "")))
+    card2_rows.sort(key=lambda item: (0 if number(item.get("week_remaining"), 0) > 0 else 1, number(item.get("priority"), 9999), str(item.get("five_reset_at") or "")))
     weekly_rows.sort(key=lambda item: (number(item.get("priority"), 9999), str(item.get("week_reset_at") or "")))
     expiring_rows.sort(key=lambda item: item[2])
 
@@ -1172,13 +1182,13 @@ def render_card_report(accounts_payload, keys_payload):
         "## ⏱️ 卡片 2｜最近 5h 可用账号",
         f"`周可用账号数` **{len(card2_rows)}** ｜ `5h可用汇总` **{card2_five_total:g}** ｜ `周可用汇总` **{card2_week_total:g}**",
         "",
-        "> 仅保留 **状态正常且周额度仍大于 0** 的账号，按 **优先级 + 5h 时间升序** 展示；包含 5h = 0 的账号。",
+        "> 保留 **非异常** 账号，周额度 > 0 的账号展示在前，组内按 **优先级 + 5h 时间升序** 展示；周额度为 0 的账号展示在后。",
         "",
     ]
     for index, row in enumerate(card2_rows, 1):
         lines.extend([
             f"**{marker(index)} {row['name']}**  ",
-            f"5h刷新 `{format_display_time(row['five_reset_at'])}` ｜ 周刷新 `{format_display_time(row['week_reset_at'])}` ｜ 状态 **{row['summary_status']}** ｜ "
+            f"优先级 `{row['priority']}` ｜ 5h刷新 `{format_display_time(row['five_reset_at'])}` ｜ 周刷新 `{format_display_time(row['week_reset_at'])}` ｜ 状态 **{row['summary_status']}** ｜ "
             f"5h/week **({row['five_remaining']:g}/{row['week_remaining']:g})**",
             "",
         ])
