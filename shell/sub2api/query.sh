@@ -1187,9 +1187,8 @@ def render_card_report(accounts_payload, keys_payload):
     ]
     for index, row in enumerate(card2_rows, 1):
         lines.extend([
-            f"**{marker(index)} {row['name']}**  ",
+            f"**{marker(index)} {row['name']}** ｜ 5h/week **({row['five_remaining']:g}/{row['week_remaining']:g})**  ",
             f"优先级 `{row['priority']}` ｜ 5h刷新 `{format_display_time(row['five_reset_at'])}` ｜ 周刷新 `{format_display_time(row['week_reset_at'])}` ｜ 状态 **{row['summary_status']}** ｜ "
-            f"5h/week **({row['five_remaining']:g}/{row['week_remaining']:g})**",
             "",
         ])
 
