@@ -1155,6 +1155,8 @@ def render_card_report(accounts_payload, keys_payload):
         or number(get_path(key, "usage", "total_tokens"), 0)
     ]
     used_keys.sort(key=lambda key: number(get_path(key, "usage", "total_tokens"), 0), reverse=True)
+    used_request_count = sum(number(get_path(key, "usage", "request_count"), 0) for key in used_keys)
+    used_total_tokens = sum(number(get_path(key, "usage", "total_tokens"), 0) for key in used_keys)
 
     normal_count = len(normal_rows)
     abnormal_count = len(abnormal_rows)
@@ -1219,7 +1221,7 @@ def render_card_report(accounts_payload, keys_payload):
         "> 说明：仅保留当前正常账号，展示 7 天内过期账号，并按到期时间从近到远展示。过期时间取自 `credentials.expires_at`。",
         "",
         "## 🔑 卡片 5｜今日令牌用量",
-        f"`令牌数` **{len(keys)}** ｜ `今日有用量` **{len(used_keys)}**",
+        f"`令牌数` **{len(keys)}** ｜ `今日有用量` **{len(used_keys)}** ｜ `请求` **{int(used_request_count)}** ｜ `总量` **{format_tokens_m_plain(used_total_tokens)}**",
         "",
     ])
     for index, key in enumerate(used_keys, 1):
@@ -1235,17 +1237,12 @@ def render_card_report(accounts_payload, keys_payload):
             )
         else:
             model_text = f"模型 **{models}**"
-        lines.append(
-            f"{marker(index)} `{key.get('name') or '-'}` ｜ "
-            f"最近调用 **{format_display_time(key.get('last_used_at'))}** ｜ "
-            f"请求 **{int(number(usage.get('request_count'), 0))}** ｜ "
-            f"模型用量 {model_text} ｜ "
-            f"总量 **{format_tokens_m_plain(usage.get('total_tokens', 0))}**"
-            f"（入 {format_tokens_m_plain(usage.get('input_tokens', 0))} / "
-            f"出 {format_tokens_m_plain(usage.get('output_tokens', 0))} / "
-            f"缓 {format_tokens_m_plain(usage.get('cache_tokens', 0))} · "
-            f"缓存 {format_percent(usage.get('cache_tokens', 0), usage.get('total_tokens', 0))}）"
-        )
+        lines.extend([
+            f"{marker(index)} `{key.get('name') or '-'}` ｜ 总量 **{format_tokens_m_plain(usage.get('total_tokens', 0))}** ｜ 请求 **{int(number(usage.get('request_count'), 0))}** ｜ 最近 **{format_display_time(key.get('last_used_at'))}**",
+            f"模型：{model_text}",
+            f"Token：入 **{format_tokens_m_plain(usage.get('input_tokens', 0))}** ｜ 出 **{format_tokens_m_plain(usage.get('output_tokens', 0))}** ｜ 缓 **{format_tokens_m_plain(usage.get('cache_tokens', 0))}** ｜ 缓存 **{format_percent(usage.get('cache_tokens', 0), usage.get('total_tokens', 0))}**",
+            "",
+        ])
     lines.extend(["", "> 说明：令牌 token 总量来自 `/api/v1/admin/usage/stats` 聚合字段；模型拆分来自 `/api/v1/admin/dashboard/models?model_source=requested`，按总量 tokens 倒序展示。"])
     return "\n".join(lines) + "\n"
 
