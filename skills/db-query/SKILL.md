@@ -1,6 +1,6 @@
 ---
 name: db-query
-description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/PostgreSQL/Elasticsearch。配置采用 DRIVER 前缀加 profile 后缀的多库模式（例如 `MYSQL_HOST_main`、`REDIS_ADDR_cache`、`MEMCACHED_ADDR_cache`、`ES_URL_main`），首次使用先执行 `--list-profiles` 暴露当前配置中的 profile，再通过 `--profile` 或 `DB_PROFILE` 选择。默认只允许只读查询，并强制输出 JSON。
+description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/PostgreSQL/Elasticsearch。配置采用 DRIVER 前缀加 profile 后缀的多库模式（例如 `MYSQL_HOST_main`、`REDIS_ADDR_cache`、`MEMCACHED_ADDR_cache`、`ES_URL_main`），首次使用先执行 `--list-profiles` 暴露当前配置中的 profile，再通过 `--profile` 或 `DB_PROFILE` 选择。默认只允许只读查询，并强制输出 JSON。凡是需要编写 SQL、DDL/DML 文件、排查慢查询或验证查询条件时，必须先用本 skill 查询目标表结构与索引，再按索引设计 SQL，禁止凭记忆或字段名猜测乱写 SQL。
 ---
 
 # DB Query
@@ -30,6 +30,24 @@ description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/Postg
    ```
 
 以下示例统一遵循上述规则：如果工作区存在 `docs/db.env`，请在命令中补上 `--config docs/db.env`；否则按默认回退到 skill 根目录 `config.env`。
+
+## SQL 编写前置流程（强制）
+
+只要任务需要编写 SQL、生成 DDL/DML `.sql` 文件、改造查询条件、排查慢查询、设计分页/排序/过滤逻辑，必须先完成以下流程：
+
+1. 执行 `--list-profiles`，确认配置来源、可用 driver 与 profile；不得读取或输出任何密码、Token、URI 明文。
+2. 用只读查表接口确认目标表结构，至少包含字段名、字段类型、可空性、主键或唯一键。
+3. 用只读查表接口确认目标表索引，至少包含索引名、索引列顺序、唯一性和主键标记。
+4. 按真实索引设计 SQL：优先让 `WHERE` 等值条件匹配复合索引前缀，范围条件放在可用前缀之后，`ORDER BY` 只能在索引顺序可支撑时直接使用。
+5. 编写结果中必须说明使用了哪些表结构/索引证据；如果索引不存在或不匹配，必须明确标注风险，不能假装已有索引。
+6. 涉及多表读取时，先分别查询每张表索引；若项目约束禁止 `JOIN`，必须拆成多条单表 SQL，在业务代码层组装。
+
+禁止事项：
+
+- 禁止未查索引就编写性能敏感 SQL、分页 SQL、批量回填 SQL、修复 SQL 或 DDL/DML 文件。
+- 禁止根据字段名、历史记忆、ORM 模型或接口参数猜测索引。
+- 禁止为了绕过缺失索引而添加宽泛兜底条件、全表扫描式查询或无法解释的 `ORDER BY`。
+- 禁止直接执行 `INSERT`、`UPDATE`、`DELETE`、`ALTER TABLE`、`CREATE TABLE`、`CREATE INDEX`；这类内容只能按本文档 DDL/DML 规则落盘为 `.sql` 文件交给用户处理。
 
 ## 快速开始
 
@@ -82,6 +100,38 @@ description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/Postg
 如果某个驱动的 `effective_default_profile` 不在该驱动的 `profiles` 数组中，说明全局 `DB_PROFILE` 覆盖了驱动默认值但该驱动没有对应连接配置；此时查询必须显式传入该驱动可用的 `--profile`。
 
 ### 1) MySQL / PostgreSQL（统一结构化参数）
+
+编写 MySQL SQL 前，先查表结构与索引：
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --driver mysql \
+  --profile main \
+  --query "DESCRIBE users"
+```
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --driver mysql \
+  --profile main \
+  --query "SHOW INDEX FROM users"
+```
+
+编写 PostgreSQL SQL 前，先查表结构与索引：
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --driver pgsql \
+  --profile main \
+  --query "SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'users' ORDER BY ordinal_position"
+```
+
+```bash
+~/.codex/skills/db-query/bin/db-query-linux-amd64 \
+  --driver pgsql \
+  --profile main \
+  --query "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'users' ORDER BY indexname"
+```
 
 ```bash
 ~/.codex/skills/db-query/bin/db-query-linux-amd64 \
@@ -247,6 +297,8 @@ description: 使用 Go 打包二进制查询 Redis/Memcached/MySQL/MongoDB/Postg
 1. 只允许只读语句开头：`SELECT` / `SHOW` / `DESC` / `DESCRIBE` / `EXPLAIN` / `WITH`
 2. 禁止写操作关键词：`DELETE`、`UPDATE`、`DROP`、`ALTER`、`CREATE`（`SHOW CREATE` 除外）等
 3. 禁止多语句执行
+4. 编写 SQL 前必须先用 `DESCRIBE` / `SHOW INDEX` / `information_schema.columns` / `pg_indexes` 等只读查询确认目标表结构与索引；未取得索引证据时只能输出待确认问题，不能编写最终 SQL。
+5. 性能敏感查询必须补 `EXPLAIN` 或 `EXPLAIN ANALYZE` 的只读验证计划；若当前环境不允许执行，必须在输出中说明未验证原因和风险。
 
 ### MongoDB
 

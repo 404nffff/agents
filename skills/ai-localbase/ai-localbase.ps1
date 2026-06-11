@@ -11,6 +11,7 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $EnvFile = Join-Path $ScriptDir ".env"
 $KbConfig = Join-Path $ScriptDir "knowledge.json"
+$KbConfigLock = Join-Path $ScriptDir "knowledge.json.lock"
 
 function Show-Usage {
   @"
@@ -166,7 +167,14 @@ function Read-KbMap {
     return @{}
   }
 
-  $obj = $raw | ConvertFrom-Json
+  try {
+    $obj = $raw | ConvertFrom-Json
+  } catch {
+    $stamp = Get-Date -Format "yyyyMMddHHmmss"
+    $backupPath = "$KbConfig.corrupt.$stamp"
+    Copy-Item -LiteralPath $KbConfig -Destination $backupPath -Force
+    throw "knowledge.json 解析失败，已备份到 $backupPath。请先修复缓存文件后重试。原始错误: $($_.Exception.Message)"
+  }
   $map = @{}
   foreach ($prop in $obj.PSObject.Properties) {
     $map[$prop.Name] = $prop.Value
@@ -174,11 +182,52 @@ function Read-KbMap {
   return $map
 }
 
+function Invoke-WithKbConfigLock {
+  param([scriptblock]$Body)
+
+  $lockStream = $null
+  try {
+    for ($i = 0; $i -lt 50; $i++) {
+      try {
+        $lockStream = [System.IO.File]::Open(
+          $KbConfigLock,
+          [System.IO.FileMode]::OpenOrCreate,
+          [System.IO.FileAccess]::ReadWrite,
+          [System.IO.FileShare]::None
+        )
+        break
+      } catch [System.IO.IOException] {
+        Start-Sleep -Milliseconds 100
+      }
+    }
+
+    if (-not $lockStream) {
+      throw "获取 knowledge.json 写锁超时"
+    }
+
+    & $Body
+  } finally {
+    if ($lockStream) {
+      $lockStream.Dispose()
+    }
+  }
+}
+
 function Write-KbMap {
   param([hashtable]$Map)
 
-  $json = $Map | ConvertTo-Json -Depth 12 -Compress
-  $json | Set-Content -LiteralPath $KbConfig -Encoding utf8
+  Invoke-WithKbConfigLock {
+    $json = $Map | ConvertTo-Json -Depth 12 -Compress
+    $tempPath = "$KbConfig.tmp.$PID"
+    $backupPath = "$KbConfig.bak"
+    [System.IO.File]::WriteAllText($tempPath, $json, [System.Text.UTF8Encoding]::new($false))
+
+    if (Test-Path -LiteralPath $KbConfig) {
+      [System.IO.File]::Replace($tempPath, $KbConfig, $backupPath, $true)
+    } else {
+      Move-Item -LiteralPath $tempPath -Destination $KbConfig -Force
+    }
+  }
 }
 
 function Invoke-AiLocalBaseTool {

@@ -49,7 +49,7 @@ usage() {
   查询或更新 Sub2API 管理端账号状态。
   默认读取 ${DEFAULT_ENV_FILE}；如需覆盖路径，可设置 SUB2API_ENV_FILE。
   默认动作是 all，会先输出账号汇总，再输出令牌汇总。
-  report 会输出卡片 1-5 汇报，整合账号额度、异常、过期和今日令牌用量。
+  report 会输出卡片 1-5 汇报，整合账号额度、异常和今日令牌用量。
   accounts/keys 列表默认写入:
     ${SCRIPT_DIR}/accounts.json
     ${SCRIPT_DIR}/keys.json
@@ -1046,6 +1046,7 @@ def render_card_report(accounts_payload, keys_payload):
     normal_rows = []
     abnormal_rows = []
     card2_rows = []
+    card3_rows = []
     weekly_rows = []
     expiring_rows = []
     now = dt.datetime.now(dt.timezone.utc)
@@ -1096,11 +1097,16 @@ def render_card_report(accounts_payload, keys_payload):
         else:
             abnormal_rows.append(account)
         if row["summary_status"] != "异常":
-            card2_rows.append(row)
+            # 卡片 2/3 共用“非异常账号”边界，只按周剩余额度拆分，避免周耗尽账号混入 5h 可用池。
+            if row["week_remaining"] > 0:
+                card2_rows.append(row)
+            elif row["week_remaining"] == 0:
+                card3_rows.append(row)
         if not is_normal and row["week_reset_at"] and row["five_remaining"] == 0 and row["week_remaining"] > 0:
             weekly_rows.append(row)
 
     card2_rows.sort(key=lambda item: (0 if number(item.get("week_remaining"), 0) > 0 else 1, number(item.get("priority"), 9999), str(item.get("five_reset_at") or "")))
+    card3_rows.sort(key=lambda item: (0 if number(item.get("week_remaining"), 0) > 0 else 1, number(item.get("priority"), 9999), str(item.get("five_reset_at") or "")))
     weekly_rows.sort(key=lambda item: (number(item.get("priority"), 9999), str(item.get("week_reset_at") or "")))
     expiring_rows.sort(key=lambda item: item[2])
 
@@ -1164,6 +1170,8 @@ def render_card_report(accounts_payload, keys_payload):
     week_total = sum(number(item["week_remaining"], 0) for item in normal_rows)
     card2_five_total = sum(number(item["five_remaining"], 0) for item in card2_rows)
     card2_week_total = sum(number(item["week_remaining"], 0) for item in card2_rows)
+    card3_five_total = sum(number(item["five_remaining"], 0) for item in card3_rows)
+    card3_week_total = sum(number(item["week_remaining"], 0) for item in card3_rows)
     five_depleted_week_available_count = len(weekly_rows)
     week_depleted_count = sum(1 for item in normal_rows if number(item["week_remaining"], 0) <= 0)
     markers = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"]
@@ -1177,25 +1185,39 @@ def render_card_report(accounts_payload, keys_payload):
         "## 📊 卡片 1｜总体情况",
         f"`账号` **{total}** ｜ `正常` **{normal_count}** ｜ `异常` **{abnormal_count}**  ",
         f"`5h总剩余` **{five_total:g}** ｜ `周总剩余` **{week_total:g}**",
-        f"`5h可用账号` **{len(card2_rows)}** ｜ `5h耗尽但周可用` **{five_depleted_week_available_count}** ｜ `周耗尽` **{week_depleted_count}**",
+        f"`5h可用账号` **{len(card2_rows)}** ｜ `5h耗尽但周可用` **{five_depleted_week_available_count}** ｜ `周刷新额度0账号` **{len(card3_rows)}** ｜ `正常周耗尽` **{week_depleted_count}**",
         "",
         "> 本版数据按实时接口组装，已排除异常账号对额度汇总的干扰。",
         "",
         "## ⏱️ 卡片 2｜最近 5h 可用账号",
         f"`周可用账号数` **{len(card2_rows)}** ｜ `5h可用汇总` **{card2_five_total:g}** ｜ `周可用汇总` **{card2_week_total:g}**",
         "",
-        "> 保留 **非异常** 账号，周额度 > 0 的账号展示在前，组内按 **优先级 + 5h 时间升序** 展示；周额度为 0 的账号展示在后。",
+        "> 保留 **非异常** 且 **周额度 > 0** 的账号，按 **优先级 + 5h 时间升序** 展示。",
         "",
     ]
     for index, row in enumerate(card2_rows, 1):
         lines.extend([
             f"**{marker(index)} {row['name']}** ｜ 5h/week **({row['five_remaining']:g}/{row['week_remaining']:g})**  ",
-            f"优先级 `{row['priority']}` ｜ 5h刷新 `{format_display_time(row['five_reset_at'])}` ｜ 周刷新 `{format_display_time(row['week_reset_at'])}` ｜ 状态 **{row['summary_status']}** ｜ "
+            f"优先级 `{row['priority']}` ｜ 5h刷新 `{format_display_time(row['five_reset_at'])}` ｜ 周刷新 `{format_display_time(row['week_reset_at'])}`",
             "",
         ])
 
     lines.extend([
-        "## ⚠️ 卡片 3｜异常账号情况",
+        "## 🧊 卡片 3｜周待刷新账号",
+        f"`周待刷新账号数` **{len(card3_rows)}** ｜ `5h可用汇总` **{card3_five_total:g}** ｜ `周可用汇总` **{card3_week_total:g}**",
+        "",
+        "> 保留 **非异常** 且 **周刷新额度 = 0** 的账号，按 **优先级 + 5h 时间升序** 展示。",
+        "",
+    ])
+    for index, row in enumerate(card3_rows, 1):
+        lines.extend([
+            f"**{marker(index)} {row['name']}** ｜ 5h/week **({row['five_remaining']:g}/{row['week_remaining']:g})**  ",
+            f"周刷新 `{format_display_time(row['week_reset_at'])}`",
+            "",
+        ])
+
+    lines.extend([
+        "## ⚠️ 卡片 4｜异常账号情况",
         f"`异常账号数` **{abnormal_count}** ｜ `Token revoked` **{len(token_revoked)}** ｜ `Refresh异常` **{len(refresh_bad)}** ｜ `不可调度` **{len(unschedulable)}** ｜ `status异常` **{len(status_bad)}** ｜ `usage失败` **{len(usage_failed)}** ｜ `额度缺失` **{len(quota_missing)}**",
         "",
     ])
@@ -1207,18 +1229,6 @@ def render_card_report(accounts_payload, keys_payload):
     lines.extend([
         "",
         "> 说明：异常分类来自账号错误信息和 usage 拉取状态。",
-        "",
-        "## ⌛ 卡片 4｜快过期账号（<=7天）",
-    ])
-    top_expiring = [item for item in expiring_rows if item[2] <= 7]
-    lines.extend([f"`快过期账号数` **{len(top_expiring)}**", ""])
-    for index, (name, days_label, _) in enumerate(top_expiring, 1):
-        lines.append(f"{marker(index)} `{name}` ｜ 剩余 **{days_label}天**")
-    if not top_expiring:
-        lines.append("暂无 7 天内过期账号")
-    lines.extend([
-        "",
-        "> 说明：仅保留当前正常账号，展示 7 天内过期账号，并按到期时间从近到远展示。过期时间取自 `credentials.expires_at`。",
         "",
         "## 🔑 卡片 5｜今日令牌用量",
         f"`令牌数` **{len(keys)}** ｜ `今日有用量` **{len(used_keys)}** ｜ `请求` **{int(used_request_count)}** ｜ `总量` **{format_tokens_m_plain(used_total_tokens)}**",
