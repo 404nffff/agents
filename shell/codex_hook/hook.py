@@ -37,6 +37,14 @@ SUPPORTED_EVENTS = {
     "Stop",
 }
 
+ADDITIONAL_CONTEXT_EVENTS = {
+    "SessionStart",
+    "SubagentStart",
+    "PreToolUse",
+    "PostToolUse",
+    "UserPromptSubmit",
+}
+
 SENSITIVE_KEYWORDS = (
     "token",
     "secret",
@@ -109,6 +117,10 @@ def title_from_prompt(prompt: str) -> str:
     return clean_title_summary(strip_forwarded_title_prefix(prompt), 40)
 
 
+def user_input_from_prompt(prompt: str) -> str:
+    return strip_forwarded_title_prefix(prompt).strip()
+
+
 def title_state_path() -> Path:
     return Path(env("CODEX_HOOK_TITLE_STATE_PATH", str(DEFAULT_TITLE_STATE_PATH)) or str(DEFAULT_TITLE_STATE_PATH))
 
@@ -134,12 +146,12 @@ def state_key(session_id: str, turn_id: str) -> str:
     return f"{session_id}:{turn_id}"
 
 
-def set_title_state(session_id: str, turn_id: str, title: str) -> None:
+def set_title_state(session_id: str, turn_id: str, title: str, user_input: str = "") -> None:
     if not session_id or not turn_id or not title:
         return
     data = read_title_state()
     # Codex 可能在前一轮 Stop 前收到下一轮 UserPromptSubmit；保留多个 turn，避免提前删掉待完成标题。
-    data[state_key(session_id, turn_id)] = {"session_id": session_id, "turn_id": turn_id, "title": title}
+    data[state_key(session_id, turn_id)] = {"session_id": session_id, "turn_id": turn_id, "title": title, "user_input": user_input}
     write_title_state(dict(list(data.items())[-50:]))
 
 
@@ -149,6 +161,14 @@ def get_title_state(session_id: str, turn_id: str) -> str:
     value = read_title_state().get(state_key(session_id, turn_id), {})
     title = value.get("title", "") if isinstance(value, dict) else ""
     return title if isinstance(title, str) else ""
+
+
+def get_user_input_state(session_id: str, turn_id: str) -> str:
+    if not session_id or not turn_id:
+        return ""
+    value = read_title_state().get(state_key(session_id, turn_id), {})
+    user_input = value.get("user_input", "") if isinstance(value, dict) else ""
+    return user_input if isinstance(user_input, str) else ""
 
 
 def clear_title_state(session_id: str, turn_id: str) -> None:
@@ -217,7 +237,7 @@ def build_title_summary(payload: dict[str, Any], event: str) -> str:
         return clean_title_summary(tool_name, 32)
     if event == "UserPromptSubmit":
         title = title_from_prompt(prompt)
-        set_title_state(session_id, turn_id, title)
+        set_title_state(session_id, turn_id, title, user_input_from_prompt(prompt))
         return title
     if event == "Stop":
         return get_title_state(session_id, turn_id) or clean_title_summary(last_message, 24)
@@ -232,6 +252,7 @@ def build_context(raw: str, payload: dict[str, Any]) -> dict[str, Any]:
     session_id = first_text(payload, "session_id", "sessionId")
     turn_id = first_text(payload, "turn_id", "turnId")
     title_summary = build_title_summary(payload, event)
+    user_input = get_user_input_state(session_id, turn_id) if event == "Stop" else first_text(payload, "prompt")
     return {
         "raw": raw,
         "payload": payload,
@@ -240,6 +261,7 @@ def build_context(raw: str, payload: dict[str, Any]) -> dict[str, Any]:
         "session_id": session_id,
         "turn_id": turn_id,
         "title_summary": title_summary,
+        "user_input": user_input,
     }
 
 
@@ -323,33 +345,99 @@ def trim_error_log() -> None:
     log_path.write_text("\n".join(lines[-keep_lines:]) + ("\n" if lines else ""), encoding="utf-8")
 
 
-def event_plugins(event: str) -> list[str]:
-    """按 `事件:插件1,插件2;事件2:插件3` 解析当前事件插件列表。"""
-    raw = env("CODEX_HOOK_EVENTS", "")
+def plugin_env_names(event: str) -> list[str]:
+    """生成单事件插件环境变量名，兼容驼峰压缩和下划线两种写法。"""
+    snake = re.sub(r"(?<!^)(?=[A-Z])", "_", event).upper()
+    compact = re.sub(r"[^A-Za-z0-9]", "", event).upper()
+    names = [f"CODEX_HOOK_EVENTS_{snake}", f"CODEX_HOOK_EVENTS_{compact}"]
+    return list(dict.fromkeys(names))
+
+
+def parse_plugin_names(plugin_text: str) -> list[str]:
+    """解析插件列表；单事件配置支持逗号、分号或空白分隔。"""
     result: list[str] = []
-    for item in raw.split(";"):
-        item = item.strip()
-        if not item or ":" not in item:
-            continue
-        event_name, plugin_text = item.split(":", 1)
-        if event_name.strip() not in {event, "*"}:
-            continue
-        for plugin_name in plugin_text.split(","):
-            plugin_name = plugin_name.strip()
-            if plugin_name and re.fullmatch(r"[A-Za-z0-9_-]+", plugin_name):
-                result.append(plugin_name.replace("-", "_"))
+    for plugin_name in re.split(r"[,;\s]+", plugin_text):
+        plugin_name = plugin_name.strip()
+        if plugin_name and re.fullmatch(r"[A-Za-z0-9_-]+", plugin_name):
+            result.append(plugin_name.replace("-", "_"))
     return result
 
 
-def dispatch_plugins(context: dict[str, Any], names: list[str]) -> None:
+def append_plugins(result: list[str], plugin_text: str) -> None:
+    """追加插件并去重，避免全局和单事件重复注册时重复执行。"""
+    for plugin_name in parse_plugin_names(plugin_text):
+        if plugin_name not in result:
+            result.append(plugin_name)
+
+
+def event_plugins(event: str) -> list[str]:
+    """解析当前事件插件列表，只支持全局变量和单事件变量。"""
+    result: list[str] = []
+    append_plugins(result, env("CODEX_HOOK_EVENTS_ALL", ""))
+    for env_name in plugin_env_names(event):
+        append_plugins(result, env(env_name, ""))
+    if event == "Stop" and "feishu" in result and "session_title_v2" in result:
+        # Stop 推送需要先生成 AI 标题，再由飞书插件读取共享 context 发送通知。
+        result = [name for name in result if name != "session_title_v2"]
+        result.insert(result.index("feishu"), "session_title_v2")
+    return result
+
+
+def normalize_plugin_context(value: Any) -> list[str]:
+    """把插件返回值规整成 additionalContext 片段，插件不需要关心 stdout JSON 形状。"""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, dict):
+        candidates = [
+            value.get("additionalContext"),
+            value.get("additional_context"),
+            value.get("context"),
+            value.get("message"),
+        ]
+        return [str(item).strip() for item in candidates if item is not None and str(item).strip()]
+    if isinstance(value, list):
+        result: list[str] = []
+        for item in value:
+            result.extend(normalize_plugin_context(item))
+        return result
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def dispatch_plugins(context: dict[str, Any], names: list[str]) -> list[str]:
+    additional_context: list[str] = []
     for name in names:
         try:
             module = importlib.import_module(f"plugins.{name}.hook")
-            module.handle(context)
+            additional_context.extend(normalize_plugin_context(module.handle(context)))
         except Exception as error:
             # Hook 动作不能污染 stdout，也不能阻断 Codex 主流程；错误写入脱敏日志便于本地排查。
             write_error_log(str(context.get("event", "")), name, error)
             continue
+    return additional_context
+
+
+def build_stdout_response(event: str, additional_context: list[str]) -> dict[str, Any] | None:
+    """按 Codex 官方 hooks stdout 契约输出 JSON；不支持的事件保持静默。"""
+    if event not in ADDITIONAL_CONTEXT_EVENTS or not additional_context:
+        return None
+    text = "\n\n".join(dict.fromkeys(item for item in additional_context if item.strip()))
+    if not text:
+        return None
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": event,
+            "additionalContext": text,
+        }
+    }
+
+
+def write_stdout_response(response: dict[str, Any] | None) -> None:
+    if response:
+        sys.stdout.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
 def main() -> int:
@@ -373,7 +461,8 @@ def main() -> int:
         return 0
 
     write_payload_log(payload)
-    dispatch_plugins(context, names)
+    additional_context = dispatch_plugins(context, names)
+    write_stdout_response(build_stdout_response(event, additional_context))
     if event == "Stop":
         clear_title_state(context.get("session_id", ""), context.get("turn_id", ""))
         trim_payload_log()

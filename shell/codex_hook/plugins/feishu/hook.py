@@ -193,8 +193,12 @@ def build_markdown(context: dict[str, Any]) -> str:
     message_blocks = []
     if event == "UserPromptSubmit" and prompt:
         message_blocks.extend(["**用户提示**", "", shorten(prompt, min(max_chars, 1200))])
-    elif event == "Stop" and last_assistant_message:
-        message_blocks.extend(["**最终回复**", "", shorten(last_assistant_message, max_chars)])
+    elif event == "Stop":
+        legacy_title = str(context.get("session_title_v2_legacy_title", "") or context.get("user_input", "") or context.get("title_summary", ""))
+        if legacy_title:
+            message_blocks.extend(["**用户输入**", "", legacy_title])
+        if last_assistant_message:
+            message_blocks.extend(["", "**最终回复**", "", shorten(last_assistant_message, max_chars)])
 
     if include_payload:
         payload_excerpt = shorten(redact(payload), min(max_chars, 1600))
@@ -307,7 +311,7 @@ def send_markdown_with_api(title: str, markdown: str, template: str) -> None:
 
 
 def build_send_title(context: dict[str, Any]) -> str:
-    title = str(context.get("title_summary", "")) or str(context.get("event", ""))
+    title = str(context.get("session_title_v2_title", "") or context.get("title_summary", "")) or str(context.get("event", ""))
     project = str(context.get("project", ""))
     if project and not title.startswith(f"[{project}]"):
         title = f"[{project}] {title}"

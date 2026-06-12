@@ -16,7 +16,7 @@ usage() {
 
 说明:
   通用 Codex hooks 入口。事件处理在 hook.py，通知渠道通过 plugins/ 插件调用。
-  插件通过 CODEX_HOOK_EVENTS='事件:插件列表;事件:插件列表' 配置。
+  插件通过 CODEX_HOOK_EVENTS_ALL 和 CODEX_HOOK_EVENTS_<EVENT> 配置。
 
 动作:
   create              按当前系统生成 ~/.codex/hooks.json
@@ -25,13 +25,15 @@ usage() {
   hook-json-file      从指定 JSON 文件读取 hook payload，便于本地调试
 
 常用环境变量:
-  CODEX_HOOK_EVENTS                  事件到插件路由，例如 Stop:feishu,xxxx;SessionStart:feishu
+  CODEX_HOOK_EVENTS_ALL              全局插件路由，挂到所有支持的事件
+  CODEX_HOOK_EVENTS_SESSION_START    SessionStart 事件插件路由
+  CODEX_HOOK_EVENTS_STOP             Stop 事件插件路由
   CODEX_HOOK_PAYLOAD_LOG_PATH        脱敏 payload 日志路径
   FEISHU_CODEX_HOOK_ENABLE_PUSH      true 时由 feishu 插件发送飞书通知
 
 示例:
   ./${SCRIPT_NAME} create
-  CODEX_HOOK_EVENTS='Stop:feishu' FEISHU_CODEX_HOOK_ENABLE_PUSH=true ./${SCRIPT_NAME} ./payload.json
+  CODEX_HOOK_EVENTS_STOP='feishu' FEISHU_CODEX_HOOK_ENABLE_PUSH=true ./${SCRIPT_NAME} ./payload.json
 EOF
 }
 
@@ -138,7 +140,7 @@ run_hook() {
   if ! command -v python3 >/dev/null 2>&1; then
     exit 0
   fi
-  python3 "${PY_HOOK}" "$@" >/dev/null 2>&1 || true
+  python3 "${PY_HOOK}" "$@" 2>/dev/null || true
 }
 
 case "${1:-}" in

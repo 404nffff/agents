@@ -1,0 +1,39 @@
+services:
+  codex:
+    image: codex-ubuntu24.04:slim
+    build:
+      context: ../..
+      dockerfile: docker/codex-ubuntu24.04/Dockerfile
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    command:
+      - bash
+      - -lc
+      - |
+        cp -a /opt/codex-home/. /root/.codex/
+        cp /run/codex-host/config.toml /root/.codex/config.toml
+        cp /run/codex-host/auth.json /root/.codex/auth.json
+        chmod 600 /root/.codex/config.toml /root/.codex/auth.json
+        exec sleep infinity
+    volumes:
+      # /root/.codex 必须是可写目录；Codex 会用原子写入持久化 trust/auth 状态。
+      - codex-home:/root/.codex
+      # 宿主配置只作为启动源文件，避免单文件 bind mount 阻断 Codex 原子覆盖。
+      - type: bind
+        source: ./config.toml
+        target: /run/codex-host/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./auth.json
+        target: /run/codex-host/auth.json
+        read_only: true
+        bind:
+          create_host_path: false
+      # 挂载项目目录，容器内默认在 /workspace 工作。
+      - ../..:/workspace
+
+volumes:
+  codex-home:

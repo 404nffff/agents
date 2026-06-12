@@ -9,10 +9,44 @@ description: 根据 Git 历史生成提交信息。当用户提到"commit"、"�
 
 ## 执行步骤
 
-1. 使用 `git diff --cached --name-only` 获取暂存文件列表
-2. 使用 `git diff --cached --stat` 获取变更统计
-3. 使用 `git diff --cached` 获取具体的变更内容（如果内容较多，只看关键部分）
-4. 使用 `git log --oneline -10` 获取最近 10 条提交记录，分析提交信息的风格和格式
+1. 优先在项目根目录执行脚本：
+
+```bash
+php skills/git-commit-helper/scripts/generate_commit_message.php
+```
+
+2. 脚本会自动读取暂存区文件、变更统计、关键 diff 和最近 10 条提交记录。
+3. 若配置了第三方 AI，则脚本必须调用 OpenAI 兼容接口润色提交标题；未配置时使用本地规则生成。
+4. 只输出一行提交标题，不执行 `git commit`。
+
+## 第三方 AI 润色配置
+
+配置方式与 `day-log-v2` 保持一致：配置文件放在脚本目录，只读取同目录 `.env`，不扫描其他配置文件。
+
+```bash
+cp skills/git-commit-helper/scripts/.env.example skills/git-commit-helper/scripts/.env
+```
+
+`.env` 支持字段：
+
+- `API_URL`
+- `MODEL`
+- `API_KEY`
+
+命令行参数可临时覆盖 `.env`：
+
+- `--ai-url`：OpenAI 兼容服务基础 URL 或完整 chat completion URL。
+- `--ai-model`：模型名称。
+- `--ai-key`：API Key。不建议直接写命令行。
+- `--no-ai`：强制禁用外部 AI 润色。
+
+AI 字段处理规则：
+
+- 配置任一 AI 字段时，必须同时具备 `API_URL + MODEL + API_KEY`。
+- `API_URL` 可传基础地址，也可传完整端点；基础地址自动拼接 `/v1/chat/completions`，完整端点兼容 `/v1/chat/completion`。
+- 请求体使用 OpenAI 对话补全格式：`model`、`messages`、`temperature`。
+- 响应读取 `choices[0].message.content`。
+- AI 调用失败、响应非 JSON、缺少内容或标题过短时直接报错退出，不静默降级。
 
 ## 忽略规则
 
@@ -29,6 +63,7 @@ description: 根据 Git 历史生成提交信息。当用户提到"commit"、"�
 - 分析历史提交中常用的类型前缀（如 feat, fix, docs, style, :emoji: 等）
 - 识别常用的动词和表达方式（中文或英文）
 - 根据暂存区的变更类型（新增、修改、删除）选择合适的描述
+- 若使用第三方 AI 润色，标题必须包含模块和具体变更意图，不能过短或只写泛化词
 - 若无需要确认的信息，只回复提交信息，无需展示其他内容
 
 ## GitMoji 图标规范
