@@ -59,3 +59,4 @@ docs
 __pycache__
 .mindfs
 nps-socks5
+config.toml

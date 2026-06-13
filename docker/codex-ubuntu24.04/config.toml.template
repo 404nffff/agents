@@ -1,0 +1,105 @@
+
+approvals_reviewer = "user"
+model = "gpt-5.5"
+model_provider = 'code-switch'
+model_reasoning_effort = "high"
+personality = 'pragmatic'
+preferred_auth_method = 'apikey'
+
+[features]
+collab = true
+multi_agent = true
+supports_websockets = true
+responses_websockets_v2 = true
+
+[mcp_servers]
+
+[mcp_servers.code-index]
+args = ['code-index-mcp']
+command = 'uvx'
+type = 'stdio'
+
+
+[mcp_servers.context7]
+type = 'http'
+url = 'https://mcp.context7.com/mcp'
+
+[mcp_servers.deepwiki]
+args = ['--transport', 'streamablehttp', 'https://mcp.deepwiki.com/mcp']
+command = 'mcp-proxy'
+startup_timeout_sec = 120.0
+type = 'stdio'
+
+[mcp_servers.duckduckgo-search]
+args = ['duckduckgo-mcp-server']
+command = 'uvx'
+startup_timeout_sec = 120.0
+type = 'stdio'
+
+[mcp_servers.exa]
+type = 'http'
+url = 'https://mcp.exa.ai/mcp'
+
+
+[mcp_servers.fetch]
+args = ['mcp-server-fetch']
+command = 'uvx'
+startup_timeout_sec = 120.0
+type = 'stdio'
+
+[mcp_servers.fetch.tools.fetch]
+approval_mode = "approve"
+
+
+[mcp_servers.microsoft-docs-mcp]
+args = ['--transport', 'streamablehttp', 'https://learn.microsoft.com/api/mcp']
+command = 'mcp-proxy'
+startup_timeout_sec = 120.0
+type = 'stdio'
+
+[mcp_servers.sequential-thinking]
+args = ['-y', '@modelcontextprotocol/server-sequential-thinking']
+command = 'npx'
+startup_timeout_sec = 120.0
+type = 'stdio'
+
+[mcp_servers.sequential-thinking.tools.sequentialthinking]
+approval_mode = "approve"
+
+
+[mcp_servers.shrimp-task-manager]
+args = ['-y', 'mcp-shrimp-task-manager']
+command = 'npx'
+startup_timeout_sec = 120.0
+type = 'stdio'
+
+[mcp_servers.shrimp-task-manager.env]
+DATA_DIR = '.shrimp'
+ENABLE_GUI = 'false'
+TEMPLATES_USE = 'zh'
+
+[model_providers.code-switch]
+base_url = __OPENAI_BASE_URL__
+env_key = 'OPENAI_API_KEY'
+name = 'code-switch'
+requires_openai_auth = false
+responses_websockets_v2 = true
+supports_websockets = true
+wire_api = 'responses'
+
+[model_providers.code-switch.env]
+OPENAI_API_KEY = __OPENAI_API_KEY__
+
+[notice]
+hide_full_access_warning = true
+hide_rate_limit_model_nudge = true
+
+[notice.model_migrations]
+'gpt-5.2-codex' = 'gpt-5.3-codex'
+'gpt-5.3-codex' = 'gpt-5.4'
+
+[tui.model_availability_nux]
+"gpt-5.5" = 4
+
+[windows]
+sandbox = 'unelevated'
