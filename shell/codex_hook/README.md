@@ -10,6 +10,7 @@
 | `codex_hook.ps1` | Windows PowerShell 入口，支持 `create` 和 payload 调试。 |
 | `hook.py` | 通用事件分发入口，负责 payload 读取、事件归一、脱敏日志、标题摘要和插件路由。 |
 | `plugins/agents_guard/hook.py` | AGENTS 轻量守护插件，负责 SessionStart 知识库握手、风险命令记录和收尾提醒。 |
+| `plugins/ai_localbase/hook.py` | ai-localbase 压缩记忆插件，负责 PreCompact 上传记忆、PostCompact 读取记忆并输出恢复上下文。 |
 | `plugins/feishu/hook.py` | 飞书插件，复用 `shell/feishu_bot/feishu_bot_push.sh`，Windows 可直接调用飞书 API。 |
 | `plugins/feishu/.env.example` | 飞书插件配置示例。 |
 | `plugins/session_title/hook.py` | Codex 会话标题更新插件。 |
@@ -47,8 +48,8 @@ CODEX_HOOK_EVENTS_SUBAGENTSTART='feishu'
 CODEX_HOOK_EVENTS_PRE_TOOL_USE='agents_guard,feishu'
 CODEX_HOOK_EVENTS_PERMISSION_REQUEST='feishu'
 CODEX_HOOK_EVENTS_POST_TOOL_USE='agents_guard,feishu'
-CODEX_HOOK_EVENTS_PRE_COMPACT='agents_guard,feishu'
-CODEX_HOOK_EVENTS_POST_COMPACT='agents_guard,feishu'
+CODEX_HOOK_EVENTS_PRE_COMPACT='agents_guard,ai_localbase,feishu'
+CODEX_HOOK_EVENTS_POST_COMPACT='agents_guard,ai_localbase,feishu'
 CODEX_HOOK_EVENTS_USER_PROMPT_SUBMIT='session_title'
 CODEX_HOOK_EVENTS_SUBAGENTSTOP='feishu'
 CODEX_HOOK_EVENTS_STOP='agents_guard,feishu,session_title'
@@ -66,7 +67,7 @@ CODEX_HOOK_EVENTS_STOP='agents_guard,feishu,session_title'
 
 推荐把 `agents_guard` 挂到：
 
-- `SessionStart`：检查 `docs/index.md`、Agent 文档，并执行 `ai-localbase init <cwd>` 完成知识库握手。
+- `SessionStart`：检查 `docs/index.md`、hook v8 Agent 文档，并执行 `ai-localbase init <cwd>` 完成知识库握手；同时注入核心 SDLC 工作模式，包含阶段指令、代码优先、debug 复现先行和红线暂停规则。
 - `PreToolUse`：记录 `rm -rf`、`git reset --hard`、强推、破坏性 SQL、读取 `.env` / `.pem` / `*.key` 等风险迹象。
 - `PostToolUse`：记录知识库相关异常，便于按规则重新 init。
 - `PreCompact`：写入压缩前检查点，记录 `docs/index.md` 是否存在、压缩触发来源和相关工作区状态；可选同步到 `ai-localbase`。
@@ -137,11 +138,40 @@ AGENTS_GUARD_PRECOMPACT_MEMORY_DOC_ID='doc-123'
 shell/codex_hook/codex_hook_postcompact_note.md
 ```
 
+`ai_localbase` 插件用于把压缩前上下文沉淀到当前项目知识库，并在压缩后读取后输出给 Codex：
+
+```bash
+CODEX_HOOK_EVENTS_PRE_COMPACT='ai_localbase'
+CODEX_HOOK_EVENTS_POST_COMPACT='ai_localbase'
+```
+
+默认入口：
+
+- Windows：`~/.codex/skills/ai-localbase/ai-localbase.ps1`
+- Linux/macOS：`~/.codex/skills/ai-localbase/ai-localbase.sh`
+
+可用环境变量覆盖：
+
+```bash
+AI_LOCALBASE_HOOK_SCRIPT='/path/to/ai-localbase.sh'
+AI_LOCALBASE_HOOK_TIMEOUT='30'
+AI_LOCALBASE_HOOK_STATE_PATH='shell/codex_hook/codex_hook_ai_localbase_state.json'
+AI_LOCALBASE_HOOK_COMPACT_DOC_ID=''
+AI_LOCALBASE_HOOK_POSTCOMPACT_QUERY=''
+AI_LOCALBASE_HOOK_POSTCOMPACT_TOPK='3'
+```
+
+行为：
+
+- `PreCompact`：先执行 `init <cwd>`，再 `upload` 一份压缩检查点；若配置 `AI_LOCALBASE_HOOK_COMPACT_DOC_ID`，改为 `append` 到固定文档。
+- `PostCompact`：先执行 `init <cwd>`，再按压缩前状态或自定义 query 调用 `search`，把命中文档名与片段摘要写入 `hookSpecificOutput.additionalContext`。
+- 插件不直接读取 `.env`，凭证加载仍由 `~/.codex/skills/ai-localbase` 入口脚本负责；日志只记录状态和长度摘要。
+
 关于“hook 输出内容”：
 
 - 通用入口会聚合插件 `handle(context)` 的返回值，并在官方支持的事件中输出 `hookSpecificOutput.additionalContext`。
-- 当前会输出 `additionalContext` 的事件：`SessionStart`、`SubagentStart`、`PreToolUse`、`PostToolUse`、`UserPromptSubmit`。
-- `PermissionRequest` 只支持审批决策形状；`PreCompact`、`PostCompact`、`Stop`、`SubagentStop` 继续以日志和本地恢复文件为主，不强行塞 unsupported 字段。
+- 当前会输出 `additionalContext` 的事件：`SessionStart`、`SubagentStart`、`PreToolUse`、`PostToolUse`、`PreCompact`、`PostCompact`、`UserPromptSubmit`。
+- `PermissionRequest` 只支持审批决策形状；`Stop`、`SubagentStop` 继续以日志和本地恢复文件为主，不强行塞 unsupported 字段。
 - 插件仍应避免直接写 stdout；返回字符串或 `{"additionalContext": "..."}` 即可，由通用入口统一包装 JSON。
 
 开启飞书推送：

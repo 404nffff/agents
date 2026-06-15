@@ -12,12 +12,33 @@ description: 根据 Git 历史生成提交信息。当用户提到"commit"、"�
 1. 优先在项目根目录执行脚本：
 
 ```bash
-php skills/git-commit-helper/scripts/generate_commit_message.php
+bash skills/git-commit-helper/scripts/generate_commit_message.sh
 ```
 
 2. 脚本会自动读取暂存区文件、变更统计、关键 diff 和最近 10 条提交记录。
-3. 若配置了第三方 AI，则脚本必须调用 OpenAI 兼容接口润色提交标题；未配置时使用本地规则生成。
-4. 只输出一行提交标题，不执行 `git commit`。
+3. 脚本在生成标题前必须检查暂存区是否包含秘钥或敏感信息，命中时直接失败，只输出文件名和命中规则，禁止输出具体敏感值。
+4. 若配置了第三方 AI，则脚本必须调用 OpenAI 兼容接口润色提交标题；未配置时使用本地规则生成。
+5. 脚本输出仅作为“提交标题初稿”。最终回复必须再结合暂存区规模判断是否需要补充详细正文。
+6. 不执行 `git commit`。
+
+## 暂存区复核要求
+
+运行脚本前后都必须复核当前暂存区，避免多模块变更被压缩成过窄标题：
+
+```bash
+git diff --cached --name-status
+git diff --cached --stat
+git diff --cached --summary
+```
+
+复核规则：
+
+- 若脚本报告暂存区疑似包含秘钥、Token、密码、私钥或敏感文件路径，必须先要求用户移除或取消暂存相关内容，不得生成提交信息，不得复述敏感值。
+- 若暂存文件跨 2 个及以上一级模块，必须生成覆盖整体范围的提交标题。
+- 若暂存文件超过 8 个，或新增/修改超过 300 行，默认输出“标题 + 详细正文”。
+- 若脚本标题只覆盖其中一个模块，必须人工改写为覆盖所有主要模块的标题。
+- 若用户明确要求“一行”“标题”“subject”，才只输出一行标题。
+- 若用户要求“详细点”“完整点”“commit message”，必须输出可直接用于 `git commit` 的多行提交信息。
 
 ## 第三方 AI 润色配置
 
@@ -47,6 +68,16 @@ AI 字段处理规则：
 - 请求体使用 OpenAI 对话补全格式：`model`、`messages`、`temperature`。
 - 响应读取 `choices[0].message.content`。
 - AI 调用失败、响应非 JSON、缺少内容或标题过短时直接报错退出，不静默降级。
+- Shell 脚本在 AI 模式下需要 `curl`，并需要 `python3`、`python` 或 `node` 任一可用来解析 JSON 响应。
+
+## 暂存敏感信息检查
+
+脚本必须在生成提交标题前检查暂存区：
+
+- 检查暂存文件路径，拦截 `.env`、`.env.*`、`*.pem`、`*.key`、`*.p12`、`*.pfx`、常见 SSH 私钥文件、`credentials*.json`、`service-account*.json` 等敏感路径；`.env.example` 不拦截。
+- 检查暂存 diff 的新增行，识别私钥块、AWS Access Key、GitHub Token、OpenAI 风格 Key、Slack Token、Bearer Token，以及 `api_key`、`secret`、`token`、`password` 等长值赋值。
+- 命中时必须退出失败，仅输出命中的文件名或规则名，禁止输出匹配到的具体敏感内容。
+- 敏感检查失败时，本次不得继续调用第三方 AI，避免把敏感 diff 发送到外部接口。
 
 ## 忽略规则
 
@@ -64,7 +95,34 @@ AI 字段处理规则：
 - 识别常用的动词和表达方式（中文或英文）
 - 根据暂存区的变更类型（新增、修改、删除）选择合适的描述
 - 若使用第三方 AI 润色，标题必须包含模块和具体变更意图，不能过短或只写泛化词
-- 若无需要确认的信息，只回复提交信息，无需展示其他内容
+- 标题必须覆盖暂存区的主要模块和整体意图，不得只描述第一个命中文件或单一子模块
+- 详细正文按模块分组，每条说明一个可验证的变更点，避免空泛词（如“优化若干内容”“更新文件”）
+- 若无需要确认的信息，只回复提交信息，无需展示分析过程
+
+## 输出格式
+
+### 小范围变更
+
+适用：单模块、文件数少、意图单一。
+
+```git
+:memo: 更新 git-commit-helper 提交信息生成规则
+```
+
+### 大范围或多模块变更
+
+适用：跨模块、文件多、包含新增能力与测试。
+
+```git
+:sparkles: 完善 Codex Hook 插件、Docker 镜像与辅助技能工具链
+
+- 新增 Codex Hook v8 AGENTS 模板，补充项目级执行约束
+- 新增 Ubuntu 24.04 Codex Docker 镜像与 Compose 配置
+- 扩展 codex_hook 事件分发、跨平台入口和配置说明
+- 新增 session_title_v2 插件，支持基于 transcript 生成会话标题
+- 新增 agents_guard 插件和配套测试，覆盖上下文注入处理
+- 新增 day-log-v2 与 git-commit-helper 的 AI 辅助脚本能力
+```
 
 ## GitMoji 图标规范
 
@@ -170,4 +228,4 @@ AI 字段处理规则：
 
 ## 重要提示
 
-只生成提交信息，不要执行 git commit 操作。
+只生成提交信息，不要执行 `git commit` 操作。多模块暂存区优先输出详细提交信息，不要只给脚本生成的一行标题。

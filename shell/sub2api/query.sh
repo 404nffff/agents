@@ -4,6 +4,17 @@ set -euo pipefail
 # Sub2API 管理端账号工具。
 # 只依赖 bash + Python 标准库，不再依赖 jq。
 # 默认读取脚本同目录的 .env，只使用 x-api-key 鉴权。
+# 常用命令：
+#   ./query.sh report                         # 输出卡片 1-5 汇报
+#   ./query.sh report --search 'jw'           # 按账号关键词过滤账号卡片
+#   ./query.sh accounts                       # 输出全部账号汇总并保存 accounts.json
+#   ./query.sh accounts --search 'jw'         # 按账号关键词输出账号汇总
+#   ./query.sh search 'jw'                    # 按账号关键词输出接口 JSON
+#   ./query.sh keys                           # 输出令牌汇总并保存 keys.json
+#   ./query.sh usage --account-id '15'        # 查询单账号 usage
+#   ./query.sh disable --account-id '16'      # 禁用账号调度
+#   ./query.sh enable --account-id '16'       # 启用账号调度
+#   ./query.sh priority --account-id '16' --priority 1
 
 SCRIPT_NAME="$(basename "$0")"
 SCRIPT_DIR="$(cd -- "$(dirname "$0")" && pwd)"
@@ -43,7 +54,7 @@ load_sub2api_env_file() {
 usage() {
   cat <<EOF
 用法:
-  ./${SCRIPT_NAME} [all|report|accounts|keys|usage|schedulable|disable|enable|delete|priority|bulk-update|raw] [选项]
+  ./${SCRIPT_NAME} [all|report|accounts|search|keys|usage|schedulable|disable|enable|delete|priority|bulk-update|raw] [选项]
 
 说明:
   查询或更新 Sub2API 管理端账号状态。
@@ -62,6 +73,7 @@ usage() {
   --output <path>           保存响应 JSON；未指定时按动作自动命名
   --account-id <id>         usage/schedulable/disable/enable/delete/priority 的账号 id
   --account-ids <csv>       bulk-update/priority 的账号 id 列表，例如 16,17
+  --search <keyword>        accounts/report 动作按账号关键词模糊搜索，也可用 SUB2API_ACCOUNT_SEARCH
   --schedulable <bool>      schedulable 动作设置 true/false
   --priority <int>          priority/bulk-update 动作设置优先级
   SUB2API_PARALLELISM       accounts/keys 内部 usage 并发数，默认 6
@@ -71,6 +83,9 @@ usage() {
 示例:
   SUB2API_BASE_URL='http://127.0.0.1:3335' SUB2API_API_KEY='***' ./${SCRIPT_NAME}
   ./${SCRIPT_NAME} accounts --base-url 'http://127.0.0.1:3335' --api-key '***'
+  ./${SCRIPT_NAME} accounts --search 'jw'
+  ./${SCRIPT_NAME} search 'jw'                    # 直接输出账号搜索接口 JSON
+  ./${SCRIPT_NAME} report --search 'jw'
   ./${SCRIPT_NAME} keys --base-url 'http://127.0.0.1:3335' --api-key '***'
   ./${SCRIPT_NAME} report
   ./${SCRIPT_NAME} usage --account-id '15'
@@ -134,6 +149,7 @@ from pathlib import Path
 SCRIPT_NAME = Path(sys.argv[0]).name or "query.sh"
 SCRIPT_DIR = Path(os.environ.get("SCRIPT_DIR", "") or Path(__file__).resolve().parent)
 DEFAULT_ACCOUNTS_PAGE_SIZE = 10
+DEFAULT_ACCOUNT_SEARCH_PAGE_SIZE = 20
 DEFAULT_KEYS_PAGE_SIZE = 20
 DEFAULT_KEY_USAGE_PAGE_SIZE = 20
 TIMEZONE = "Etc/GMT-8"
@@ -364,19 +380,20 @@ class Client:
         return self.request("DELETE", url, kind, account_id)
 
 
-def build_accounts_url(client, page):
+def build_accounts_url(client, page, search=""):
+    is_search = bool(str(search or "").strip())
     return client.url(
         "/api/v1/admin/accounts",
         {
             "page": page,
-            "page_size": DEFAULT_ACCOUNTS_PAGE_SIZE,
+            "page_size": DEFAULT_ACCOUNT_SEARCH_PAGE_SIZE if is_search else DEFAULT_ACCOUNTS_PAGE_SIZE,
             "platform": "",
             "type": "",
             "status": "",
             "privacy_mode": "",
             "group": "",
-            "search": "",
-            "sort_by": "schedulable",
+            "search": str(search or "").strip(),
+            "sort_by": "last_used_at" if is_search else "schedulable",
             "sort_order": "desc",
             "lite": "1",
             "timezone": TIMEZONE,
@@ -783,13 +800,13 @@ def normalize_accounts_with_usage(client, accounts_payload, parallelism):
     }
 
 
-def fetch_all_accounts(client, parallelism):
-    first = client.get_json(build_accounts_url(client, 1), "accounts_internal")
+def fetch_all_accounts(client, parallelism, search=""):
+    first = client.get_json(build_accounts_url(client, 1, search), "accounts_internal")
     pages = page_count(first)
     total = total_count(first)
     items = extract_page_items(first, ["items", "accounts", "list"])
     for page in range(2, pages + 1):
-        payload = client.get_json(build_accounts_url(client, page), "accounts_internal")
+        payload = client.get_json(build_accounts_url(client, page, search), "accounts_internal")
         items.extend(extract_page_items(payload, ["items", "accounts", "list"]))
     return normalize_accounts_with_usage(client, {"pages": pages, "total": total, "items": items}, parallelism)
 
@@ -1241,16 +1258,15 @@ def render_card_report(accounts_payload, keys_payload):
         if model_usage:
             token_total = number(usage.get("total_tokens"), 0)
             model_text = "；".join(
-                f"`{row.get('model') or '-'}` **{format_tokens_m_plain(row.get('total_tokens', 0))}**/"
-                f"**{format_percent(row.get('total_tokens', 0), token_total)}**"
+                f"{row.get('model') or '-'} {format_tokens_m_plain(row.get('total_tokens', 0))}"
+                f"({format_percent(row.get('total_tokens', 0), token_total)})"
                 for row in model_usage
             )
         else:
-            model_text = f"模型 **{models}**"
+            model_text = models
         lines.extend([
-            f"{marker(index)} `{key.get('name') or '-'}` ｜ 总量 **{format_tokens_m_plain(usage.get('total_tokens', 0))}** ｜ 请求 **{int(number(usage.get('request_count'), 0))}** ｜ 最近 **{format_display_time(key.get('last_used_at'))}**",
+            f"{marker(index)} `{key.get('name') or '-'}` ｜ **{format_tokens_m_plain(usage.get('total_tokens', 0))}** ｜ 请求 {int(number(usage.get('request_count'), 0))} ｜ 缓存 {format_percent(usage.get('cache_tokens', 0), usage.get('total_tokens', 0))} ｜ 最近 {format_display_time(key.get('last_used_at'))}",
             f"模型：{model_text}",
-            f"Token：入 **{format_tokens_m_plain(usage.get('input_tokens', 0))}** ｜ 出 **{format_tokens_m_plain(usage.get('output_tokens', 0))}** ｜ 缓 **{format_tokens_m_plain(usage.get('cache_tokens', 0))}** ｜ 缓存 **{format_percent(usage.get('cache_tokens', 0), usage.get('total_tokens', 0))}**",
             "",
         ])
     lines.extend(["", "> 说明：令牌 token 总量来自 `/api/v1/admin/usage/stats` 聚合字段；模型拆分来自 `/api/v1/admin/dashboard/models?model_source=requested`，按总量 tokens 倒序展示。"])
@@ -1358,12 +1374,19 @@ def parse_args(argv):
     parser.add_argument("--output", default=env("SUB2API_OUTPUT_FILE"))
     parser.add_argument("--account-id", "--id", dest="account_id", default=env("SUB2API_ACCOUNT_ID"))
     parser.add_argument("--account-ids", default=env("SUB2API_ACCOUNT_IDS"))
+    parser.add_argument("--search", dest="account_search", default=env("SUB2API_ACCOUNT_SEARCH"))
     parser.add_argument("--schedulable", default=env("SUB2API_SCHEDULABLE"))
     parser.add_argument("--priority", default=env("SUB2API_PRIORITY"))
+    parser.add_argument("search_terms", nargs="*")
     ns, unknown = parser.parse_known_args(rest)
     if unknown:
         fail(f"未知参数: {unknown[0]}")
     ns.action = action
+    if ns.action == "search" and not ns.account_search and ns.search_terms:
+        # `query.sh search jw` 兼容用户习惯；正式参数仍是 `--search jw`。
+        ns.account_search = " ".join(ns.search_terms).strip()
+    if ns.action != "search" and ns.search_terms:
+        fail(f"未知参数: {ns.search_terms[0]}")
     return ns
 
 
@@ -1377,9 +1400,11 @@ def normalize_bool(value):
 
 
 def validate(ns):
-    allowed = {"all", "report", "accounts", "keys", "usage", "schedulable", "disable", "enable", "delete", "priority", "bulk-update", "raw"}
+    allowed = {"all", "report", "accounts", "search", "keys", "usage", "schedulable", "disable", "enable", "delete", "priority", "bulk-update", "raw"}
     if ns.action not in allowed:
         fail(f"未知动作: {ns.action}")
+    if ns.action == "search" and not str(ns.account_search or "").strip():
+        fail("search 动作需要关键词，例如: search jw 或 accounts --search jw")
     if ns.action == "priority":
         ns.action = "bulk-update"
     if not ns.base_url:
@@ -1433,16 +1458,23 @@ def main(argv):
 
     if ns.action == "report":
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            accounts_future = pool.submit(fetch_all_accounts, client, parallelism)
+            # report 支持按账号关键词缩小账号卡片范围；令牌卡片只展示今日有用量令牌。
+            accounts_future = pool.submit(fetch_all_accounts, client, parallelism, ns.account_search)
             keys_future = pool.submit(fetch_all_keys, client, parallelism)
             accounts = accounts_future.result()
             keys = keys_future.result()
         print(render_card_report(accounts, keys), end="")
         return
 
+    if ns.action == "search":
+        # search 动作直接返回账号列表接口 JSON，便于查看原始账号字段。
+        payload = client.get_json(build_accounts_url(client, 1, ns.account_search), "accounts_internal")
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
     output_file = resolved_output(ns.action, ns.output)
     if ns.action == "accounts":
-        payload = fetch_all_accounts(client, parallelism)
+        payload = fetch_all_accounts(client, parallelism, ns.account_search)
         write_json(output_file, payload)
         print(render_accounts(payload), end="")
     elif ns.action == "keys":
@@ -1450,7 +1482,7 @@ def main(argv):
         write_json(output_file, payload)
         print(render_keys(payload), end="")
     elif ns.action == "raw":
-        payload = client.get_json(build_accounts_url(client, 1), "raw")
+        payload = client.get_json(build_accounts_url(client, 1, ns.account_search), "raw")
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     elif ns.action == "usage":
         payload = normalize_usage(client.get_json(build_usage_url(client, ns.account_id), "usage", ns.account_id), ns.account_id)

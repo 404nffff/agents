@@ -42,6 +42,8 @@ ADDITIONAL_CONTEXT_EVENTS = {
     "SubagentStart",
     "PreToolUse",
     "PostToolUse",
+    "PreCompact",
+    "PostCompact",
     "UserPromptSubmit",
 }
 

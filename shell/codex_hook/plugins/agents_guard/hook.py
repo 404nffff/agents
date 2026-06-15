@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AGENTS v7 轻量守护插件。
+"""AGENTS hook v8 轻量守护插件。
 
 插件把适合自动化的规则放到 Codex hook 生命周期中：
 - SessionStart：检查项目索引与 Agent 文档，按需执行 ai-localbase init。
@@ -29,9 +29,17 @@ SCRIPT_DIR = PLUGIN_DIR.parent.parent
 DEFAULT_LOG_PATH = SCRIPT_DIR / "codex_hook_agents_guard.log"
 DEFAULT_COMPACT_STATE_PATH = SCRIPT_DIR / "codex_hook_compact_state.json"
 DEFAULT_POSTCOMPACT_NOTE_PATH = SCRIPT_DIR / "codex_hook_postcompact_note.md"
-DEFAULT_AGENT_DOC = "agents/AGENTS_SDP_AI_LOCALBASE_v7.md"
+DEFAULT_AGENT_DOC = "agents/AGENTS_SDP_AI_LOCALBASE_hook_v8.md"
 DEFAULT_PROJECT_INDEX = "docs/index.md"
 DEFAULT_AI_LOCALBASE_SCRIPT = Path.home() / ".codex" / "skills" / "ai-localbase" / "ai-localbase.sh"
+
+# SessionStart 注入核心工作模式，保证 hook 版 AGENTS 规则在会话前置上下文中可见。
+SESSION_START_SDLC_RULES = (
+    "默认遵循 `software-dev-process` 的 `sdlc-design-1`、`sdlc-design-2`、`sdlc-implement`、`sdlc-test`、`sdlc-debug`、`sdlc-solo` 阶段指令。",
+    "日常开发默认代码优先：先实现业务代码，再补单元、冒烟、功能测试，最后本地验证。",
+    "常规新增或重构不自动 TDD；进入 `sdlc-debug` 时默认复现先行。",
+    "自主执行当前阶段内的读写、编码、命令与验证；遇到红线、超范围、连续 3 次同类失败时停下并询问用户。",
+)
 
 SENSITIVE_KEYWORDS = (
     "token",
@@ -229,6 +237,7 @@ def handle_session_start(context: dict[str, Any], root: Path) -> str:
                 f"`{DEFAULT_PROJECT_INDEX}`：{bool_text(index_path.exists())}。",
                 f"`{DEFAULT_AGENT_DOC}`：{bool_text(agent_doc_path.exists())}。",
                 f"ai-localbase init：{init_status}（{init_detail}）。",
+                *SESSION_START_SDLC_RULES,
                 "进入任务前先复核 docs/index.md 与当前项目知识库。",
             ],
         )
@@ -244,6 +253,7 @@ def handle_session_start(context: dict[str, Any], root: Path) -> str:
                 f"`{DEFAULT_PROJECT_INDEX}`：{bool_text(index_path.exists())}。",
                 f"`{DEFAULT_AGENT_DOC}`：{bool_text(agent_doc_path.exists())}。",
                 f"ai-localbase init：{init_status}（`{init_detail}`）。",
+                *SESSION_START_SDLC_RULES,
                 "如需检索记忆，先恢复 ai-localbase 入口再继续。",
             ],
         )
@@ -267,6 +277,7 @@ def handle_session_start(context: dict[str, Any], root: Path) -> str:
             f"`{DEFAULT_PROJECT_INDEX}`：{bool_text(index_path.exists())}。",
             f"`{DEFAULT_AGENT_DOC}`：{bool_text(agent_doc_path.exists())}。",
             f"ai-localbase init：{init_status}（{init_detail}）。",
+            *SESSION_START_SDLC_RULES,
             "后续回答前优先复用当前知识库命中内容；不要把知识库名当作 knowledgeBaseId。",
         ],
     )

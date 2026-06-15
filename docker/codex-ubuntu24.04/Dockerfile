@@ -1,6 +1,10 @@
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV PYTHONUTF8=1
+ENV PYTHONIOENCODING=UTF-8
 ENV PATH="/root/.local/bin:/usr/local/bin:${PATH}"
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -14,6 +18,7 @@ RUN apt-get update \
         nodejs \
         npm \
         python3 \
+        vim \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装 uv/uvx 与 mcp-proxy，并把 uv tool 目录纳入全局 PATH。
@@ -69,6 +74,9 @@ COPY agents/AGENTS_SDP_AI_LOCALBASE_hook_v8.md /root/.codex/AGENTS.md
 
 # 生成 Linux hooks.json，并在构建阶段校验 Python hook 代码可编译。
 RUN chmod +x /root/.codex/codex_hook/codex_hook.sh \
+    && cp /root/.codex/codex_hook/.env.example /root/.codex/codex_hook/.env \
+    && cp /root/.codex/codex_hook/plugins/feishu/.env.example /root/.codex/codex_hook/plugins/feishu/.env \
+    && cp /root/.codex/codex_hook/plugins/session_title_v2/.env.example /root/.codex/codex_hook/plugins/session_title_v2/.env \
     && /root/.codex/codex_hook/codex_hook.sh create linux \
     && python3 -m py_compile \
         /root/.codex/codex_hook/hook.py \

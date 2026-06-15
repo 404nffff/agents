@@ -22,7 +22,7 @@ class AgentsGuardAdditionalContextTests(unittest.TestCase):
         (root / "docs").mkdir(parents=True)
         (root / "agents").mkdir(parents=True)
         (root / "docs" / "index.md").write_text("# 项目索引\n", encoding="utf-8")
-        (root / "agents" / "AGENTS_SDP_AI_LOCALBASE_v7.md").write_text("# Agent\n", encoding="utf-8")
+        (root / "agents" / "AGENTS_SDP_AI_LOCALBASE_hook_v8.md").write_text("# Agent\n", encoding="utf-8")
         return root
 
     def run_hook(self, payload: dict[str, object], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -64,6 +64,10 @@ class AgentsGuardAdditionalContextTests(unittest.TestCase):
         self.assertEqual(output["hookSpecificOutput"]["hookEventName"], "SessionStart")
         self.assertIn("AGENTS 守护：SessionStart", output["hookSpecificOutput"]["additionalContext"])
         self.assertIn("ai-localbase init", output["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("sdlc-design-1", output["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("日常开发默认代码优先", output["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("进入 `sdlc-debug` 时默认复现先行", output["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("连续 3 次同类失败", output["hookSpecificOutput"]["additionalContext"])
 
     def test_pre_tool_use_outputs_risk_context_without_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
