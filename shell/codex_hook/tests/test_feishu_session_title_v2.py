@@ -24,12 +24,13 @@ def load_module(name: str, path: Path):
 
 
 class FeishuSessionTitleV2Tests(unittest.TestCase):
-    def test_stop_orders_session_title_v2_before_feishu(self) -> None:
+    def test_stop_keeps_configured_plugin_order(self) -> None:
         module = load_module("codex_hook_main_for_order_test", HOOK_PATH)
-        with mock.patch.dict(os.environ, {"CODEX_HOOK_EVENTS_STOP": "feishu,session_title_v2"}, clear=False):
+        with mock.patch.dict(os.environ, {"CODEX_HOOK_EVENTS_STOP": "timer,session_title_v2,feishu"}, clear=False):
+            module.CONFIG_EVENT_ENV_ORDER = []
             result = module.event_plugins("Stop")
 
-        self.assertEqual(result, ["session_title_v2", "feishu"])
+        self.assertEqual(result, ["timer", "session_title_v2", "feishu"])
 
     def test_stop_context_reads_full_user_input_from_title_state(self) -> None:
         module = load_module("codex_hook_main_for_user_input_test", HOOK_PATH)

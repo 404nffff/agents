@@ -164,6 +164,7 @@ def build_markdown(context: dict[str, Any]) -> str:
     model = first_text(payload, "model")
     permission_mode = first_text(payload, "permission_mode", "permissionMode")
     transcript_path = first_text(payload, "transcript_path", "transcriptPath")
+    elapsed_label = str(context.get("codex_timer_elapsed_label", "") or "")
     tool_name = first_text(payload, "tool_name", "toolName")
     tool_use_id = first_text(payload, "tool_use_id", "toolUseId", "call_id", "callId")
     trigger = first_text(payload, "trigger")
@@ -218,6 +219,8 @@ def build_markdown(context: dict[str, Any]) -> str:
         f"- Permission：{code(permission_mode)}",
         f"- Transcript：{code(transcript_path)}",
     ]
+    if elapsed_label:
+        parts.append(f"- 耗时：{code(elapsed_label)}")
 
     if details:
         parts.extend(["", "**事件详情**", *details])
@@ -315,12 +318,18 @@ def build_send_title(context: dict[str, Any]) -> str:
     project = str(context.get("project", ""))
     if project and not title.startswith(f"[{project}]"):
         title = f"[{project}] {title}"
+    elapsed_label = str(context.get("codex_timer_elapsed_label", "") or "")
+    if elapsed_label:
+        if project and title.startswith(f"[{project}] "):
+            title = f"[{project}] {elapsed_label} {title[len(f'[{project}] '):]}"
+        else:
+            title = f"{elapsed_label} {title}"
     return title
 
 
 def handle(context: dict[str, Any]) -> None:
     load_plugin_env()
-    if not enabled(env("FEISHU_CODEX_HOOK_ENABLE_PUSH", "false")):
+    if not enabled(env("FEISHU_CODEX_HOOK_ENABLE_PUSH", "true")):
         return
 
     send_markdown(build_send_title(context), build_markdown(context))

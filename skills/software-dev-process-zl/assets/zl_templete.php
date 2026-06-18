@@ -8,7 +8,8 @@
  * 2. 将类名 `ZhiliaoBusinessProbeTemplate` 改成与需求匹配的唯一类名。
  * 3. 按需求替换 `loadBusinessDependencies()`、`buildRequestFromPayload()`、
  *    `runStep1()`、`runStep2()`、`runStep3()`、`runStep4()`、`runStep5()`、
- *    `assertStepResult()` 中的占位逻辑。
+ *    `assertStepResult()` 中的占位逻辑；业务函数原始返回必须保留在
+ *    `data` 字段，不要为了展示而重构、精简或改名。
  * 4. 用 `db-query` 只读查询组装 payload JSON，再执行复制后的探针脚本。
  *
  * 注意：本文件是模板，不是可直接交付的业务探针；禁止直接把本文件作为
@@ -140,13 +141,32 @@ class ZhiliaoBusinessProbeTemplate
 
         if ($step === 'all') {
             $items = array();
-            foreach (array(1, 2, 3, 4) as $item) {
-                $items[] = $this->run($item);
+            $allOk = true;
+            $allModified = true;
+            $hasBug = false;
+            foreach (array(1, 2, 3, 4, 5) as $item) {
+                $itemResult = $this->run($item);
+                if (empty($itemResult['ok'])) {
+                    $allOk = false;
+                }
+                $verification = isset($itemResult['verification']) && is_array($itemResult['verification']) ? $itemResult['verification'] : array();
+                if (empty($verification['modified'])) {
+                    $allModified = false;
+                }
+                if (!empty($verification['has_bug'])) {
+                    $hasBug = true;
+                }
+                $items[] = $itemResult;
             }
             return array(
-                'ok' => true,
+                'ok' => $allOk,
                 'step' => 'all',
                 'payload' => $this->buildPayloadSummary($this->payload),
+                'verification' => array(
+                    'modified' => $allModified,
+                    'has_bug' => $hasBug,
+                    'message' => $allModified && !$hasBug ? '所有步骤已替换且未发现明确 bug' : '至少一个步骤未改完或发现明确 bug，请查看 items[].verification',
+                ),
                 'items' => $items,
             );
         }
@@ -276,8 +296,10 @@ class ZhiliaoBusinessProbeTemplate
             'payload' => $this->buildPayloadSummary($this->payload),
             'request' => $this->buildRequestSummary($request),
             'result_type' => is_array($result) ? 'array' : gettype($result),
+            // data 必须保留业务函数原始输出语义，自检结论只能放到 assertion / verification。
             'data' => $this->normalizeValue($result),
             'assertion' => $this->normalizeValue($assertion),
+            'verification' => $this->validateProbeImplementation($step, $result, $assertion),
         );
     }
 
@@ -305,6 +327,82 @@ class ZhiliaoBusinessProbeTemplate
             'method' => $method,
             'message' => '请在复制后的探针脚本中替换 ' . $method . '() 占位逻辑',
         );
+    }
+
+    /**
+     * 校验复制后的探针是否已完成必要替换，并暴露是否存在明确 bug。
+     *
+     * @param int $step
+     * @param mixed $result
+     * @param array $assertion
+     * @return array
+     */
+    private function validateProbeImplementation($step, $result, $assertion)
+    {
+        $checks = array(
+            'step_supported' => in_array(intval($step), array(1, 2, 3, 4, 5), true),
+            'placeholder_replaced' => !$this->containsTemplatePlaceholder($result),
+            'assertion_replaced' => !$this->containsTemplatePlaceholder($assertion),
+            'assertion_passed' => !empty($assertion['ok']),
+            'payload_file_loaded' => empty($this->payload['payload_file_error']),
+        );
+
+        $messages = array();
+        if (!$checks['step_supported']) {
+            $messages[] = '步骤编号不受支持';
+        }
+        if (!$checks['placeholder_replaced']) {
+            $messages[] = 'runStepN() 仍返回模板占位内容，业务链路未替换完成';
+        }
+        if (!$checks['assertion_replaced']) {
+            $messages[] = 'assertStepResult() 仍返回模板占位断言，断言逻辑未替换完成';
+        }
+        if (!$checks['assertion_passed']) {
+            $messages[] = '断言未通过，请检查 data 中的原始业务输出';
+        }
+        if (!$checks['payload_file_loaded']) {
+            $messages[] = $this->payload['payload_file_error'];
+        }
+
+        $modified = $checks['step_supported']
+            && $checks['placeholder_replaced']
+            && $checks['assertion_replaced']
+            && $checks['payload_file_loaded'];
+
+        return array(
+            'modified' => $modified,
+            'has_bug' => ($checks['assertion_replaced'] && !$checks['assertion_passed']) || !$checks['payload_file_loaded'],
+            'checks' => $checks,
+            'messages' => $messages,
+        );
+    }
+
+    /**
+     * 递归检查输出里是否仍残留模板占位标记。
+     *
+     * @param mixed $value
+     * @return bool
+     */
+    private function containsTemplatePlaceholder($value)
+    {
+        if (is_array($value)) {
+            if (!empty($value['template_placeholder'])) {
+                return true;
+            }
+            if (isset($value['message']) && strpos(strval($value['message']), '模板占位') !== false) {
+                return true;
+            }
+            foreach ($value as $item) {
+                if ($this->containsTemplatePlaceholder($item)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (is_object($value)) {
+            return $this->containsTemplatePlaceholder(get_object_vars($value));
+        }
+        return is_string($value) && strpos($value, '模板占位') !== false;
     }
 
     private function parseCliPayload($argv)

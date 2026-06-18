@@ -20,9 +20,12 @@ from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_ENV_FILE = SCRIPT_DIR / ".env"
+DEFAULT_ENV_EXAMPLE_FILE = SCRIPT_DIR / ".env.example"
 DEFAULT_LOG_PATH = SCRIPT_DIR / "codex_hook_payload.log"
 DEFAULT_ERROR_LOG_PATH = SCRIPT_DIR / "codex_hook_error.log"
+DEFAULT_PLUGIN_EXECUTION_LOG_PATH = SCRIPT_DIR / "codex_hook_plugin_execution.log"
 DEFAULT_TITLE_STATE_PATH = SCRIPT_DIR / "codex_hook_title_state.json"
+CONFIG_EVENT_ENV_ORDER: list[str] = []
 
 SUPPORTED_EVENTS = {
     "SessionStart",
@@ -42,8 +45,6 @@ ADDITIONAL_CONTEXT_EVENTS = {
     "SubagentStart",
     "PreToolUse",
     "PostToolUse",
-    "PreCompact",
-    "PostCompact",
     "UserPromptSubmit",
 }
 
@@ -323,6 +324,46 @@ def write_error_log(event: str, plugin: str, error: Exception) -> None:
         handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def plugin_output_summary(value: Any, limit: int = 300) -> str:
+    if value is None:
+        return ""
+    safe_value = redact(value)
+    if not isinstance(safe_value, str):
+        safe_value = json.dumps(safe_value, ensure_ascii=False, sort_keys=True)
+    text = re.sub(r"\s+", " ", safe_value).strip()
+    return text[:limit].rstrip() if len(text) > limit else text
+
+
+def current_session_title(context: dict[str, Any]) -> str:
+    session_id = str(context.get("session_id", ""))
+    turn_id = str(context.get("turn_id", ""))
+    return clean_title_summary(
+        context.get("session_title_v2_title")
+        or context.get("title_summary")
+        or context.get("user_input")
+        or get_title_state(session_id, turn_id)
+        or "未生成标题",
+        80,
+    )
+
+
+def write_plugin_execution_log(event: str, plugin: str, result: str, session_title: str = "", plugin_output: Any = None) -> None:
+    log_path = DEFAULT_PLUGIN_EXECUTION_LOG_PATH
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "executed_at": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+        "event": event,
+        "plugin": plugin,
+        "session_title": clean_title_summary(session_title, 80),
+        "plugin_output": plugin_output_summary(plugin_output),
+        # 插件返回只保留脱敏摘要，避免把完整上下文或凭证带入日志。
+        "result": result,
+    }
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    trim_plugin_execution_log()
+
+
 def trim_payload_log() -> None:
     log_path = Path(env("CODEX_HOOK_PAYLOAD_LOG_PATH", str(DEFAULT_LOG_PATH)) or str(DEFAULT_LOG_PATH))
     if not log_path.exists():
@@ -347,12 +388,49 @@ def trim_error_log() -> None:
     log_path.write_text("\n".join(lines[-keep_lines:]) + ("\n" if lines else ""), encoding="utf-8")
 
 
+def trim_plugin_execution_log() -> None:
+    log_path = DEFAULT_PLUGIN_EXECUTION_LOG_PATH
+    if not log_path.exists():
+        return
+    lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    log_path.write_text("\n".join(lines[-100:]) + ("\n" if lines else ""), encoding="utf-8")
+
+
 def plugin_env_names(event: str) -> list[str]:
     """生成单事件插件环境变量名，兼容驼峰压缩和下划线两种写法。"""
     snake = re.sub(r"(?<!^)(?=[A-Z])", "_", event).upper()
     compact = re.sub(r"[^A-Za-z0-9]", "", event).upper()
     names = [f"CODEX_HOOK_EVENTS_{snake}", f"CODEX_HOOK_EVENTS_{compact}"]
     return list(dict.fromkeys(names))
+
+
+def read_event_env_order(path: Path) -> list[str]:
+    """读取配置文件中事件变量出现顺序，用于控制插件来源优先级。"""
+    if not path.exists():
+        return []
+    result: list[str] = []
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key.startswith("CODEX_HOOK_EVENTS_") and key not in result:
+            result.append(key)
+    return result
+
+
+def event_env_order() -> list[str]:
+    """优先按 `.env.example` 的事件变量前后顺序执行，缺失时退回运行时配置。"""
+    global CONFIG_EVENT_ENV_ORDER
+    if CONFIG_EVENT_ENV_ORDER:
+        return CONFIG_EVENT_ENV_ORDER
+    env_file = Path(env("CODEX_HOOK_ENV_FILE", str(DEFAULT_ENV_FILE)) or str(DEFAULT_ENV_FILE))
+    order = read_event_env_order(DEFAULT_ENV_EXAMPLE_FILE)
+    for key in read_event_env_order(env_file):
+        if key not in order:
+            order.append(key)
+    CONFIG_EVENT_ENV_ORDER = order
+    return CONFIG_EVENT_ENV_ORDER
 
 
 def parse_plugin_names(plugin_text: str) -> list[str]:
@@ -373,15 +451,16 @@ def append_plugins(result: list[str], plugin_text: str) -> None:
 
 
 def event_plugins(event: str) -> list[str]:
-    """解析当前事件插件列表，只支持全局变量和单事件变量。"""
+    """解析当前事件插件列表，并按配置示例中的事件变量顺序执行。"""
     result: list[str] = []
-    append_plugins(result, env("CODEX_HOOK_EVENTS_ALL", ""))
-    for env_name in plugin_env_names(event):
+    order = event_env_order()
+    order_index = {key: index for index, key in enumerate(order)}
+    source_names = ["CODEX_HOOK_EVENTS_ALL", *plugin_env_names(event)]
+    source_names = list(dict.fromkeys(source_names))
+    source_positions = {key: index for index, key in enumerate(source_names)}
+    source_names.sort(key=lambda key: order_index.get(key, len(order) + source_positions[key]))
+    for env_name in source_names:
         append_plugins(result, env(env_name, ""))
-    if event == "Stop" and "feishu" in result and "session_title_v2" in result:
-        # Stop 推送需要先生成 AI 标题，再由飞书插件读取共享 context 发送通知。
-        result = [name for name in result if name != "session_title_v2"]
-        result.insert(result.index("feishu"), "session_title_v2")
     return result
 
 
@@ -411,14 +490,27 @@ def normalize_plugin_context(value: Any) -> list[str]:
 
 def dispatch_plugins(context: dict[str, Any], names: list[str]) -> list[str]:
     additional_context: list[str] = []
+    execution_records: list[dict[str, Any]] = []
     for name in names:
         try:
             module = importlib.import_module(f"plugins.{name}.hook")
-            additional_context.extend(normalize_plugin_context(module.handle(context)))
+            plugin_result = module.handle(context)
+            additional_context.extend(normalize_plugin_context(plugin_result))
+            execution_records.append({"plugin": name, "result": "success", "plugin_output": plugin_result})
         except Exception as error:
             # Hook 动作不能污染 stdout，也不能阻断 Codex 主流程；错误写入脱敏日志便于本地排查。
+            execution_records.append({"plugin": name, "result": f"error:{type(error).__name__}", "plugin_output": str(error)})
             write_error_log(str(context.get("event", "")), name, error)
             continue
+    session_title = current_session_title(context)
+    for record in execution_records:
+        write_plugin_execution_log(
+            str(context.get("event", "")),
+            str(record["plugin"]),
+            str(record["result"]),
+            session_title,
+            record.get("plugin_output"),
+        )
     return additional_context
 
 
@@ -469,6 +561,7 @@ def main() -> int:
         clear_title_state(context.get("session_id", ""), context.get("turn_id", ""))
         trim_payload_log()
         trim_error_log()
+        trim_plugin_execution_log()
     return 0
 
 

@@ -208,11 +208,14 @@ def extract_transcript_text(path: Path, max_chars: int) -> str:
 def build_messages(transcript_text: str) -> list[dict[str, str]]:
     system_prompt = env(
         "SESSION_TITLE_V2_PROMPT",
-        "你是会话标题生成器。请根据会话内容生成一个简短中文标题，最多20个汉字或40个字符。只输出标题，不要引号、标点解释或前后缀。",
+        "你是 Codex 会话标题生成器。目标是提炼本轮会话最核心工作，生成有重点的中文短标题。"
+        "优先抓取：1. 最近用户明确要求；2. 被修改、排查或验证的核心对象；3. 最关键动作或结果。"
+        "避免输出“代码优化”“问题修复”“会话总结”“项目讨论”等泛泛标题，也不要保留“帮我”“优化一下”等空泛动词。"
+        "格式使用“对象 + 动作/结果”，8 到 18 个汉字，最多 20 个汉字或 40 个字符。只输出标题，不要解释、引号或前后缀。",
     )
     return [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"会话内容如下：\n\n{transcript_text}"},
+        {"role": "user", "content": build_focus_prompt(transcript_text)},
     ]
 
 
@@ -366,6 +369,32 @@ def has_successful_title_update(stdout: str, expected_updates: int) -> bool:
         if isinstance(item.get("result"), dict) and isinstance(item.get("id"), int) and item["id"] >= 2:
             success_count += 1
     return success_count > 0
+
+
+def build_focus_prompt(transcript_text: str) -> str:
+    messages = [item.strip() for item in transcript_text.split("\n\n") if item.strip()]
+    user_messages = [item.removeprefix("用户:").strip() for item in messages if item.startswith("用户:")]
+    assistant_messages = [item.removeprefix("助手:").strip() for item in messages if item.startswith("助手:")]
+    latest_user = trim_focus_text(user_messages[-1]) if user_messages else ""
+    recent_users = "\n".join(f"- {trim_focus_text(item)}" for item in user_messages[-3:])
+    recent_assistants = "\n".join(f"- {trim_focus_text(item)}" for item in assistant_messages[-2:])
+    sections = [
+        "请优先根据【最近用户目标】和【最近助手结果】生成标题；【完整上下文】只用于消歧。",
+    ]
+    if latest_user:
+        sections.append(f"【最近用户目标】\n{latest_user}")
+    if recent_users:
+        sections.append(f"【近期用户请求】\n{recent_users}")
+    if recent_assistants:
+        sections.append(f"【最近助手结果】\n{recent_assistants}")
+    # 保留完整上下文用于确认对象和结果，但明确降级为辅助信息，避免标题被早期闲聊带偏。
+    sections.append(f"【完整上下文】\n{transcript_text}")
+    return "\n\n".join(sections)
+
+
+def trim_focus_text(value: str, limit: int = 500) -> str:
+    text = re.sub(r"\s+", " ", value).strip()
+    return f"{text[:limit].rstrip()}..." if len(text) > limit else text
 
 
 def handle(context: dict[str, Any]) -> None:

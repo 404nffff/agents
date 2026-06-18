@@ -31,6 +31,7 @@ description: 用于需要按 SDLC 阶段推进任务，并在设计、实现、�
 - **文档输出**：设计、施工、测试和排查文档统一输出到 `docs/[需求目录]/`。
 - **onlyAI 工作区**：仅供 AI 读取和维护的过程文件统一输出到 `docs/[需求目录]/onlyAI/`，包括 `structured-request.json`、`context-scan.json`、`context-question-N.json`、`operations-log.md`、`testing.md`、`verification.md`、`review-report.md`。
 - **SQL 脚本**：数据库变更脚本统一输出到 `docs/[需求目录]/sql/`。
+- **链路探针结果**：当任务包含接口调用、业务链路验证或脚本化探针验证时，基于 `assets/链路探针结果Markdown模板.md` 输出 `docs/[需求目录]/[需求标识]_probe_result.md`；结果文件只保留 Markdown 表格，入参和出参必须同时包含 JSON 与字段说明，边界条件必须独立成列。
 - **摘要文档**：如有必要，可自主生成 `docs/[需求目录]/summary.md` 或 `docs/index.md` 汇总阶段结论与交付物索引。
 
 ## 角色选择规则
@@ -107,9 +108,10 @@ description: 用于需要按 SDLC 阶段推进任务，并在设计、实现、�
 1. 先按上方阶段选角计划确定候选角色名称，再通过 `skills/who/SKILL.md` 的选择规则重新进行阶段选角，主角色通常为 `Code Reviewer` 或 `Senior Developer`。
 2. 使用 `assets/测试用例模板.md` 输出 `004-测试用例.md`。
 3. 在 `onlyAI/testing.md` 和 `onlyAI/verification.md` 记录测试执行过程、输出和风险评估。
-4. 执行测试后，使用 `assets/测试报告模板.md` 输出 `005-测试报告.md`。
-5. 在 `onlyAI/review-report.md` 写入自我审查结论，并明确是否需要补充安全、性能、稳定性专项复核。
-6. 完成后同步任务文档与 `ai_localbase` 知识库；如有必要，生成 `summary.md` 汇总结果。
+4. 若本阶段包含接口调用、业务链路验证或脚本化探针验证，必须基于 `assets/链路探针结果Markdown模板.md` 输出 `docs/[需求目录]/[需求标识]_probe_result.md` 可读结果；结果文件只保留固定 Markdown 表格，每次运行追加表格行，入参/出参必须同时包含 JSON 与字段说明，测试条件与边界条件必须分列记录。
+5. 执行测试后，使用 `assets/测试报告模板.md` 输出 `005-测试报告.md`；如生成链路探针 Markdown 结果，报告中必须引用该结果路径。
+6. 在 `onlyAI/review-report.md` 写入自我审查结论，并明确是否需要补充安全、性能、稳定性专项复核。
+7. 完成后同步任务文档与 `ai_localbase` 知识库；如有必要，生成 `summary.md` 汇总结果。
 
 ### `sdlc-debug`
 
@@ -137,6 +139,7 @@ description: 用于需要按 SDLC 阶段推进任务，并在设计、实现、�
 - `software-dev-process-roles/assets/施工文档模板.md`
 - `software-dev-process-roles/assets/测试用例模板.md`
 - `software-dev-process-roles/assets/测试报告模板.md`
+- `software-dev-process-roles/assets/链路探针结果Markdown模板.md`
 - `software-dev-process-roles/assets/执行记录模板.md`
 - `software-dev-process-roles/assets/文件改动记录模板.md`
 - `software-dev-process-roles/assets/Debug排查记录模板.md`

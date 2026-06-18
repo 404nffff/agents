@@ -88,6 +88,26 @@ class SessionTitleV2Tests(unittest.TestCase):
 
         self.assertEqual(result, transcript)
 
+    def test_build_messages_emphasizes_latest_goal_and_result(self) -> None:
+        transcript_text = "\n\n".join(
+            [
+                "用户: 先看看项目结构",
+                "助手: 已读取 docs/index.md",
+                "用户: 优化一下 shell/codex_hook/plugins/session_title_v2/hook.py，总结出来的没有重点",
+                "助手: 已增强标题提示词和焦点上下文",
+            ]
+        )
+
+        messages = self.module.build_messages(transcript_text)
+
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertIn("避免输出“代码优化”“问题修复”“会话总结”“项目讨论”等泛泛标题", messages[0]["content"])
+        self.assertEqual(messages[1]["role"], "user")
+        self.assertIn("【最近用户目标】", messages[1]["content"])
+        self.assertIn("session_title_v2/hook.py", messages[1]["content"])
+        self.assertIn("【最近助手结果】", messages[1]["content"])
+        self.assertIn("已增强标题提示词和焦点上下文", messages[1]["content"])
+
     def test_handle_posts_openai_chat_completions_and_updates_title(self) -> None:
         CaptureHandler.requests = []
         server = HTTPServer(("127.0.0.1", 0), CaptureHandler)

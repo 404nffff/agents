@@ -109,6 +109,24 @@ class AgentsGuardAdditionalContextTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
 
+    def test_compact_events_do_not_emit_unsupported_additional_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self.make_project(temp_dir)
+            for event in ("PreCompact", "PostCompact"):
+                with self.subTest(event=event):
+                    result = self.run_hook(
+                        {
+                            "hook_event_name": event,
+                            "cwd": str(root),
+                            "session_id": "s1",
+                            "turn_id": "t1",
+                        },
+                        {f"CODEX_HOOK_EVENTS_{event.upper()}": "agents_guard"},
+                    )
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, "")
+
 
 if __name__ == "__main__":
     unittest.main()

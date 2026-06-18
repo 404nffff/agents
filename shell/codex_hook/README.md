@@ -10,7 +10,9 @@
 | `codex_hook.ps1` | Windows PowerShell 入口，支持 `create` 和 payload 调试。 |
 | `hook.py` | 通用事件分发入口，负责 payload 读取、事件归一、脱敏日志、标题摘要和插件路由。 |
 | `plugins/agents_guard/hook.py` | AGENTS 轻量守护插件，负责 SessionStart 知识库握手、风险命令记录和收尾提醒。 |
-| `plugins/ai_localbase/hook.py` | ai-localbase 压缩记忆插件，负责 PreCompact 上传记忆、PostCompact 读取记忆并输出恢复上下文。 |
+| `plugins/ai_localbase/hook.py` | ai-localbase 压缩记忆插件，负责 PreCompact 上传记忆、PostCompact 读取记忆并写入本地日志。 |
+| `plugins/sdlc_watch/hook.py` | SDLC 文档索引插件，负责 Stop 时刷新 `docs/*` 文档到本地 SQLite。 |
+| `plugins/timer/hook.py` | 计时器插件，负责 UserPromptSubmit 到 Stop 的本轮耗时统计，只保留最近一次。 |
 | `plugins/feishu/hook.py` | 飞书插件，复用 `shell/feishu_bot/feishu_bot_push.sh`，Windows 可直接调用飞书 API。 |
 | `plugins/feishu/.env.example` | 飞书插件配置示例。 |
 | `plugins/session_title/hook.py` | Codex 会话标题更新插件。 |
@@ -50,9 +52,9 @@ CODEX_HOOK_EVENTS_PERMISSION_REQUEST='feishu'
 CODEX_HOOK_EVENTS_POST_TOOL_USE='agents_guard,feishu'
 CODEX_HOOK_EVENTS_PRE_COMPACT='agents_guard,ai_localbase,feishu'
 CODEX_HOOK_EVENTS_POST_COMPACT='agents_guard,ai_localbase,feishu'
-CODEX_HOOK_EVENTS_USER_PROMPT_SUBMIT='session_title'
+CODEX_HOOK_EVENTS_USER_PROMPT_SUBMIT='timer'
 CODEX_HOOK_EVENTS_SUBAGENTSTOP='feishu'
-CODEX_HOOK_EVENTS_STOP='agents_guard,feishu,session_title'
+CODEX_HOOK_EVENTS_STOP='agents_guard,timer,session_title_v2,feishu'
 ```
 
 格式：
@@ -60,10 +62,11 @@ CODEX_HOOK_EVENTS_STOP='agents_guard,feishu,session_title'
 - `CODEX_HOOK_EVENTS_ALL` 会注册到所有支持的事件。
 - `CODEX_HOOK_EVENTS_<EVENT>` 只注册到单个事件，事件名支持驼峰转下划线写法和压缩写法，例如 `CODEX_HOOK_EVENTS_SESSION_START` / `CODEX_HOOK_EVENTS_SESSIONSTART`、`CODEX_HOOK_EVENTS_SUBAGENT_START` / `CODEX_HOOK_EVENTS_SUBAGENTSTART`。
 - 插件列表支持逗号、分号或空白分隔。
-- 多个来源同时配置时，执行顺序为全局注册、单事件注册，重复插件只执行一次。
+- 多个来源同时配置时，执行顺序按 `.env.example` 中事件变量出现顺序决定，重复插件只执行一次；同一事件变量内按插件列表顺序执行。
 - 插件会从 `plugins/<插件名>/hook.py` 加载，并调用其中的 `handle(context)`。
 - `session_title` 不需要单独配置；挂到 `UserPromptSubmit` 和 `Stop` 后就会更新 Codex 会话标题。
-- `session_title_v2` 只需要挂到 `Stop`；它会读取 transcript 并调用 OpenAI 兼容接口总结标题。
+- `session_title_v2` 只需要挂到 `Stop`；它会读取 transcript 并调用 OpenAI 兼容接口总结标题。若同时启用飞书，建议 Stop 顺序为 `timer,session_title_v2,feishu`，让飞书读取 AI 标题和耗时。
+- `sdlc_watch` 只在你手动加入 Stop 路由后执行；建议顺序为 `timer,sdlc_watch,session_title_v2,feishu`，它不会输出 additionalContext。
 
 推荐把 `agents_guard` 挂到：
 
@@ -82,8 +85,8 @@ CODEX_HOOK_EVENTS_STOP='agents_guard,feishu,session_title'
 
 飞书通知标题：
 
-- `UserPromptSubmit` 会把本轮用户输入缓存为标题。
-- `Stop` 的飞书通知优先复用该标题，缺失时才退回最终回复摘要。
+- `UserPromptSubmit` 会把本轮用户输入缓存为标题，并由 `timer` 插件记录开始时间。
+- `Stop` 的飞书通知优先复用该标题，缺失时才退回最终回复摘要；若 `timer` 在飞书前执行，会额外展示本轮耗时。
 - `codex_hook.sh create` / `codex_hook.ps1 create` 生成的 `hooks.json` 已包含 `UserPromptSubmit`；需要更新标题时，把 `session_title` 配到 `CODEX_HOOK_EVENTS_USER_PROMPT_SUBMIT` 和 `CODEX_HOOK_EVENTS_STOP`。
 - 标题状态默认写入 `shell/codex_hook/codex_hook_title_state.json`，可用 `CODEX_HOOK_TITLE_STATE_PATH` 覆盖。
 
@@ -164,23 +167,52 @@ AI_LOCALBASE_HOOK_POSTCOMPACT_TOPK='3'
 行为：
 
 - `PreCompact`：先执行 `init <cwd>`，再 `upload` 一份压缩检查点；若配置 `AI_LOCALBASE_HOOK_COMPACT_DOC_ID`，改为 `append` 到固定文档。
-- `PostCompact`：先执行 `init <cwd>`，再按压缩前状态或自定义 query 调用 `search`，把命中文档名与片段摘要写入 `hookSpecificOutput.additionalContext`。
+- `PostCompact`：先执行 `init <cwd>`，再按压缩前状态或自定义 query 调用 `search`，把命中文档名与片段摘要写入本地日志。
 - 插件不直接读取 `.env`，凭证加载仍由 `~/.codex/skills/ai-localbase` 入口脚本负责；日志只记录状态和长度摘要。
+
+`sdlc_watch` 插件用于把当前项目 `docs/*` 下的 SDLC 文档增量写入本地 SQLite，方便后续桌面客户端查询：
+
+```bash
+CODEX_HOOK_EVENTS_STOP='timer,sdlc_watch,session_title_v2,feishu'
+SDLC_WATCH_DB_PATH='shell/codex_hook/plugins/sdlc_watch/sdlc_watch.sqlite3'
+SDLC_WATCH_DOCS_DIR='docs'
+SDLC_WATCH_LOG_PATH='shell/codex_hook/codex_hook_sdlc_watch.log'
+```
+
+行为：
+
+- `Stop`：扫描 `status.md`、`mini-plan.md`、`summary.md`、`001-006` 系列文档、`*_probe_result.md` 和 `onlyAI` 下的 context/testing/verification/review 等白名单文件。
+- 默认跳过 `.env`、`.pem`、`*.key`、`*.ini`、`*.conf` 等敏感文件名。
+- 插件不返回 stdout 内容；索引结果写入本地 JSONL 日志，避免影响 Codex hook schema。
 
 关于“hook 输出内容”：
 
 - 通用入口会聚合插件 `handle(context)` 的返回值，并在官方支持的事件中输出 `hookSpecificOutput.additionalContext`。
-- 当前会输出 `additionalContext` 的事件：`SessionStart`、`SubagentStart`、`PreToolUse`、`PostToolUse`、`PreCompact`、`PostCompact`、`UserPromptSubmit`。
-- `PermissionRequest` 只支持审批决策形状；`Stop`、`SubagentStop` 继续以日志和本地恢复文件为主，不强行塞 unsupported 字段。
+- 当前会输出 `additionalContext` 的事件：`SessionStart`、`SubagentStart`、`PreToolUse`、`PostToolUse`、`UserPromptSubmit`。
+- `PreCompact`、`PostCompact`、`PermissionRequest`、`Stop`、`SubagentStop` 不输出 `hookSpecificOutput.additionalContext`，继续以日志和本地恢复文件为主，避免 Codex 判定 hook JSON schema 非法。
 - 插件仍应避免直接写 stdout；返回字符串或 `{"additionalContext": "..."}` 即可，由通用入口统一包装 JSON。
 
-开启飞书推送：
+飞书推送默认开启；如需本地禁用：
 
 ```bash
-FEISHU_CODEX_HOOK_ENABLE_PUSH='true'
+FEISHU_CODEX_HOOK_ENABLE_PUSH='false'
 ```
 
 飞书插件复用 `shell/feishu_bot` 的应用机器人配置与发送脚本，并在插件内部构建飞书 Markdown 卡片内容。真实密钥仍放在本地 `.env` 或进程环境变量里，不要提交。
+
+计时器插件默认无需配置：
+
+```bash
+CODEX_HOOK_EVENTS_USER_PROMPT_SUBMIT='timer'
+CODEX_HOOK_EVENTS_STOP='timer,session_title_v2,feishu'
+```
+
+行为：
+
+- `UserPromptSubmit`：写入 `shell/codex_hook/codex_hook_timer_state.json`，只保留当前轮开始时间。
+- `Stop`：计算结束时间、毫秒耗时和展示文本，并写入共享 context。
+- 飞书插件在 Stop 阶段读取 `codex_timer_elapsed_label` 并展示“耗时”字段。
+- 可用 `CODEX_HOOK_TIMER_STATE_PATH` 覆盖状态文件路径。
 
 ## 本地调试
 

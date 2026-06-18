@@ -10,6 +10,7 @@
       *   **阶段选角强制执行**：每进入一个 SDLC 阶段，必须先依据 Skill `software-dev-process-zl` 的阶段边界与当前阶段目标收敛候选角色，再通过 `skills/who/SKILL.md` 的选择规则确定 1 个主角色；只有天然跨域时才允许补 1 个辅助角色。禁止一次性读取整套 `skills/who/roles/` 角色库。
       *   **角色驱动执行**：当前阶段主角色负责阶段判断、文档维护、任务拆解、实施推进与结果验收；高风险任务必须额外指定 `Code Reviewer`、`Security Engineer`、`SRE` 等复核角色。
       *   **默认代码优先策略**：日常开发默认按“先实现业务代码，再补充/更新 PHP 链路探针、通过 `db-query` 组装真实验证数据，最后本地运行验证”的顺序执行。
+      *   **链路输出保真策略**：PHP 链路探针必须保留被测业务函数的原始输出内容，禁止把原函数返回值重构成摘要、改名字段、丢弃字段或替换为自定义包装数据；“是否修改完毕、是否有 bug”等检查结论只能追加到 `assertion`、`verification` 或同级元信息字段，不能覆盖 `data` 中的原始业务输出。
       *   **TDD 明确授权制与 Debug 豁免**：一般新增或重构禁止自动应用测试先行模式（除非用户明确要求 `TDD`、`测试先行` 等）。**豁免规则**：当处于 `sdlc-debug` (Bug排查与修复) 阶段时，默认采用“链路探针复现先行”（即运行 PHP 链路探针验证 Bug 存在 -> 修复逻辑 -> 链路探针回归）的局部复现模式，此场景无需预先授权。Skill `test-driven-development` 不得因常规的“实现功能、重构、行为变更”描述而自动触发。
       *   **质量底线不动摇**：上述规则仅调整“代码与验证脚本的编写先后顺序”，绝不降低最终的链路验证完整性与本地验证标准。
    *   **决策机制**：自主决策技术方案、实现路径、质量标准。仅在触发“红线边界”或特定准入时才阻断流程并询问用户。
@@ -176,7 +177,7 @@
 
    1. **阶段测试选角**：进入 `sdlc-test` 或 `sdlc-debug` 前，必须先按 `software-dev-process-zl` 的阶段边界与阶段目标重新确定主角色；测试阶段主角色通常为 `Code Reviewer` 或 `Senior Developer`，调试阶段主角色通常为 `Senior Developer` 或 `Incident Response Commander`。
    2. **链路脚本验证**：测试过程与结果记录到 `docs/[任务目录]/onlyAI/testing.md` 和 `docs/[任务目录]/onlyAI/verification.md`；`sdlc-test` 不要求新增单元测试，必须复制 `skills/software-dev-process-zl/assets/zl_templete.php` 到 `docs/[任务目录]/[需求标识]_probe.php`，改成当前需求的 PHP 链路探针。
-   3. **统一出口要求**：链路探针必须保留 `run($step)` 统一步骤入口、`step=all` 聚合逻辑、`formatStepResult()` 统一格式化和最终 `echo json_encode(...)` JSON 出口；禁止直接运行或交付模板原文件。
+   3. **统一出口与输出保真要求**：链路探针必须保留 `run($step)` 统一步骤入口、`step=all` 聚合逻辑、`formatStepResult()` 统一格式化和最终 `echo json_encode(...)` JSON 出口；`runStepN()` 调用业务函数后，原函数返回内容必须原样进入 `data` 字段，禁止为了美化、精简或统一格式而重构业务输出；修改完成度、占位逻辑是否清理、断言是否通过、是否发现 bug 等结论必须放到 `assertion`、`verification` 等元信息字段；禁止直接运行或交付模板原文件。
    4. **真实数据组装**：链路验证 payload 必须优先通过 `db-query` 只读查询组装；首次使用前执行 `--list-profiles` 确认 profile。涉及多表读取时必须拆分为多条单表查询，并在 PHP 链路脚本或 payload 组装逻辑中完成关联、计算和格式化；禁止事务、`JOIN` 和数据库函数处理业务逻辑。
    5. **审查报告**：自我审查结论统一写入 `docs/[任务目录]/onlyAI/review-report.md`。
    6. **专项复核**：若 `003-施工文档.md` 中为高风险任务指定了 `Security Engineer`、`SRE`、`Code Reviewer` 等复核角色，收尾阶段必须明确对应复核结论或未执行原因。
@@ -192,7 +193,7 @@
    ## 7. 测试与验证策略 (Testing & Validation)
 
    *   **测试编排**：`sdlc-test` 不要求新增单元测试；必须基于 `skills/software-dev-process-zl/assets/zl_templete.php` 生成需求专属 PHP 链路探针，并通过本地 PHP 执行验证，**绝对禁止使用任何 CI**、远程流水线或人工外包验证。
-   *   **覆盖要求**：链路探针必须覆盖正常流程、边界条件与错误恢复；每个步骤通过 `run($step)` 独立执行，`step=all` 聚合执行并输出统一 JSON。
+   *   **覆盖要求**：链路探针必须覆盖正常流程、边界条件与错误恢复；每个步骤通过 `run($step)` 独立执行，`step=all` 聚合执行并输出统一 JSON；每个步骤输出必须同时包含原始业务输出 `data` 与自检结论 `verification`，用于判断模板占位是否已替换、修改是否完成、是否存在明确 bug。
    *   **真实数据要求**：验证 payload 必须优先通过 `db-query` 只读查询组装，并记录 profile、查询摘要、payload 路径、探针脚本路径和结果 JSON 路径；禁止脚本内嵌凭证、禁止写库。
    *   **记录与评估**：测试输出记录到 `docs/[任务目录]/onlyAI/testing.md` 和 `docs/[任务目录]/onlyAI/verification.md`。无法执行的链路验证需标注原因和风险评估。
    *   **失败应对**：链路验证失败时，报告现象、复现步骤、初步观察，自主决定是否继续或调整策略。**连续 3 次失败必须暂停重新评估**。
@@ -208,7 +209,7 @@
 
    *   **目录落地**：所有任务相关的输出文档（如001至006系列文档、`status.md`、`sql/` 等）必须**全部存放在用户确认的任务目录（`docs/[任务目录]/`）中**。严禁写错路径。
    *   **onlyAI 工作区**：仅供 AI 读取和维护的过程文件必须收拢到 `docs/[任务目录]/onlyAI/`，包括 `structured-request.json`、`context-scan.json`、`context-question-N.json`、`operations-log.md`、`testing.md`、`verification.md`、`review-report.md`。
-   *   **模板引用**：必须准确使用对应 Skill `software-dev-process-zl/assets/` 目录下的中文模板文件（如 `概要设计模板.md`, `详细设计模板.md`, `施工文档模板.md`, `测试用例模板.md`, `测试报告模板.md`, `Debug排查记录模板.md`, `zl_templete.php`, `api_templete.test`）输出，**绝对禁止修改模板文件本身**；测试阶段只允许复制 `software-dev-process-zl/assets/zl_templete.php` 到 `docs/[任务目录]/[需求标识]_probe.php` 后再改造成当前需求链路脚本。
+   *   **模板引用**：必须准确使用对应 Skill `software-dev-process-zl/assets/` 目录下的中文模板文件（如 `概要设计模板.md`, `详细设计模板.md`, `施工文档模板.md`, `测试用例模板.md`, `测试报告模板.md`, `Debug排查记录模板.md`, `zl_templete.php`, `api_templete.test`）输出；测试阶段只允许复制 `software-dev-process-zl/assets/zl_templete.php` 到 `docs/[任务目录]/[需求标识]_probe.php` 后再改造成当前需求链路脚本。复制后的探针允许替换业务依赖、入参构造、步骤调用和断言逻辑，但必须保留 `data` 对原函数输出的完整承载语义，禁止重构输出内容；新增的修改完成度和 bug 检查只能写入自检元信息。
    *   **角色留痕**：`status.md`、`001-概要设计.md`、`002-详细设计.md`、`003-施工文档.md` 至少要记录当前阶段主角色；`003-施工文档.md` 的任务项必须记录执行角色、允许改动文件、交付物、复核角色和验收方式。如采用并行/子代理，还必须记录 `Agent 类型`、并行任务组与并行判定结论。
    *   **施工留痕**：`003-施工文档.md` 的任务项必须记录允许改动文件、交付物、验收方式；如采用并行执行，还必须记录允许读取文件、并行任务组与并行判定结论。
    *   **施工文档维护**：施工过程中必须同步维护 `003-施工文档.md`、`status.md` 和 `onlyAI/operations-log.md`，保证计划、实施、验证三者可追溯。

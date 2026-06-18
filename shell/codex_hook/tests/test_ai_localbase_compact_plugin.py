@@ -84,7 +84,7 @@ class AiLocalbaseCompactPluginTests(unittest.TestCase):
             check=False,
         )
 
-    def test_precompact_uploads_checkpoint_and_outputs_context(self) -> None:
+    def test_precompact_uploads_checkpoint_without_stdout(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = self.make_project(temp_dir)
             fake_script = self.make_fake_ai_localbase(temp_dir)
@@ -105,15 +105,11 @@ class AiLocalbaseCompactPluginTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            output = json.loads(result.stdout)
-            context = output["hookSpecificOutput"]["additionalContext"]
-            self.assertEqual(output["hookSpecificOutput"]["hookEventName"], "PreCompact")
-            self.assertIn("AI LocalBase：PreCompact", context)
-            self.assertIn("doc-test-1", context)
+            self.assertEqual(result.stdout, "")
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state["document_id"], "doc-test-1")
 
-    def test_postcompact_reads_memory_and_outputs_context(self) -> None:
+    def test_postcompact_reads_memory_without_stdout(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = self.make_project(temp_dir)
             fake_script = self.make_fake_ai_localbase(temp_dir)
@@ -137,12 +133,7 @@ class AiLocalbaseCompactPluginTests(unittest.TestCase):
             )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        output = json.loads(result.stdout)
-        context = output["hookSpecificOutput"]["additionalContext"]
-        self.assertEqual(output["hookSpecificOutput"]["hookEventName"], "PostCompact")
-        self.assertIn("AI LocalBase：PostCompact", context)
-        self.assertIn("codex-hook-precompact.md", context)
-        self.assertIn("docs/index.md", context)
+        self.assertEqual(result.stdout, "")
 
 
 if __name__ == "__main__":
