@@ -1,0 +1,28 @@
+FROM node:22-slim
+
+WORKDIR /opt/sdlc-watch
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY app/package*.json ./app/
+WORKDIR /opt/sdlc-watch/app
+RUN npm ci
+
+COPY app/ ./
+COPY indexer.py ../indexer.py
+
+RUN npm run build
+
+ENV SDLC_WATCH_HOST=0.0.0.0 \
+    SDLC_WATCH_PORT=4173 \
+    SDLC_WATCH_PROJECT_ROOT=/workspace/project \
+    SDLC_WATCH_DB_PATH=/data/sdlc_watch.sqlite3 \
+    SDLC_WATCH_DOCS_DIR=docs \
+    SDLC_WATCH_INDEXER_PATH=/opt/sdlc-watch/indexer.py \
+    SDLC_WATCH_PYTHON=python3
+
+EXPOSE 4173
+
+CMD ["node", "server.js"]

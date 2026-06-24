@@ -17,9 +17,14 @@ import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import DatasetRoundedIcon from "@mui/icons-material/DatasetRounded";
 import MenuOpenRoundedIcon from "@mui/icons-material/MenuOpenRounded";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
+import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import { RichTreeView } from "@mui/x-tree-view/RichTreeView";
 import { gsap } from "gsap";
 import { useGSAP } from "@gsap/react";
+import { headingAnchorId, MarkdownText, ProbeAnchorNav } from "./components/markdown";
+import { parseMarkdownBlocks } from "./utils/markdown/parser";
+import { markdownProfile, tableProfile } from "./utils/markdown/profile";
+import { buildProbeBlocks, buildProbeGroups, endpointPath, probeTableRows, shortCellText } from "./utils/markdown/probe";
 import "./styles.css";
 
 gsap.registerPlugin(useGSAP);
@@ -43,12 +48,10 @@ const muiTheme = createTheme({
   },
   typography: {
     fontFamily: [
-      "Inter",
-      "ui-sans-serif",
-      "system-ui",
-      "-apple-system",
-      "BlinkMacSystemFont",
-      "Segoe UI",
+      "Aptos",
+      "HarmonyOS Sans SC",
+      "Source Han Sans SC",
+      "Noto Sans CJK SC",
       "Microsoft YaHei",
       "sans-serif",
     ].join(","),
@@ -81,6 +84,7 @@ const TREE_PANE_MAX_WIDTH = 560;
 const DB_PATH_KEY = "sdlc-watch.dbPath";
 const PROJECT_KEY = "sdlc-watch.selectedProject";
 const TREE_COLLAPSED_KEY = "sdlc-watch.treeCollapsed";
+const DESIGN_STATUS_OPTIONS = ["全部", "草稿", "评审中", "已发布", "已废弃"];
 
 function clampTreePaneWidth(value) {
   const number = Number(value);
@@ -136,19 +140,46 @@ const STAGE_LABELS = {
   review: "自审报告",
   probe_result: "链路探针",
 };
+const UNIFIED_READER_DOCUMENT_TYPES = new Set(["001", "002", "003", "004", "005", "status", "operations", "testing", "verification", "review"]);
 
-function api() {
-  return window.sdlcWatch;
+async function requestJson(path, options = {}) {
+  const response = await fetch(path, {
+    headers: {
+      "content-type": "application/json",
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+  const payload = await response.json().catch(() => ({
+    ok: false,
+    error: "invalid_response",
+    message: "服务端返回内容不是 JSON。",
+  }));
+  return response.ok ? payload : { ok: false, status: response.status, ...payload };
 }
+
+const api = {
+  config: () => requestJson("/api/config"),
+  setDbPath: (dbPath) => requestJson("/api/db-path", {
+    method: "POST",
+    body: JSON.stringify({ dbPath }),
+  }),
+  reindex: () => requestJson("/api/reindex", { method: "POST" }),
+  listRequirements: (limit) => requestJson(`/api/requirements?limit=${encodeURIComponent(limit || 200)}`),
+  getRequirement: (requirement) => requestJson(`/api/requirements/${encodeURIComponent(requirement)}`),
+  getDocument: (document) => requestJson(`/api/documents/${encodeURIComponent(document)}`),
+  search: (query, limit) => requestJson(`/api/search?q=${encodeURIComponent(query)}&limit=${encodeURIComponent(limit || 50)}`),
+};
 
 function parseHash() {
   const params = new URLSearchParams(window.location.hash.slice(1));
+  const status = params.get("status") || "全部";
   return {
     project: params.get("project") || "",
     requirement: params.get("requirement") || "",
     document: params.get("document") || "",
     query: params.get("q") || "",
-    status: params.get("status") || "全部",
+    status: DESIGN_STATUS_OPTIONS.includes(status) ? status : statusChipLabel(status),
   };
 }
 
@@ -173,6 +204,14 @@ function displayDate(value) {
   }).format(date);
 }
 
+function documentSortTime(document) {
+  return String(document?.probe_request_time || document?.updated_at || "");
+}
+
+function displayDocumentTime(document) {
+  return displayDate(documentSortTime(document));
+}
+
 function bytes(value) {
   const size = Number(value) || 0;
   return new Intl.NumberFormat(navigator.languages).format(size);
@@ -185,6 +224,16 @@ function stageLabel(type) {
 function normalizeStatus(value) {
   const text = (value || "").trim();
   return text || "未标记";
+}
+
+function statusChipLabel(value) {
+  const text = normalizeStatus(value);
+  if (text === "全部") return text;
+  if (/完成|发布|通过|就绪/.test(text)) return "已发布";
+  if (/废弃|取消|归档/.test(text)) return "已废弃";
+  if (/评审|审核|确认/.test(text)) return "评审中";
+  if (/未标记|草稿|待/.test(text)) return "草稿";
+  return text.length > 5 ? `${text.slice(0, 5)}…` : text;
 }
 
 function projectOf(item) {
@@ -240,231 +289,6 @@ function documentDisplayTitle(document, requirement) {
   return document.title || document.relative_path || "文档阅读";
 }
 
-function splitTableRow(line) {
-  return line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
-}
-
-function markdownProfile(content) {
-  const text = content || "";
-  const isWorkPhp = text.includes("# 执行结果") && text.includes("执行命令：`docker exec work php");
-  const isProbe = text.includes("| 接口地址 | 入参 | 出参 |") || text.includes("probe_result") || text.includes("management_backend_cleanup_probe");
-  return [
-    isWorkPhp ? "work-php-report" : "",
-    isProbe ? "probe-report" : "",
-  ].filter(Boolean).join(" ");
-}
-
-function tableProfile(rows) {
-  const headerText = (rows[0] || []).join(" ");
-  if (headerText.includes("接口地址") && headerText.includes("测试结果") && headerText.includes("关联脚本文件")) {
-    return "probe-table";
-  }
-  return "";
-}
-
-function cellLineClass(line) {
-  const text = String(line);
-  const isJson = /^\{|\}$|^\[|\]$/.test(text) || /":\s*/.test(text);
-  const isRisk = /失败|Authentication failure|error|failed|超时|风险|warnings|migration_gap|未执行|未配置/i.test(text);
-  if (/^(JSON|字段说明|数据来源|环境|边界条件)/.test(text)) return "cell-kicker";
-  if (/dry-run|不调用真实发送|不真实发送|不写库/.test(text)) return "cell-guard";
-  if (/^(通过|检查通过|测试通过)/.test(text) || /"passed":\s*true/.test(text)) return "cell-pass";
-  if (isJson && isRisk) return "cell-json cell-json-risk";
-  if (isJson) return "cell-json";
-  if (isRisk) return "cell-risk";
-  return "";
-}
-
-function renderInlineText(text, keyPrefix) {
-  const parts = String(text).split(/(`[^`]+`)/g);
-  return parts.map((part, index) => {
-    if (part.startsWith("`") && part.endsWith("`")) {
-      return <code className="inline-code" key={`${keyPrefix}-code-${index}`}>{part.slice(1, -1)}</code>;
-    }
-    return <React.Fragment key={`${keyPrefix}-text-${index}`}>{part}</React.Fragment>;
-  });
-}
-
-function renderTableCell(cell, keyPrefix) {
-  return String(cell).split(/<br\s*\/?>/i).map((line, index) => (
-    <span className={`cell-line ${cellLineClass(line)}`} key={`${keyPrefix}-line-${index}`}>
-      {renderInlineText(line, `${keyPrefix}-${index}`)}
-    </span>
-  ));
-}
-
-function normalizedProbeHeader(value) {
-  return String(value || "").replace(/\s+/g, "");
-}
-
-function probeCell(row, header, names) {
-  const targets = new Set(names.map(normalizedProbeHeader));
-  const index = header.findIndex((item) => targets.has(normalizedProbeHeader(item)));
-  return index >= 0 ? row[index] || "" : "";
-}
-
-function probeBlockId(blockKey, rowIndex) {
-  return `probe-${blockKey}-${rowIndex}`.replace(/[^a-zA-Z0-9_-]/g, "-");
-}
-
-function shortProbeAnchor(value, index) {
-  const text = String(value || "").split(/<br\s*\/?>/i)[0].replace(/`/g, "").trim();
-  return text || `接口 ${index + 1}`;
-}
-
-function shortProbeTime(value) {
-  return String(value || "")
-    .replace(/<br\s*\/?>/gi, " ")
-    .replace(/`/g, "")
-    .trim();
-}
-
-function probeTimeRank(value) {
-  const text = shortProbeTime(value);
-  const match = text.match(/(\d{4})-(\d{2})-(\d{2})(?:[\sT-]+(\d{1,2})(?:时|:)(\d{1,2})(?:分|:)?(\d{1,2})?)?/);
-  if (!match) return 0;
-  const [, year, month, day, hour = "0", minute = "0", second = "0"] = match;
-  const time = new Date(
-    Number(year),
-    Number(month) - 1,
-    Number(day),
-    Number(hour),
-    Number(minute),
-    Number(second),
-  ).getTime();
-  return Number.isNaN(time) ? 0 : time;
-}
-
-function ProbeReportBlocks({ header, rows, blockKey }) {
-  const blocks = rows
-    .map((row, rowIndex) => {
-      const requestTime = probeCell(row, header, ["请求时间"]);
-      return {
-        id: probeBlockId(blockKey, rowIndex),
-        rowIndex,
-        row,
-        endpoint: probeCell(row, header, ["接口地址"]),
-        input: probeCell(row, header, ["入参"]),
-        output: probeCell(row, header, ["出参"]),
-        condition: probeCell(row, header, ["测试条件"]),
-        boundary: probeCell(row, header, ["边界条件"]),
-        result: probeCell(row, header, ["测试结果"]),
-        requestTime,
-        requestTimeRank: probeTimeRank(requestTime),
-        script: probeCell(row, header, ["关联脚本文件"]),
-      };
-    })
-    .sort((left, right) => right.requestTimeRank - left.requestTimeRank || left.rowIndex - right.rowIndex);
-
-  const scrollToProbeBlock = (event, id) => {
-    event.preventDefault();
-    document.getElementById(id)?.scrollIntoView({ block: "start", behavior: "smooth" });
-  };
-
-  return (
-    <section className="probe-block-layout" aria-label="链路探针结果">
-      <div className="probe-block-list">
-        {blocks.map((block, index) => (
-          <article className="probe-case-card" id={block.id} key={block.id}>
-            <header className="probe-case-header">
-              <div className="probe-case-title">
-                <span>接口 {index + 1}</span>
-                <h4>{renderTableCell(block.endpoint, `${block.id}-endpoint`)}</h4>
-              </div>
-              <div className="probe-case-meta">
-                <div>{renderTableCell(block.result, `${block.id}-result`)}</div>
-                {block.requestTime && <time>{renderTableCell(block.requestTime, `${block.id}-time`)}</time>}
-              </div>
-            </header>
-            <div className="probe-case-grid">
-              <section className="probe-field probe-field-wide probe-field-io probe-field-input">
-                <h5>入参</h5>
-                <div>{renderTableCell(block.input, `${block.id}-input`)}</div>
-              </section>
-              <section className="probe-field probe-field-wide probe-field-io probe-field-output">
-                <h5>出参</h5>
-                <div>{renderTableCell(block.output, `${block.id}-output`)}</div>
-              </section>
-              <section className="probe-field">
-                <h5>测试条件</h5>
-                <div>{renderTableCell(block.condition, `${block.id}-condition`)}</div>
-              </section>
-              <section className="probe-field">
-                <h5>边界条件</h5>
-                <div>{renderTableCell(block.boundary, `${block.id}-boundary`)}</div>
-              </section>
-              <section className="probe-field">
-                <h5>关联脚本文件</h5>
-                <div>{renderTableCell(block.script, `${block.id}-script`)}</div>
-              </section>
-            </div>
-          </article>
-        ))}
-      </div>
-      <nav className="probe-anchor-nav" aria-label="链路探针接口定位">
-        <h4>接口定位</h4>
-        {blocks.map((block, index) => (
-          <a href={`#${block.id}`} key={`${block.id}-anchor`} onClick={(event) => scrollToProbeBlock(event, block.id)}>
-            <span>{String(index + 1).padStart(2, "0")}</span>
-            <span className="probe-anchor-copy">
-              <strong>{shortProbeAnchor(block.endpoint, index)}</strong>
-              {block.requestTime && <em>{shortProbeTime(block.requestTime)}</em>}
-            </span>
-          </a>
-        ))}
-      </nav>
-    </section>
-  );
-}
-
-function parseMarkdownBlocks(content) {
-  const lines = (content || "").split(/\r?\n/);
-  const blocks = [];
-  let index = 0;
-  while (index < lines.length) {
-    const line = lines[index];
-    if (line.startsWith("```")) {
-      const language = line.slice(3).trim();
-      const code = [];
-      index += 1;
-      while (index < lines.length && !lines[index].startsWith("```")) {
-        code.push(lines[index]);
-        index += 1;
-      }
-      blocks.push({ type: "code", language, code: code.join("\n") });
-      index += 1;
-      continue;
-    }
-    if (/^\|.+\|$/.test(line)) {
-      const rows = [];
-      while (index < lines.length && /^\|.+\|$/.test(lines[index])) {
-        rows.push(splitTableRow(lines[index]));
-        index += 1;
-      }
-      blocks.push({ type: "table", rows });
-      continue;
-    }
-    if (/^\s*[-*]\s+/.test(line)) {
-      const items = [];
-      while (index < lines.length && /^\s*[-*]\s+/.test(lines[index])) {
-        items.push(lines[index].replace(/^\s*[-*]\s+/, "").trim());
-        index += 1;
-      }
-      blocks.push({ type: "list", items });
-      continue;
-    }
-    if (line.startsWith("### ")) blocks.push({ type: "h3", text: line.slice(4) });
-    else if (line.startsWith("## ")) blocks.push({ type: "h2", text: line.slice(3) });
-    else if (line.startsWith("# ")) blocks.push({ type: "h1", text: line.slice(2) });
-    else if (line.startsWith("> ")) blocks.push({ type: "quote", text: line.slice(2) });
-    else if (/^---+$/.test(line.trim())) blocks.push({ type: "hr" });
-    else if (line.trim()) blocks.push({ type: "paragraph", text: line });
-    else blocks.push({ type: "space" });
-    index += 1;
-  }
-  return blocks;
-}
-
 function EmptyState({ title, detail }) {
   return (
     <Paper className="empty-state" elevation={0} role="status" aria-live="polite">
@@ -493,68 +317,87 @@ function SdlcTree({ items, selectedItem, expandedItems, onExpandedItemsChange, o
   );
 }
 
-function MarkdownText({ content }) {
-  const blocks = useMemo(() => parseMarkdownBlocks(content), [content]);
-  const profileClass = useMemo(() => markdownProfile(content), [content]);
-  if (!content) {
-    return <EmptyState title="未选择文档" detail="选择阶段文档后会在这里显示全文。" />;
-  }
+function DocumentAddressNav({ documents, selectedDocument, onOpenDocument }) {
+  const documentCount = new Intl.NumberFormat(navigator.languages).format(documents.length);
   return (
-    <article className={`markdown-view ${profileClass}`}>
-      {blocks.map((block, index) => {
-        const key = `${block.type}-${index}`;
-        if (block.type === "h1") return <h1 key={key}>{block.text}</h1>;
-        if (block.type === "h2") return <h2 key={key}>{block.text}</h2>;
-        if (block.type === "h3") return <h3 key={key}>{block.text}</h3>;
-        if (block.type === "quote") return <blockquote key={key}>{block.text}</blockquote>;
-        if (block.type === "hr") return <hr key={key} />;
-        if (block.type === "space") return <div key={key} className="markdown-space" />;
-        if (block.type === "list") {
+    <Paper component="aside" elevation={0} className="address-nav" aria-labelledby="address-nav-heading">
+      <div className="address-nav-heading">
+        <div>
+          <h2 id="address-nav-heading">地址导航</h2>
+          <p>{documentCount} 份阶段文档</p>
+        </div>
+        <RefreshRoundedIcon fontSize="small" aria-hidden="true" />
+      </div>
+      <div className="address-search" aria-hidden="true">
+        <SearchRoundedIcon fontSize="small" />
+        <span>搜索文档地址...</span>
+      </div>
+      <div className="address-nav-list">
+        {documents.map((document) => {
+          const active = selectedDocument?.id === document.id;
           return (
-            <ul key={key}>
-              {block.items.map((item, itemIndex) => <li key={`${key}-${itemIndex}`}>{renderInlineText(item, `${key}-li-${itemIndex}`)}</li>)}
-            </ul>
+            <button
+              type="button"
+              className={`address-nav-item ${active ? "is-active" : ""}`}
+              key={document.id}
+              onClick={() => onOpenDocument(document)}
+            >
+              <span className={`address-method address-method-${String(document.document_type || "doc").replace(/[^a-z0-9_-]/gi, "-").toLowerCase()}`}>
+                {stageLabel(document.document_type).slice(0, 4)}
+              </span>
+              <span className="address-copy">
+                <strong>{document.title || document.relative_path}</strong>
+                <em translate="no">{document.relative_path}</em>
+              </span>
+            </button>
           );
-        }
-        if (block.type === "table") {
-          const [header = [], divider = [], ...body] = block.rows;
-          const rows = divider.every((cell) => /^:?-{3,}:?$/.test(cell)) ? body : [divider, ...body].filter((row) => row.length);
-          const tableClass = tableProfile(block.rows);
-          if (tableClass === "probe-table") {
-            return <ProbeReportBlocks header={header} rows={rows} blockKey={key} key={key} />;
-          }
-          return (
-            <div className={`table-wrap ${tableClass}`} key={key}>
-              <table>
-                <thead>
-                  <tr>{header.map((cell, cellIndex) => <th key={`${key}-h-${cellIndex}`}>{renderTableCell(cell, `${key}-h-${cellIndex}`)}</th>)}</tr>
-                </thead>
-                <tbody>
-                  {rows.map((row, rowIndex) => (
-                    <tr key={`${key}-r-${rowIndex}`}>
-                      {row.map((cell, cellIndex) => <td key={`${key}-c-${rowIndex}-${cellIndex}`}>{renderTableCell(cell, `${key}-c-${rowIndex}-${cellIndex}`)}</td>)}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          );
-        }
-        if (block.type === "code") {
-          return (
-            <pre key={key} className="code-block">
-              <code>{block.code}</code>
-            </pre>
-          );
-        }
-        return <p key={key}>{block.text}</p>;
-      })}
-    </article>
+        })}
+      </div>
+    </Paper>
+  );
+}
+
+function HeadingAnchorNav({ headings }) {
+  const [open, setOpen] = useState(false);
+
+  const scrollToHeading = (event, id) => {
+    event.preventDefault();
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    document.getElementById(id)?.scrollIntoView({ block: "start", behavior: reduceMotion ? "auto" : "smooth" });
+  };
+
+  if (!headings.length) return null;
+
+  return (
+    <Paper component="nav" className={`floating-anchor-nav heading-anchor-nav ${open ? "is-open" : ""}`} aria-label="文档标题导航" elevation={0}>
+      <button
+        type="button"
+        className="floating-anchor-trigger"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        标题导航
+      </button>
+      <div className="floating-anchor-panel">
+        <h4>标题导航</h4>
+        {headings.map((heading) => (
+          <a
+            href={`#${heading.id}`}
+            className={`heading-anchor-item heading-anchor-${heading.level}`}
+            key={heading.id}
+            onClick={(event) => scrollToHeading(event, heading.id)}
+          >
+            <span>{heading.text}</span>
+          </a>
+        ))}
+      </div>
+    </Paper>
   );
 }
 
 function App() {
   const rootRef = useRef(null);
+  const topSearchRef = useRef(null);
   const hash = useMemo(() => parseHash(), []);
   const [config, setConfig] = useState(null);
   const [dbPathInput, setDbPathInput] = useState(readStoredDbPath);
@@ -573,6 +416,8 @@ function App() {
   const [indexDialogOpen, setIndexDialogOpen] = useState(false);
   const [indexDialogMode, setIndexDialogMode] = useState("actions");
   const [isResizingTree, setIsResizingTree] = useState(false);
+  const [probeViewMode, setProbeViewMode] = useState("v2");
+  const [selectedProbePath, setSelectedProbePath] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("正在读取索引…");
   const deferredQuery = useDeferredValue(query);
@@ -618,7 +463,7 @@ function App() {
 
   const openDocument = useCallback(async (item) => {
     setMessage(`正在打开 ${item.relative_path}…`);
-    const result = await api().getDocument(String(item.id));
+    const result = await api.getDocument(String(item.id));
     if (!result.ok) {
       setMessage(result.message || "读取文档失败。");
       return;
@@ -633,7 +478,7 @@ function App() {
     setSelectedDocument(null);
     setDocuments([]);
     setMessage(`正在读取 ${shortRequirementName(item)}…`);
-    const result = await api().getRequirement(String(item.id));
+    const result = await api.getRequirement(String(item.id));
     if (!result.ok) {
       setMessage(result.message || "读取需求详情失败。");
       return;
@@ -665,7 +510,7 @@ function App() {
     if (!targets.length) return;
     const loaded = await Promise.all(
       targets.map(async (item) => {
-        const result = await api().getRequirement(String(item.id));
+        const result = await api.getRequirement(String(item.id));
         return [String(item.id), result.ok ? result.documents || [] : []];
       }),
     );
@@ -679,17 +524,17 @@ function App() {
   const loadRequirements = useCallback(async (preferredSlug = "") => {
     setBusy(true);
     setMessage("正在读取需求列表…");
-    const configResult = await api().config();
+    const configResult = await api.config();
     let activeConfig = configResult;
     const storedDbPath = readStoredDbPath();
     if (configResult.ok && storedDbPath && storedDbPath !== configResult.dbPath) {
-      activeConfig = await api().setDbPath(storedDbPath);
+      activeConfig = await api.setDbPath(storedDbPath);
     }
     if (activeConfig.ok) {
       setConfig(activeConfig);
       setDbPathInput(activeConfig.dbPath || "");
     }
-    const listResult = await api().listRequirements(500);
+    const listResult = await api.listRequirements(500);
     if (!listResult.ok) {
       setMessage(listResult.message || "读取需求列表失败。请先刷新索引。");
       setRequirements([]);
@@ -767,7 +612,7 @@ function App() {
         setSearchResults([]);
         return;
       }
-      const result = await api().search(text, 24);
+      const result = await api.search(text, 24);
       if (!cancelled) setSearchResults(result.ok ? result.results || [] : []);
     };
     run();
@@ -776,15 +621,14 @@ function App() {
     };
   }, [deferredQuery]);
 
-  const statusOptions = useMemo(() => {
-    const values = new Set(requirements.map((item) => normalizeStatus(item.status)));
-    return ["全部", ...Array.from(values).sort((a, b) => a.localeCompare(b, "zh-CN"))];
-  }, [requirements]);
+  const statusOptions = DESIGN_STATUS_OPTIONS;
+  const statusPillOptions = DESIGN_STATUS_OPTIONS;
 
   const filteredRequirements = useMemo(() => {
     const text = deferredQuery.trim().toLowerCase();
     return requirements.filter((item) => {
-      const matchesStatus = statusFilter === "全部" || normalizeStatus(item.status) === statusFilter;
+      const normalizedStatus = statusChipLabel(item.status);
+      const matchesStatus = statusFilter === "全部" || normalizedStatus === statusFilter;
       const haystack = `${item.slug} ${item.title} ${item.summary} ${item.root_path} ${projectOf(item)}`.toLowerCase();
       return matchesStatus && (!text || haystack.includes(text));
     });
@@ -793,7 +637,9 @@ function App() {
   const groupedDocuments = useMemo(() => {
     return [...documents].sort((a, b) => {
       const stage = String(a.document_type).localeCompare(String(b.document_type));
-      return stage || String(a.relative_path).localeCompare(String(b.relative_path));
+      if (stage) return stage;
+      const time = documentSortTime(b).localeCompare(documentSortTime(a));
+      return time || String(a.relative_path).localeCompare(String(b.relative_path));
     });
   }, [documents]);
 
@@ -805,7 +651,12 @@ function App() {
     const requirementNodes = projectRequirements.map((requirement) => {
       const requirementId = requirementTreeId(requirement);
       nodes.set(requirementId, { type: "requirement", requirement });
-      const docs = documentMap.get(String(requirement.id)) || [];
+      const docs = [...(documentMap.get(String(requirement.id)) || [])].sort((a, b) => {
+        const stage = String(a.document_type).localeCompare(String(b.document_type));
+        if (stage) return stage;
+        const time = documentSortTime(b).localeCompare(documentSortTime(a));
+        return time || String(a.relative_path).localeCompare(String(b.relative_path));
+      });
       const normalDocs = [];
       const execGroups = new Map();
       for (const document of docs) {
@@ -885,18 +736,57 @@ function App() {
       ? requirementTreeId(selectedRequirement)
       : "";
   const selectedReaderMode = selectedDocument?.content
-    ? markdownProfile(selectedDocument.content)
+    ? markdownProfile(selectedDocument.content, selectedDocument.document_type)
         .split(" ")
         .filter(Boolean)
         .map((name) => `reader-${name}`)
         .join(" ")
     : "";
+  const selectedReaderDocumentType = `reader-doc-${String(selectedDocument?.document_type || "empty").replace(/[^a-z0-9_-]/gi, "-").toLowerCase()}`;
+  const omitFirstMarkdownHeading = selectedDocument ? UNIFIED_READER_DOCUMENT_TYPES.has(selectedDocument.document_type) : false;
+  const probeAnchorBlocks = useMemo(() => {
+    if (!selectedReaderMode.includes("probe-report") || !selectedDocument?.content) return [];
+    return parseMarkdownBlocks(selectedDocument.content).flatMap((block, index) => {
+      if (block.type !== "table" || tableProfile(block.rows) !== "probe-table") return [];
+      const { header, rows } = probeTableRows(block.rows);
+      return buildProbeBlocks(header, rows, `${block.type}-${index}`);
+    });
+  }, [selectedDocument?.content, selectedReaderMode]);
+  const probeGroups = useMemo(() => buildProbeGroups(probeAnchorBlocks), [probeAnchorBlocks]);
+  useEffect(() => {
+    if (!probeGroups.length) {
+      setSelectedProbePath("");
+      return;
+    }
+    if (!probeGroups.some((group) => group.key === selectedProbePath)) {
+      setSelectedProbePath(probeGroups[0].key);
+    }
+  }, [probeGroups, selectedProbePath]);
+  const selectedProbeGroup = probeGroups.find((group) => group.key === selectedProbePath) || probeGroups[0] || null;
+  const documentHeadingAnchors = useMemo(() => {
+    if (probeAnchorBlocks.length || !selectedDocument?.content) return [];
+    const blocks = parseMarkdownBlocks(selectedDocument.content);
+    const firstContentBlockIndex = blocks.findIndex((block) => block.type !== "space");
+    return blocks.flatMap((block, index) => {
+      if (omitFirstMarkdownHeading && index === firstContentBlockIndex && block.type === "h1") return [];
+      if (!["h1", "h2", "h3"].includes(block.type)) return [];
+      const text = String(block.text || "").trim();
+      if (!text) return [];
+      return [{ id: headingAnchorId(index), level: block.type, text }];
+    });
+  }, [omitFirstMarkdownHeading, probeAnchorBlocks.length, selectedDocument?.content]);
+  const readerDisplayTitle = probeViewMode === "v2" && selectedProbeGroup
+    ? `${selectedProbeGroup.path}（${selectedProbeGroup.blocks.length} 次请求）`
+    : probeAnchorBlocks.length
+    ? `${endpointPath(probeAnchorBlocks[0].endpoint)}（${shortCellText(probeAnchorBlocks[0].result, "成功").replace(/^通过[:：]?\s*/, "")}）`
+    : documentDisplayTitle(selectedDocument, selectedRequirement);
+  const isProbeDocument = probeAnchorBlocks.length > 0;
 
   const applyDbPath = async () => {
     const nextDbPath = dbPathInput.trim();
     setBusy(true);
     setMessage("正在切换 SQLite 索引库…");
-    const result = await api().setDbPath(nextDbPath);
+    const result = await api.setDbPath(nextDbPath);
     if (!result.ok) {
       setMessage(result.message || "切换索引库失败。");
       setBusy(false);
@@ -905,7 +795,7 @@ function App() {
     try {
       window.localStorage.setItem(DB_PATH_KEY, result.dbPath || nextDbPath);
     } catch (_error) {
-      // localStorage 不可用时仅在本次 Electron 进程内生效。
+      // localStorage 不可用时仅在本次浏览器会话内生效。
     }
     setConfig(result);
     setDbPathInput(result.dbPath || nextDbPath);
@@ -925,7 +815,7 @@ function App() {
   const refreshIndex = async () => {
     setBusy(true);
     setMessage("正在刷新 SQLite 索引…");
-    const result = await api().reindex();
+    const result = await api.reindex();
     if (!result.ok) {
       setMessage(result.message || "刷新索引失败。");
       setBusy(false);
@@ -961,13 +851,6 @@ function App() {
   }, [config?.dbPath]);
 
   useEffect(() => {
-    const unsubscribe = api().onOpenIndexDialog?.(openIndexDialog);
-    return () => {
-      if (typeof unsubscribe === "function") unsubscribe();
-    };
-  }, [openIndexDialog]);
-
-  useEffect(() => {
     const handleIndexShortcut = (event) => {
       if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.key.toLowerCase() !== "u") return;
       event.preventDefault();
@@ -976,6 +859,16 @@ function App() {
     window.addEventListener("keydown", handleIndexShortcut);
     return () => window.removeEventListener("keydown", handleIndexShortcut);
   }, [openIndexDialog]);
+
+  useEffect(() => {
+    const handleSearchShortcut = (event) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "k") return;
+      event.preventDefault();
+      topSearchRef.current?.focus();
+    };
+    window.addEventListener("keydown", handleSearchShortcut);
+    return () => window.removeEventListener("keydown", handleSearchShortcut);
+  }, []);
 
   const refreshIndexFromDialog = async () => {
     const ok = await refreshIndex();
@@ -1066,10 +959,58 @@ function App() {
   }, []);
 
   return (
-    <div className={`app-shell ${isResizingTree ? "is-resizing-tree" : ""}`} ref={rootRef}>
+    <div className={`app-shell document-layout ${isProbeDocument ? "is-probe-document" : ""} ${isProbeDocument && probeViewMode === "v2" ? "is-probe-v2" : ""} ${isResizingTree ? "is-resizing-tree" : ""}`} ref={rootRef}>
+      <a className="skip-link" href="#main-content">跳到正文</a>
+      <header className="top-shell-bar">
+        <div className="top-brand">
+          <div className="product-mark" aria-hidden="true">D</div>
+          <strong>DocView 文档查看器</strong>
+        </div>
+        <label className="top-project-switcher" aria-label="项目切换">
+          <select value={activeProject} onChange={(event) => selectProject(event.target.value)} aria-label="项目切换">
+            {projects.map((item) => (
+              <option key={item.name} value={item.name}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="top-breadcrumb" aria-label="当前位置">
+          {selectedRequirement && <span>{shortRequirementName(selectedRequirement)}</span>}
+          <span>{selectedDocument?.relative_path || selectedRequirement?.root_path || "请选择文档"}</span>
+        </div>
+        <label className="top-search" htmlFor="top-global-search">
+          <SearchRoundedIcon fontSize="small" />
+          <input
+            id="top-global-search"
+            ref={topSearchRef}
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索文档、接口、脚本文件..."
+            autoComplete="off"
+          />
+          <kbd>⌘K</kbd>
+        </label>
+        <Button
+          type="button"
+          className="top-index-button"
+          variant="outlined"
+          startIcon={<DatasetRoundedIcon />}
+          onClick={openIndexDialog}
+          disabled={busy}
+        >
+          索引维护
+        </Button>
+        <div className="top-user">
+          <span>张</span>
+          <strong>张三</strong>
+        </div>
+      </header>
       <main
         id="main-content"
-        className={`workspace-grid ${isTreeCollapsed ? "is-tree-collapsed" : ""}`}
+        className={`workspace-grid ${isTreeCollapsed ? "is-tree-collapsed" : ""} ${probeAnchorBlocks.length ? "has-probe-nav" : "no-right-nav"}`}
+        tabIndex={-1}
         style={{
           "--tree-pane-width": `${isTreeCollapsed ? 52 : treePaneWidth}px`,
           "--tree-resizer-width": isTreeCollapsed ? "0rem" : "0.42rem",
@@ -1078,7 +1019,7 @@ function App() {
         <Paper
           component="section"
           elevation={0}
-          className={`workspace-pane tree-pane ${isTreeCollapsed ? "is-collapsed" : ""}`}
+          className={`workspace-pane tree-pane tree-pane-doc ${isTreeCollapsed ? "is-collapsed" : ""}`}
           aria-labelledby="tree-heading"
         >
           <div className="tree-collapse-rail">
@@ -1099,7 +1040,7 @@ function App() {
             <>
               <div className="pane-heading">
                 <div>
-                  <h2 id="tree-heading">项目文档树</h2>
+                  <h2 id="tree-heading">文档目录</h2>
                   <p>{new Intl.NumberFormat(navigator.languages).format(projects.length)} 个启动目录 · {new Intl.NumberFormat(navigator.languages).format(filteredRequirements.length)} 个需求</p>
                 </div>
               </div>
@@ -1123,7 +1064,7 @@ function App() {
             <TextField
               id="sdlc-search"
               name="sdlc-search"
-              className="text-input"
+              className="text-input tree-search-input"
               type="search"
               label="搜索"
               value={query}
@@ -1135,7 +1076,7 @@ function App() {
             <TextField
               id="status-filter"
               name="status-filter"
-              className="text-input"
+              className="text-input status-filter-input"
               select
               label="状态"
               value={statusFilter}
@@ -1146,6 +1087,18 @@ function App() {
                 <MenuItem key={item} value={item}>{item}</MenuItem>
               ))}
             </TextField>
+            <div className="tree-status-pills" aria-label="状态筛选">
+              {statusPillOptions.map((item) => (
+                <button
+                  type="button"
+                  key={item}
+                  className={`tree-status-pill ${statusFilter === item ? "is-active" : ""}`}
+                  onClick={() => setStatusFilter(item)}
+                >
+                  {statusChipLabel(item)}
+                </button>
+              ))}
+            </div>
               </div>
               <div className="tree-scroll">
                 <SdlcTree
@@ -1170,29 +1123,46 @@ function App() {
           onKeyDown={handleResizeKeyDown}
         />
 
-        <Paper component="section" elevation={0} className={`workspace-pane reader-pane reader-pane-wide ${selectedReaderMode}`} aria-labelledby="reader-heading">
+        <Paper component="section" elevation={0} className={`workspace-pane reader-pane reader-pane-wide ${selectedReaderDocumentType} ${selectedReaderMode}`} aria-labelledby="reader-heading">
           <div className="pane-heading reader-heading">
             <div className="min-w-0">
-              <h2 id="reader-heading">{documentDisplayTitle(selectedDocument, selectedRequirement)}</h2>
-              <p translate="no">{selectedDocument?.relative_path || selectedRequirement?.root_path || message}</p>
+              <h2 id="reader-heading">
+                <span>{readerDisplayTitle}</span>
+                {selectedDocument && <em className="doc-status-pill">已发布</em>}
+              </h2>
+              <p translate="no">路径：{selectedDocument?.relative_path || selectedRequirement?.root_path || message}</p>
             </div>
+            {isProbeDocument && (
+              <div className="probe-style-switch">
+                <span>样式模式</span>
+                <Button
+                  className="probe-style-toggle"
+                  variant={probeViewMode === "v2" ? "contained" : "outlined"}
+                  size="small"
+                  aria-pressed={probeViewMode === "v2"}
+                onClick={() => setProbeViewMode((current) => (current === "v2" ? "v1" : "v2"))}
+              >
+                  {probeViewMode === "v2" ? "V2 样式" : "V1 样式"}
+              </Button>
+              </div>
+            )}
           </div>
           <dl className="reader-summary-strip">
             <div>
-              <dt>项目</dt>
-              <dd translate="no">{activeProject || "-"}</dd>
+              <dt>文档编号</dt>
+              <dd translate="no">{selectedDocument?.id ? `DOC_${String(selectedDocument.id).padStart(3, "0")}` : "-"}</dd>
             </div>
             <div>
-              <dt>需求</dt>
-              <dd>{selectedRequirement ? shortRequirementName(selectedRequirement) : "-"}</dd>
+              <dt>版本</dt>
+              <dd translate="no">v1.0.0</dd>
             </div>
             <div>
-              <dt>阶段文档</dt>
-              <dd>{new Intl.NumberFormat(navigator.languages).format(groupedDocuments.length)}</dd>
+              <dt>创建人</dt>
+              <dd>Codex</dd>
             </div>
             <div className="reader-status-summary">
-              <dt>状态</dt>
-              <dd>{normalizeStatus(selectedRequirement?.status)}</dd>
+              <dt>更新时间</dt>
+              <dd>{selectedDocument ? displayDocumentTime(selectedDocument) : "-"}</dd>
             </div>
           </dl>
           {selectedDocument && (
@@ -1200,11 +1170,28 @@ function App() {
               <div><dt>项目</dt><dd translate="no">{activeProject}</dd></div>
               <div><dt>类型</dt><dd>{stageLabel(selectedDocument.document_type)}</dd></div>
               <div><dt>大小</dt><dd>{bytes(selectedDocument.size_bytes)} bytes</dd></div>
-              <div><dt>更新</dt><dd>{displayDate(selectedDocument.updated_at)}</dd></div>
+              <div><dt>更新</dt><dd>{displayDocumentTime(selectedDocument)}</dd></div>
             </dl>
           )}
-          <MarkdownText content={selectedDocument?.content || ""} />
+          <MarkdownText
+            content={selectedDocument?.content || ""}
+            documentType={selectedDocument?.document_type || ""}
+            omitFirstHeading={omitFirstMarkdownHeading}
+            probeViewMode={probeViewMode}
+            selectedProbePath={selectedProbePath}
+          />
         </Paper>
+
+        {probeAnchorBlocks.length
+          ? (
+              <ProbeAnchorNav
+                blocks={probeAnchorBlocks}
+                probeViewMode={probeViewMode}
+                selectedProbePath={selectedProbePath}
+                onSelectProbePath={setSelectedProbePath}
+              />
+            )
+          : <HeadingAnchorNav headings={documentHeadingAnchors} />}
       </main>
 
       <footer className="status-bar" role="status" aria-live="polite">
@@ -1217,10 +1204,13 @@ function App() {
         onClose={() => setIndexDialogOpen(false)}
         maxWidth={false}
         fullWidth={false}
-        PaperProps={{ className: `index-dialog-paper index-dialog-${indexDialogMode}` }}
+        slotProps={{ paper: { className: `index-dialog-paper index-dialog-${indexDialogMode}` } }}
       >
         <DialogTitle className="index-dialog-title">
-          <span>索引维护</span>
+          <div className="index-dialog-heading">
+            <span>索引维护</span>
+            <small>{indexDialogMode === "database" ? "切换 SQLite 文件后会重新加载项目树" : "刷新 docs 索引或切换 SQLite 数据源"}</small>
+          </div>
           <IconButton aria-label="关闭索引维护弹窗" onClick={() => setIndexDialogOpen(false)} size="small">
             <CloseRoundedIcon fontSize="small" />
           </IconButton>
@@ -1235,7 +1225,7 @@ function App() {
               </button>
               <button type="button" className="index-action-card" onClick={() => setIndexDialogMode("database")} disabled={busy}>
                 <DatasetRoundedIcon />
-                <span>更新数据库</span>
+                <span>更新索引位置</span>
                 <small>切换 SQLite 文件路径，应用后重新加载项目树。</small>
               </button>
             </div>
@@ -1245,7 +1235,7 @@ function App() {
                 id="dialog-db-path-input"
                 name="dialog-db-path-input"
                 className="text-input"
-                label="SQLite 索引库地址"
+                label="SQLite 索引库位置"
                 value={dbPathInput}
                 onChange={(event) => setDbPathInput(event.target.value)}
                 onKeyDown={(event) => {
@@ -1253,7 +1243,6 @@ function App() {
                 }}
                 placeholder="输入 SQLite 文件路径…"
                 autoComplete="off"
-                autoFocus
                 fullWidth
               />
               <p translate="no">{config?.dbPath || "当前未读取到索引库路径"}</p>

@@ -2,7 +2,7 @@
 """SDLC 文档 SQLite 索引器。
 
 该模块只扫描项目 `docs/*` 下的白名单 Markdown 文档，不读取凭证类文件。
-CLI 固定输出 JSON，方便 hook、Electron 客户端和测试脚本复用。
+CLI 固定输出 JSON，方便 hook、Web 服务和测试脚本复用。
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ ONLY_AI_DOC_NAMES = {
 }
 DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 EXEC_RESULT_RE = re.compile(r"^\d{1,2}时\d{1,2}分\d{1,2}秒\.md$", re.IGNORECASE)
+PROBE_REQUEST_TIME_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})[ T](\d{1,2}):(\d{2}):(\d{2})\b")
 
 
 def now_text() -> str:
@@ -55,6 +56,24 @@ def json_default(value: Any) -> str:
     if isinstance(value, Path):
         return str(value)
     return str(value)
+
+
+def normalize_probe_request_time(raw_value: str) -> str:
+    """把探针文档里的请求时间统一转成 ISO 文本，便于 SQLite 排序。"""
+    match = PROBE_REQUEST_TIME_RE.search(raw_value.strip())
+    if not match:
+        return ""
+    date_text, hour, minute, second = match.groups()
+    year, month, day = date_text.split("-")
+    return f"{year}-{month}-{day}T{int(hour):02d}:{minute}:{second}"
+
+
+def latest_probe_request_time(text: str) -> str:
+    values = []
+    for match in PROBE_REQUEST_TIME_RE.finditer(text):
+        values.append(normalize_probe_request_time(match.group(0)))
+    values = [item for item in values if item]
+    return max(values) if values else ""
 
 
 def print_json(payload: dict[str, Any]) -> None:
@@ -113,6 +132,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
             sha256 TEXT NOT NULL,
             size_bytes INTEGER NOT NULL,
             mtime REAL NOT NULL,
+            probe_request_time TEXT NOT NULL DEFAULT '',
             indexed_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(requirement_id) REFERENCES requirements(id) ON DELETE CASCADE
@@ -136,6 +156,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(requirements)").fetchall()}
     if "project_name" not in columns:
         conn.execute("ALTER TABLE requirements ADD COLUMN project_name TEXT NOT NULL DEFAULT ''")
+    document_columns = {row["name"] for row in conn.execute("PRAGMA table_info(documents)").fetchall()}
+    if "probe_request_time" not in document_columns:
+        conn.execute("ALTER TABLE documents ADD COLUMN probe_request_time TEXT NOT NULL DEFAULT ''")
     conn.commit()
 
 
@@ -341,14 +364,16 @@ def file_record(root: Path, requirement_dir: Path, path: Path) -> dict[str, Any]
     content = path.read_text(encoding="utf-8", errors="replace")
     stat = path.stat()
     data = content.encode("utf-8")
+    document_type = classify_document(requirement_dir, path)
     return {
         "relative_path": path.relative_to(root).as_posix(),
-        "document_type": classify_document(requirement_dir, path),
+        "document_type": document_type,
         "title": first_heading(content),
         "content": content,
         "sha256": hashlib.sha256(data).hexdigest(),
         "size_bytes": len(data),
         "mtime": stat.st_mtime,
+        "probe_request_time": latest_probe_request_time(content) if document_type == "probe_result" else "",
     }
 
 
@@ -390,9 +415,9 @@ def upsert_document(conn: sqlite3.Connection, requirement_id: int, record: dict[
     conn.execute(
         """
         INSERT INTO documents(
-            requirement_id,relative_path,document_type,title,content,sha256,size_bytes,mtime,indexed_at,updated_at
+            requirement_id,relative_path,document_type,title,content,sha256,size_bytes,mtime,probe_request_time,indexed_at,updated_at
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(relative_path) DO UPDATE SET
             requirement_id=excluded.requirement_id,
             document_type=excluded.document_type,
@@ -401,6 +426,7 @@ def upsert_document(conn: sqlite3.Connection, requirement_id: int, record: dict[
             sha256=excluded.sha256,
             size_bytes=excluded.size_bytes,
             mtime=excluded.mtime,
+            probe_request_time=excluded.probe_request_time,
             updated_at=excluded.updated_at
         """,
         (
@@ -412,6 +438,7 @@ def upsert_document(conn: sqlite3.Connection, requirement_id: int, record: dict[
             record["sha256"],
             record["size_bytes"],
             record["mtime"],
+            record["probe_request_time"],
             current,
             current,
         ),
@@ -533,10 +560,10 @@ def get_requirement(db_path: Path, slug_or_id: str) -> dict[str, Any]:
             return {"ok": False, "error": "requirement_not_found", "requirement": None, "documents": []}
         documents = conn.execute(
             """
-            SELECT id,relative_path,document_type,title,sha256,size_bytes,mtime,indexed_at,updated_at
+            SELECT id,relative_path,document_type,title,sha256,size_bytes,mtime,probe_request_time,indexed_at,updated_at
             FROM documents
             WHERE requirement_id = ?
-            ORDER BY relative_path ASC
+            ORDER BY COALESCE(NULLIF(probe_request_time,''), updated_at) DESC, relative_path ASC
             """,
             (int(requirement["id"]),),
         ).fetchall()
@@ -572,11 +599,11 @@ def search_documents(db_path: Path, query: str, limit: int) -> dict[str, Any]:
         init_schema(conn)
         rows = conn.execute(
             """
-            SELECT d.id,d.relative_path,d.document_type,d.title,d.size_bytes,d.updated_at,r.id AS requirement_id,r.slug AS requirement_slug,r.project_name AS project_name,r.title AS requirement_title,d.content
+            SELECT d.id,d.relative_path,d.document_type,d.title,d.size_bytes,d.updated_at,d.probe_request_time,r.id AS requirement_id,r.slug AS requirement_slug,r.project_name AS project_name,r.title AS requirement_title,d.content
             FROM documents d
             JOIN requirements r ON r.id = d.requirement_id
             WHERE d.content LIKE ? OR d.title LIKE ? OR d.relative_path LIKE ?
-            ORDER BY d.updated_at DESC, d.relative_path ASC
+            ORDER BY COALESCE(NULLIF(d.probe_request_time,''), d.updated_at) DESC, d.relative_path ASC
             LIMIT ?
             """,
             (pattern, pattern, pattern, limit),

@@ -1,0 +1,7 @@
+app/node_modules/
+app/dist/
+app/release/
+app/portable/
+app/npm-debug.log*
+app/*.log
+sdlc_watch.sqlite3

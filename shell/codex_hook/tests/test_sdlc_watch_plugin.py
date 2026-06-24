@@ -44,6 +44,17 @@ class SdlcWatchPluginTests(unittest.TestCase):
         (task_dir / "001-概要设计.md").write_text("# Demo 概要\n\n需要写入 SQLite。\n", encoding="utf-8")
         (task_dir / "002-详细设计.md").write_text("# Demo 详细\n\nElectron 只读查询。\n", encoding="utf-8")
         (only_ai / "testing.md").write_text("# 测试记录\n\n覆盖索引与查询。\n", encoding="utf-8")
+        (task_dir / "demo_probe_result.md").write_text(
+            "\n".join(
+                [
+                    "| 接口地址 | 入参 | 出参 | 测试条件 | 边界条件 | 测试结果 | 请求时间 | 关联脚本文件 |",
+                    "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+                    "| /demo/old | {} | {} | 正常 | 无 | 通过 | 2026-06-17 14:18:48 | demo_probe.php |",
+                    "| /demo/new | {} | {} | 正常 | 无 | 通过 | 2026-06-17 14:18:59 | demo_probe.php |",
+                ]
+            ),
+            encoding="utf-8",
+        )
         exec_dir = task_dir / "demo_probe" / "2026-06-18"
         exec_dir.mkdir(parents=True)
         (exec_dir / "14时18分47秒.md").write_text(
@@ -86,14 +97,16 @@ class SdlcWatchPluginTests(unittest.TestCase):
             requirement = indexer.get_requirement(db_path, "project/demo-task")
 
         self.assertEqual(first["scanned_requirements"], 1)
-        self.assertEqual(first["scanned_documents"], 5)
+        self.assertEqual(first["scanned_documents"], 6)
         self.assertGreaterEqual(first["skipped_files"], 2)
-        self.assertEqual(second["scanned_documents"], 5)
+        self.assertEqual(second["scanned_documents"], 6)
         self.assertEqual(len(requirements["requirements"]), 1)
         self.assertEqual(requirements["requirements"][0]["slug"], "project/demo-task")
         self.assertEqual(requirements["requirements"][0]["project_name"], "project")
-        self.assertEqual(len(requirement["documents"]), 5)
+        self.assertEqual(len(requirement["documents"]), 6)
         self.assertTrue(any(document["document_type"] == "exec_result" for document in requirement["documents"]))
+        probe_document = next(document for document in requirement["documents"] if document["document_type"] == "probe_result")
+        self.assertEqual(probe_document["probe_request_time"], "2026-06-17T14:18:59")
         self.assertNotIn(".env", json.dumps(requirement, ensure_ascii=False))
         self.assertNotIn("private.pem", json.dumps(requirement, ensure_ascii=False))
 
@@ -184,10 +197,13 @@ class SdlcWatchPluginTests(unittest.TestCase):
             search = self.run_cli(root, db_path, "search", "Electron", "--limit", "5")
             document_id = str(detail["documents"][0]["id"])
             document = self.run_cli(root, db_path, "get-document", document_id, "--content")
+            probe_document = next(item for item in detail["documents"] if item["document_type"] == "probe_result")
+            probe_detail = indexer.get_document(db_path, str(probe_document["id"]), True)
 
         self.assertTrue(listing["ok"])
         self.assertEqual(listing["requirements"][0]["slug"], "project/demo-task")
         self.assertTrue(search["results"])
+        self.assertEqual(probe_detail["document"]["probe_request_time"], "2026-06-17T14:18:59")
         self.assertIn("content", document["document"])
 
     def test_hook_stop_indexes_docs_without_stdout_contract(self) -> None:

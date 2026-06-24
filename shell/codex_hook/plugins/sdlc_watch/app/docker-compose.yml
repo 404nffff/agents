@@ -1,0 +1,17 @@
+services:
+  sdlc-watch:
+    build:
+      context: ..
+      dockerfile: app/Dockerfile.web
+    image: sdlc-watch-web:node
+    ports:
+      - "${SDLC_WATCH_PORT:-4173}:4173"
+    environment:
+      SDLC_WATCH_HOST: "0.0.0.0"
+      SDLC_WATCH_PORT: "4173"
+      SDLC_WATCH_PROJECT_ROOT: "/workspace/project"
+      SDLC_WATCH_DB_PATH: "/data/sdlc_watch.sqlite3"
+      SDLC_WATCH_DOCS_DIR: "${SDLC_WATCH_DOCS_DIR:-docs}"
+    volumes:
+      - "${SDLC_WATCH_PROJECT_HOST_PATH:-../../../../..}:/workspace/project:ro"
+      - "${SDLC_WATCH_DB_HOST_PATH:-../sdlc_watch.sqlite3}:/data/sdlc_watch.sqlite3"

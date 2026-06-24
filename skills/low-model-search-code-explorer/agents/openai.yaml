@@ -1,0 +1,4 @@
+interface:
+  display_name: "low-model-search-code explorer"
+  short_description: "当 Codex 需要以低 token 成本只读探索代码、定位文件行号、路由到文件映射、相似实现、调用链入口，或在编辑 PHP 后端代码前获取紧凑 file:line 引用时使用。"
+  default_prompt: "Use low-model-search-code explorer to locate relevant files and line ranges, then return only compact citations."

@@ -53,6 +53,7 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
 | **沟通压缩** | `caveman` | 超压缩沟通模式 | 每次会话初始化时必须自动加载并启用，用于减少冗余表达与 token 消耗；该 skill 只约束表达密度，不改变中文回复、安全警告、红线确认和技术准确性要求。 |
 | **SDLC 流程** | `software-dev-process-roles` | 带阶段选角的 SDLC 流程 | 通过 `sdlc-design-1`、`sdlc-design-2`、`sdlc-implement`、`sdlc-test`、`sdlc-debug`、`sdlc-solo` 驱动阶段流转；每阶段结合 `who` 完成主角色和必要复核角色选择。 |
 | **项目知识库** | `ai-localbase` | 项目知识库管理与检索 | 每次会话开始先执行 `init <当前启动目录>`；`init` 必须按 `tools/list -> knowledge_base.list -> name 精确匹配 -> 必要时 create` 顺序确认真实 `kb_id`，禁止只凭 `knowledge.json` 缓存短路；检索优先走同步 `search [关键词] [目录] [topK]` / `chat`；文档沉淀与维护默认走同步 `upload` / `append` / `update` / `delete`，命令返回后必须确认执行结果。 |
+| **代码收集** | `low-model-search-code-explorer` | 低成本只读代码探索 | 需求理解、上下文收集、接口/路由定位、相似实现查找和调用链入口定位时必须使用 `skills/low-model-search-code-explorer/SKILL.md` 并开启或复用 explorer 子代理收集精确 `file:start-end` 引用；本项目规则即为对子代理的明确授权。若当前环境无子代理工具、启动失败、超时或结果不足，才允许记录原因后降级到 `code-index` 或原生精确搜索。 |
 | **角色选择** | `who` | 专业角色自动选择 | 每进入 SDLC 阶段或用户明确提到角色/专家/persona 时，按 `skills/who/SKILL.md` 选择 1 个主角色；只有天然跨域时补 1 个辅助角色；禁止一次性读取整套 `skills/who/roles/` 角色库。 |
 | **数据库查询** | `db-query` | 多数据库统一查询接口 | 只要代码中涉及数据库查询（包含 MySQL、Redis、Mongo、PGSQL），必须先使用 `db-query` skill；若为 MySQL 查询且 `db-query` 连续重试 3 次仍不可用、不存在或执行失败，才允许降级使用 `mysql-query` skill；禁止绕过该流程直接执行数据库查询。 |
 | **数据库查询** | `mysql-query` | MySQL 专用查询接口 | 仅作为 `db-query` 的降级备选，仅限 MySQL 查询场景。 |
@@ -112,11 +113,11 @@ Codex 是具备全栈能力的自治型 AI Agent，负责从需求分析、技�
    - `verification.md`
    - `review-report.md`
 6. **四步收集法 (鼓励并发收集)**：
-   - 步骤1：结构化快速扫描，输出 `docs/[任务目录]/onlyAI/context-scan.json`，记录位置、现状、技术栈、测试、候选角色与专家观察。默认先用 `code-index` 建立文件级与符号级全局视图，并在 `context-scan.json` 中记录使用的 `code-index` 工具与命中结果。**鼓励在此时并行调用多个检索工具**（如 `ai-localbase` skill 的同步 `search / chat` + `code-index`），但原生 `grep`/`rg` 仅作为补充精确匹配，禁止跳过 `code-index` 链路直接代替代码检索。
+   - 步骤1：结构化快速扫描，输出 `docs/[任务目录]/onlyAI/context-scan.json`，记录位置、现状、技术栈、测试、候选角色与专家观察。必须先用 `low-model-search-code-explorer` skill 开启或复用 explorer 子代理做低成本只读代码收集，返回紧凑 `file:start-end` 引用，并在 `context-scan.json` 中记录 explorer 输出、使用的 `code-index` 工具与命中结果。**鼓励在此时并行调用多个检索工具**（如 `ai-localbase` skill 的同步 `search / chat` + `low-model-search-code-explorer`）。若当前环境无子代理工具、explorer 启动失败、超时或结果不足，必须记录原因后降级到 `code-index`。原生 `grep`/`rg` 仅作为补充精确匹配，禁止跳过 `low-model-search-code-explorer` / `code-index` 链路直接代替代码检索。
    - 步骤2：识别关键疑问、已知/未知边界与阶段候选角色，使用 `sequential-thinking` 找出优先级。
-   - 步骤3：针对高优疑问深挖，输出 `docs/[任务目录]/onlyAI/context-question-N.json`，建议最多 3 次。深挖时继续优先使用 `code-index`；需要定位具体符号、调用关系、文件摘要时，使用 `code-index` 的对应能力补齐证据。同样鼓励并行获取信息。只有在确实命中阶段候选角色时，才按需读取对应的 `skills/who/roles/*.md` 文件。
+   - 步骤3：针对高优疑问深挖，输出 `docs/[任务目录]/onlyAI/context-question-N.json`，建议最多 3 次。深挖时继续强制使用 `low-model-search-code-explorer` 并复用同一任务 explorer；需要定位具体符号、调用关系、文件摘要或缺失行号时，由 explorer 按 `ai-localbase -> code-index` 链路补齐精确引用。只有在 explorer 不可用、超时或结果不足时，才记录原因并降级使用 `code-index` 的对应能力补齐证据。同样鼓励并行获取信息。只有在确实命中阶段候选角色时，才按需读取对应的 `skills/who/roles/*.md` 文件。
    - 步骤4：充分性检查，确认接口契约、技术理由、主要风险、验证方式与当前阶段角色边界已清晰；若未满足，必须回溯补充上下文。
-7. **禁止事项**：禁止跳过扫描与提问步骤，禁止在信息不足时强行进入规划或施工；禁止跳过 `code-index` 直接退回纯 shell 文本搜索；禁止未完成阶段选角就直接产出设计文档。
+7. **禁止事项**：禁止跳过扫描与提问步骤，禁止在信息不足时强行进入规划或施工；禁止在未记录例外原因时跳过 `low-model-search-code-explorer` 直接使用 `code-index` 或纯 shell 文本搜索；禁止未完成阶段选角就直接产出设计文档。
 
 ### 阶段 2：规模评估与动态裁剪任务规划 (Adaptive SDLC)
 

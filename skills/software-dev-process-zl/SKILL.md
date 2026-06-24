@@ -87,7 +87,7 @@ description: 用于项目按 SDLC 阶段推进任务，覆盖需求理解、概�
 4. 首次使用数据库前必须加载 `db-query` skill，先执行 `--list-profiles` 确认 profile，再通过只读查询组装真实 payload JSON。
 5. 必须加载并使用 `work-php-exec` skill 执行链路脚本；Windows 环境优先使用 `powershell -ExecutionPolicy Bypass -File ~/.codex/skills/work-php-exec/run-work-php.ps1 --timeout 20s docs/[需求目录]/[需求标识]_probe.php all`，并按需追加 `--method`、`--action` 标注业务入口。
 6. 执行完成后必须读取并输出 `work-php-exec` 生成的结果文件摘要；同时将链路脚本自身输出的 JSON 结果保存到 `docs/[需求目录]/[需求标识]_probe_result.json`，在 `onlyAI/testing.md` 和 `onlyAI/verification.md` 记录执行命令、work-php-exec 结果文件路径、payload 路径、链路脚本路径、结果 JSON 路径、核心响应、错误信息和风险评估。核心响应必须同时核对 `data` 原始业务输出、`assertion` 断言结果和 `verification.modified / verification.has_bug` 自检结论。
-7. 必须基于 `assets/链路探针结果Markdown模板.md` 输出 `docs/[需求目录]/[需求标识]_probe_result.md` 可读结果。结果文件只保留 Markdown 表格，表头固定为接口地址、入参、出参、测试条件、边界条件、测试结果、请求时间、关联脚本文件；每次运行追加表格行，旧文件不是该表头时先重置为该表头。入参和出参单元格必须同时包含 JSON 与字段说明；测试条件只写数据来源、配置条件、样本条件和环境条件；边界条件必须独立写入边界条件列，禁止混入测试条件列。
+7. 必须基于 `assets/链路探针结果Markdown模板.md` 输出 `docs/[需求目录]/[需求标识]_probe_result.md` 可读结果。结果文件只保留 Markdown 表格，表头固定为接口地址、入参、出参、测试条件、边界条件、测试结果、请求时间、关联脚本文件；每次运行追加表格行，旧文件不是该表头时先重置为该表头。入参和出参单元格必须同时包含 JSON 与字段说明；出参 JSON 必须取链路探针结果 JSON 中对应 step 的 `data` 字段，也就是当前接口或业务方法的原始返回值，禁止把 `status`、`assertion`、`verification`、`elapsed_ms`、`step` 等探针外层包装字段写入出参；测试条件只写数据来源、配置条件、样本条件和环境条件；边界条件必须独立写入边界条件列，禁止混入测试条件列。
 8. 根据实际接口变更生成接口文档，必须参考 `assets/api_templete.test` 的 showdoc 注释格式，至少包含 `@catalog`、`@title`、`@description`、`@method`、`@url`、`@param`、`@return`、`@return_param`、`@remark`、错误码说明、返回示例、前端使用示例和注意事项；接口文档文件输出到当前项目根目录 `api/doc/[需求标识].test`。若一个需求包含多个接口，必须在同一个 `.test` 文件中连续追加多个 `showdoc` 注释块，每个接口一个注释块，并按顺序递增 `@number`。
 9. 使用 `assets/测试报告模板.md` 输出 `005-测试报告.md`，并在报告中引用接口文档路径、work-php-exec 结果文件路径、链路脚本结果 JSON 路径和链路探针 Markdown 结果路径。
 10. 在 `onlyAI/review-report.md` 写入自我审查结论。
@@ -135,6 +135,6 @@ description: 用于项目按 SDLC 阶段推进任务，覆盖需求理解、概�
 3. 测试阶段使用 `assets/zl_templete.php` 生成 PHP 链路探针，不新增单元测试要求。
 4. 链路探针必须保留原函数输出内容：`data` 字段承载业务函数原始返回；`assertion`、`verification` 字段承载修改完成度、占位检查和 bug 判断；禁止用自定义摘要替换 `data`。
 5. 链路探针必须通过 `work-php-exec` 在容器 `work` 内执行，执行后输出结果摘要并记录结果文件。
-6. 链路探针 Markdown 结果必须按 `assets/链路探针结果Markdown模板.md` 输出纯表格，入参/出参必须带字段说明，边界条件必须独立成列。
+6. 链路探针 Markdown 结果必须按 `assets/链路探针结果Markdown模板.md` 输出纯表格，入参/出参必须带字段说明，出参必须取对应 step 的 `data` 原始业务输出，边界条件必须独立成列。
 7. 接口变更必须按 `assets/api_templete.test` 格式生成 showdoc 接口文档，输出到项目根目录 `api/doc/`；一个 `.test` 文件可包含多个接口，每个接口一个 `showdoc` 注释块。
 8. 所有阶段结果最终都要回写任务文档，不允许只口头汇报。

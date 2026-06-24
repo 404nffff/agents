@@ -53,6 +53,8 @@ config.env
 docs
 
 *.json
+!shell/codex_hook/plugins/sdlc_watch/app/package.json
+!shell/codex_hook/plugins/sdlc_watch/app/package-lock.json
 .codex
 .cache
 
