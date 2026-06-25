@@ -1,0 +1,21 @@
+services:
+  codex:
+    container_name: codex
+    image: codex-debian12:slim
+    build:
+      context: ../..
+      dockerfile: docker/codex-debian12/Dockerfile
+    working_dir: /workspace
+    network_mode: host
+    restart: unless-stopped
+    command:
+      - zsh
+      - -lc
+      - exec sleep infinity
+    volumes:
+      # 挂载本 Docker 项目内的 Codex 配置，避免依赖宿主用户目录。
+      - ./.codex:/root/.codex
+      # 挂载项目内 zsh 配置，便于本地直接调整 alias 和插件配置。
+      - ./.codex/.zshrc:/root/.zshrc
+      # 挂载项目目录，容器内默认在 /workspace 工作。
+      - ../..:/workspace

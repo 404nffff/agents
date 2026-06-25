@@ -23,7 +23,7 @@ description: Use when starting any conversation in a project that uses ai_localb
 - `ai-localbase.sh`：Bash 版本
 - `ai-localbase.ps1`：Windows / PowerShell 版本
 
-两者都使用同一套子命令：`init`、`tools`、`list`、`upload`、`append`、`update`、`delete`、`search`、`chat`，并按目录自动复用项目知识库绑定。`init` 会把你传入的启动目录 basename 映射为知识库名，例如 `/mnt/sync2/www/agents -> agents`。若误传 `docs/[任务目录]` 或其子目录，入口脚本会自动回退到项目启动目录后再确认知识库，避免按任务目录创建知识库。
+两者都使用同一套核心子命令：`init`、`tools`、`list`、`upload`、`append`、`update`、`delete`、`search`、`chat`，并按目录自动复用项目知识库绑定。PowerShell 入口额外提供 `upload-file`、`append-file`、`update-file`，用于从文件读取正文，避免多行 Markdown 中的反引号、引号和换行被 PowerShell 重新解析。`init` 会把你传入的启动目录 basename 映射为知识库名，例如 `/mnt/sync2/www/agents -> agents`。若误传 `docs/[任务目录]` 或其子目录，入口脚本会自动回退到项目启动目录后再确认知识库，避免按任务目录创建知识库。
 
 ## 使用场景
 
@@ -48,7 +48,8 @@ description: Use when starting any conversation in a project that uses ai_localb
 6. **禁止缓存短路**：`knowledge.json` 只能作为本地映射缓存，不能只凭缓存跳过服务端 `knowledge_base.list`；每次初始化都必须重新从服务端知识库列表确认当前项目名对应的真实 ID
 7. **检索 vs 问答**：`search` 用于片段检索，`chat` 用于基于知识库上下文的直接问答
 8. **文档维护策略**：新文档优先上传；增量内容用 `append`；全文覆盖用 `update`；废弃文档用 `delete`
-9. **依赖前置**：Bash 版本依赖 `bash`、`curl`、`python3`；PowerShell 版本依赖 `Invoke-RestMethod`
+9. **PowerShell 正文传参安全**：多行 Markdown、包含反引号或引号的内容，必须优先写入临时文件或正文文件，再用 `upload-file` / `append-file` / `update-file`；原 `upload` / `append` / `update` 的内容参数也支持 `@文件路径` 或 `file:文件路径`
+10. **依赖前置**：Bash 版本依赖 `bash`、`curl`、`python3`；PowerShell 版本依赖 `Invoke-RestMethod`
 
 ## 工具发现与知识库列表
 
@@ -191,12 +192,16 @@ cp .env.example .env
 
 # 上传文档
 & "$HOME/.codex/skills/ai-localbase/ai-localbase.ps1" upload "my-doc.md" "# 内容" "C:\work\project"
+& "$HOME/.codex/skills/ai-localbase/ai-localbase.ps1" upload-file "my-doc.md" "C:\work\project\docs\my-doc.md" "C:\work\project"
 
 # 追加文档内容
 & "$HOME/.codex/skills/ai-localbase/ai-localbase.ps1" append "doc-123" "追加内容" "C:\work\project"
+& "$HOME/.codex/skills/ai-localbase/ai-localbase.ps1" append-file "doc-123" "C:\work\project\docs\append.md" "C:\work\project"
+& "$HOME/.codex/skills/ai-localbase/ai-localbase.ps1" append "doc-123" "@C:\work\project\docs\append.md" "C:\work\project"
 
 # 覆盖文档内容
 & "$HOME/.codex/skills/ai-localbase/ai-localbase.ps1" update "doc-123" "# 全量新内容" "C:\work\project"
+& "$HOME/.codex/skills/ai-localbase/ai-localbase.ps1" update-file "doc-123" "C:\work\project\docs\full.md" "C:\work\project"
 
 # 删除文档
 & "$HOME/.codex/skills/ai-localbase/ai-localbase.ps1" delete "doc-123" "C:\work\project"

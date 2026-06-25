@@ -20,8 +20,11 @@ function Show-Usage {
   ./ai-localbase.ps1 tools
   ./ai-localbase.ps1 list
   ./ai-localbase.ps1 upload [文件名] [内容] [目录]
+  ./ai-localbase.ps1 upload-file [文件名] [内容文件] [目录]
   ./ai-localbase.ps1 append [documentId] [内容] [目录]
+  ./ai-localbase.ps1 append-file [documentId] [内容文件] [目录]
   ./ai-localbase.ps1 update [documentId] [内容] [目录]
+  ./ai-localbase.ps1 update-file [documentId] [内容文件] [目录]
   ./ai-localbase.ps1 delete [documentId] [目录]
   ./ai-localbase.ps1 search [关键词] [目录] [topK]
   ./ai-localbase.ps1 chat [问题] [目录]
@@ -30,9 +33,12 @@ function Show-Usage {
   - init: 初始化当前目录对应的知识库映射并输出摘要 JSON
   - tools: 通过 tools/list 列出当前可用工具能力、调用方式、参数和响应字段
   - list: 通过 knowledge_base.list 列出现有知识库名称和知识库 ID
-  - upload: 上传文本内容到知识库
-  - append: 向已有文档追加文本内容
-  - update: 用新内容覆盖已有文档
+  - upload: 上传文本内容到知识库；内容参数可写成 @文件路径 或 file:文件路径 以读取文件
+  - upload-file: 从文件读取内容并上传，避免 PowerShell 转义多行 Markdown
+  - append: 向已有文档追加文本内容；内容参数可写成 @文件路径 或 file:文件路径 以读取文件
+  - append-file: 从文件读取内容并追加，避免 PowerShell 转义多行 Markdown
+  - update: 用新内容覆盖已有文档；内容参数可写成 @文件路径 或 file:文件路径 以读取文件
+  - update-file: 从文件读取内容并覆盖，避免 PowerShell 转义多行 Markdown
   - delete: 删除已有文档
   - search: 在知识库中检索片段
   - chat: 基于知识库上下文发起问答
@@ -92,6 +98,46 @@ function Resolve-WorkDir {
   }
 
   return [System.IO.Path]::GetFullPath($InputPath)
+}
+
+function Read-TextFileArgument {
+  param(
+    [string]$Path,
+    [string]$ParameterName = "内容文件"
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Path)) {
+    throw "错误: $ParameterName 不能为空"
+  }
+
+  $resolvedPath = Resolve-WorkDir $Path
+  if (-not (Test-Path -LiteralPath $resolvedPath -PathType Leaf)) {
+    throw "错误: $ParameterName 不存在: $resolvedPath"
+  }
+
+  # 内容从文件读取，避免 PowerShell 命令行参数中的反引号、引号和换行被重新解析。
+  return Get-Content -LiteralPath $resolvedPath -Raw -Encoding UTF8
+}
+
+function Resolve-ContentArgument {
+  param(
+    [string]$Content,
+    [string]$ParameterName = "内容"
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Content)) {
+    return $Content
+  }
+
+  if ($Content.StartsWith("@") -and $Content.Length -gt 1) {
+    return Read-TextFileArgument -Path $Content.Substring(1) -ParameterName "$ParameterName 文件"
+  }
+
+  if ($Content.StartsWith("file:") -and $Content.Length -gt 5) {
+    return Read-TextFileArgument -Path $Content.Substring(5) -ParameterName "$ParameterName 文件"
+  }
+
+  return $Content
 }
 
 function Test-ProjectRoot {
@@ -288,10 +334,19 @@ function Test-KbItemMatchesProject {
 
   $description = [string]$Item.description
   if (-not [string]::IsNullOrWhiteSpace($description)) {
-    $normalizedDescription = $description.Replace("/", "\").ToLowerInvariant()
-    $normalizedWorkDir = $WorkDir.Replace("/", "\").ToLowerInvariant()
-    if ($normalizedDescription.Contains($normalizedWorkDir)) {
-      return "description-path"
+    $descriptionPath = $description.Trim()
+    if ($descriptionPath.StartsWith("目录:")) {
+      $descriptionPath = $descriptionPath.Substring(3).Trim()
+    }
+
+    try {
+      $normalizedDescriptionPath = [System.IO.Path]::GetFullPath($descriptionPath).TrimEnd("\", "/").Replace("/", "\").ToLowerInvariant()
+      $normalizedWorkDir = [System.IO.Path]::GetFullPath($WorkDir).TrimEnd("\", "/").Replace("/", "\").ToLowerInvariant()
+      if ($normalizedDescriptionPath -eq $normalizedWorkDir) {
+        return "description-path"
+      }
+    } catch {
+      # description 可能是普通说明文本；无法解析为路径时不参与目录匹配。
     }
   }
 
@@ -711,6 +766,18 @@ switch ($Action) {
     $filename = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "example.md" }
     $content = if ($Arguments.Count -ge 2) { $Arguments[1] } else { "# 示例文档`n`n这是测试内容。" }
     $workDir = if ($Arguments.Count -ge 3) { $Arguments[2] } else { (Get-Location).ProviderPath }
+    $content = Resolve-ContentArgument -Content $content -ParameterName "upload 内容"
+    Invoke-Upload $filename $content $workDir
+    break
+  }
+  "upload-file" {
+    $filename = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "" }
+    $contentFile = if ($Arguments.Count -ge 2) { $Arguments[1] } else { "" }
+    $workDir = if ($Arguments.Count -ge 3) { $Arguments[2] } else { (Get-Location).ProviderPath }
+    if ([string]::IsNullOrWhiteSpace($filename)) {
+      throw "错误: upload-file 需要 [文件名] [内容文件] [目录]"
+    }
+    $content = Read-TextFileArgument -Path $contentFile -ParameterName "upload-file 内容文件"
     Invoke-Upload $filename $content $workDir
     break
   }
@@ -718,6 +785,15 @@ switch ($Action) {
     $documentId = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "" }
     $content = if ($Arguments.Count -ge 2) { $Arguments[1] } else { "" }
     $workDir = if ($Arguments.Count -ge 3) { $Arguments[2] } else { (Get-Location).ProviderPath }
+    $content = Resolve-ContentArgument -Content $content -ParameterName "append 内容"
+    Invoke-Append $documentId $content $workDir
+    break
+  }
+  "append-file" {
+    $documentId = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "" }
+    $contentFile = if ($Arguments.Count -ge 2) { $Arguments[1] } else { "" }
+    $workDir = if ($Arguments.Count -ge 3) { $Arguments[2] } else { (Get-Location).ProviderPath }
+    $content = Read-TextFileArgument -Path $contentFile -ParameterName "append-file 内容文件"
     Invoke-Append $documentId $content $workDir
     break
   }
@@ -725,6 +801,15 @@ switch ($Action) {
     $documentId = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "" }
     $content = if ($Arguments.Count -ge 2) { $Arguments[1] } else { "" }
     $workDir = if ($Arguments.Count -ge 3) { $Arguments[2] } else { (Get-Location).ProviderPath }
+    $content = Resolve-ContentArgument -Content $content -ParameterName "update 内容"
+    Invoke-Update $documentId $content $workDir
+    break
+  }
+  "update-file" {
+    $documentId = if ($Arguments.Count -ge 1) { $Arguments[0] } else { "" }
+    $contentFile = if ($Arguments.Count -ge 2) { $Arguments[1] } else { "" }
+    $workDir = if ($Arguments.Count -ge 3) { $Arguments[2] } else { (Get-Location).ProviderPath }
+    $content = Read-TextFileArgument -Path $contentFile -ParameterName "update-file 内容文件"
     Invoke-Update $documentId $content $workDir
     break
   }
