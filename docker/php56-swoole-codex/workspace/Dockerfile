@@ -1,8 +1,8 @@
-FROM php:5.6-cli-alpine AS php-runtime
+FROM php:7.1-cli-alpine AS php-runtime
 
 LABEL maintainer="zhiliao Developers <zengsp.mail@qq.com>" \
     app.name="ZhiliaoWorkspace" \
-    app.runtime="php5.6"
+    app.runtime="php7.1"
 
 ARG TZ=Asia/Shanghai
 
@@ -12,8 +12,9 @@ ENV TZ=${TZ} \
 
 COPY swoole-src-1.9.16.tar.gz /tmp/swoole-src-1.9.16.tar.gz
 
-# PHP 5.6 阶段保留原业务运行能力：内置扩展、PECL 旧扩展、本地 Swoole 1.9.16。
+# PHP 7.1 阶段保留原业务运行能力：内置扩展、PECL 兼容扩展、本地 Swoole 1.9.16。
 RUN set -eux; \
+    sed -i 's|http://dl-cdn.alpinelinux.org|https://dl-cdn.alpinelinux.org|g' /etc/apk/repositories; \
     apk add --no-cache \
         freetype-dev \
         hiredis-dev \
@@ -28,18 +29,17 @@ RUN set -eux; \
     docker-php-source extract; \
     docker-php-ext-configure gd --with-freetype-dir=/usr/include/ --with-jpeg-dir=/usr/include/; \
     docker-php-ext-install -j"$(nproc)" bcmath gd mcrypt pdo_mysql sockets; \
+    pecl channel-update pecl.php.net; \
     pecl install \
         igbinary-2.0.8 \
         redis-4.3.0 \
         mongodb-1.6.1 \
-        memcached-2.2.0; \
-    pecl download memcache-3.0.8; \
+        memcached-3.1.5; \
+    pecl download memcache-4.0.5.2; \
     mkdir -p /tmp/memcache; \
-    tar -xzf memcache-3.0.8.tgz -C /tmp/memcache --strip-components=1; \
+    tar -xzf memcache-4.0.5.2.tgz -C /tmp/memcache --strip-components=1; \
     ( \
         cd /tmp/memcache; \
-        sed -i 's/^inline //' memcache_pool.h memcache_pool.c; \
-        sed -i 's/^#define MMC_QUEUE_INLINE inline/#define MMC_QUEUE_INLINE/' memcache_queue.h; \
         phpize --clean; \
         phpize; \
         ./configure; \
@@ -71,7 +71,7 @@ FROM node:22-bookworm-slim
 
 LABEL maintainer="zhiliao Developers <zengsp.mail@qq.com>" \
     app.name="ZhiliaoWorkspace" \
-    app.runtime="php5.6"
+    app.runtime="php7.1"
 
 ARG TZ=Asia/Shanghai
 
@@ -83,7 +83,7 @@ ENV TZ=${TZ} \
     GO_VERSION=1.26.4 \
     GO_SHA256=1153d3d50e0ac764b447adfe05c2bcf08e889d42a02e0fe0259bd47f6733ad7f
 
-# 运行期使用 Debian 12 + Node 22，保留 bash/apt；PHP 5.6 和旧扩展由 Alpine 阶段提供。
+# 运行期使用 Debian 12 + Node 22，保留 bash/apt；PHP 7.1 和兼容扩展由 Alpine 阶段提供。
 COPY --from=php-runtime /usr/local/bin/php /usr/local/bin/php-real
 COPY --from=php-runtime /usr/local/lib/php /usr/local/lib/php
 COPY --from=php-runtime /usr/local/etc/php /usr/local/etc/php
@@ -99,6 +99,7 @@ RUN set -eux; \
         ca-certificates \
         curl \
         docker.io \
+        docker-compose \
         git \
         procps \
         python3 \
@@ -150,6 +151,7 @@ RUN set -eux; \
     codex --version; \
     claude --version; \
     docker --version; \
+    docker-compose --version; \
     php-real -v; \
     php-real -m | grep -E '^(bcmath|gd|igbinary|mcrypt|memcache|memcached|mongodb|pdo_mysql|redis|sockets|swoole)$'; \
     go version; \

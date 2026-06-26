@@ -1,7 +1,7 @@
 services:
   codex:
     container_name: codex
-    image: codex-debian12:slim
+    # image: codex-debian12:slim
     build:
       context: ../..
       dockerfile: docker/codex-debian12/Dockerfile

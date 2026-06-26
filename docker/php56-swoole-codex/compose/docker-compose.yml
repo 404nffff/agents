@@ -17,7 +17,7 @@ volumes:
 # services list.
 services:
     work:
-        image: php56-swoole-codex:runtime
+        # image: php56-swoole-codex:runtime
         build:
             context: ../workspace
             dockerfile: Dockerfile

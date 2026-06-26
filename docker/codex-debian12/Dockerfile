@@ -18,6 +18,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         docker.io \
+        docker-compose \
         git \
         procps \
         python3 \
@@ -51,6 +52,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv-install.sh \
     && uvx --version \
     && mcp-proxy --version \
     && docker --version \
+    && docker-compose --version \
     && git --version \
     && python3 --version
 
