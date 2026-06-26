@@ -1,7 +1,7 @@
 interface:
   display_name: "software-dev-process-zl"
-  short_description: "SDLC 阶段推进 + PHP 链路脚本验证"
-  default_prompt: "Use $software-dev-process-zl to run sdlc-design-1, sdlc-design-2, sdlc-implement, sdlc-test, sdlc-debug, or sdlc-solo with PHP probe-based chain validation."
+  short_description: "SDLC 阶段推进 + PHP 链路脚本验证 + 脚本任务 + 会话登记"
+  default_prompt: "Use $software-dev-process-zl to run sdlc-design-1, sdlc-design-2, sdlc-implement, sdlc-test, sdlc-debug, sdlc-solo, sdlc-script, or sdlc-history with PHP probe-based chain validation and the skill script for SDLC session upsert/progress/query."
 
 policy:
   allow_implicit_invocation: true

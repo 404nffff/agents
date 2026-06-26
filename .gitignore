@@ -39,6 +39,8 @@ shell/feishu_bot/.env
 cpa.env
 
 .claude/sessions/
+docker/codex-debian12/.claude/*
+!docker/codex-debian12/.claude/.gitkeep
 *.txt
 @eaDir/
 plan
@@ -61,3 +63,4 @@ docs
 __pycache__
 .mindfs
 config.toml
+ai

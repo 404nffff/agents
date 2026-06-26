@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+# Linux/WSL 用法：
+#   chmod +x docker/php56-swoole-codex/clauded
+#   docker/php56-swoole-codex/clauded --install-path
+#   cd /mnt/d/www/zhiliao_api
+#   clauded
+#
+# 默认进入容器 work，把当前宿主目录映射到 /home/www 对应目录，
+# 然后执行 claude --dangerously-skip-permissions。
+#
+# 常用参数：
+#   --print-path                 只打印映射后的容器目录
+#   --dry-run                    只打印将执行的 docker exec 命令
+#   --container <name>           覆盖容器名，默认 work
+#   --host-root <path>           覆盖宿主根目录，默认自动探测 /mnt/d/www、/d/www、/D/www、/home/www
+#   --container-root <path>      覆盖容器根目录，默认 /home/www
+#   --install-path               写入 ~/.zshrc 或 ~/.bashrc，把当前脚本目录加入 PATH
+#   --                           后续参数原样传给容器内 claude
+#
+# 示例：
+#   clauded --version
+#   clauded --model gpt-5 "看一下这个项目"
+#   CLAUDE_DOCKER_CONTAINER=work clauded
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+CONTAINER="${CLAUDE_DOCKER_CONTAINER:-work}"
+HOST_ROOT="${CLAUDE_HOST_ROOT:-}"
+CONTAINER_ROOT="${CLAUDE_CONTAINER_ROOT:-/home/www}"
+INSTALL_PATH="false"
+PRINT_PATH="false"
+DRY_RUN="false"
+CLAUDE_ARGS=()
+
+choose_host_root() {
+  if [[ -n "${HOST_ROOT}" ]]; then
+    printf '%s\n' "${HOST_ROOT}"
+    return
+  fi
+
+  for candidate in /mnt/d/www /d/www /D/www /home/www; do
+    if [[ -d "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return
+    fi
+  done
+
+  printf '%s\n' "${PWD}"
+}
+
+shell_quote() {
+  local value="${1}"
+  printf "'%s'" "${value//\'/\'\"\'\"\'}"
+}
+
+install_path() {
+  local rc_file
+  case "${SHELL:-}" in
+    */zsh) rc_file="${HOME}/.zshrc" ;;
+    *) rc_file="${HOME}/.bashrc" ;;
+  esac
+
+  mkdir -p "$(dirname "${rc_file}")"
+  touch "${rc_file}"
+
+  local line="export PATH=\"${SCRIPT_DIR}:\$PATH\""
+  if grep -Fqx "${line}" "${rc_file}"; then
+    echo "已在 PATH 配置中: ${SCRIPT_DIR}"
+    return
+  fi
+
+  {
+    echo ""
+    echo "# clauded docker helper"
+    echo "${line}"
+  } >> "${rc_file}"
+
+  echo "已写入 ${rc_file}: ${SCRIPT_DIR}"
+  echo "执行 source ${rc_file} 或重新打开终端后生效"
+}
+
+resolve_container_path() {
+  local current_path host_root root_with_slash relative basename fallback
+  current_path="$(pwd -P)"
+  host_root="$(cd "$(choose_host_root)" && pwd -P)"
+  root_with_slash="${host_root%/}/"
+
+  if [[ "${current_path}" == "${host_root}" ]]; then
+    printf '%s\n' "${CONTAINER_ROOT%/}"
+    return
+  fi
+
+  if [[ "${current_path}" == "${root_with_slash}"* ]]; then
+    relative="${current_path#${root_with_slash}}"
+    printf '%s/%s\n' "${CONTAINER_ROOT%/}" "${relative}"
+    return
+  fi
+
+  basename="$(basename "${current_path}")"
+  fallback="$(docker exec "${CONTAINER}" sh -lc "find $(shell_quote "${CONTAINER_ROOT}") -maxdepth 4 -type d -name $(shell_quote "${basename}") -print -quit 2>/dev/null")"
+  if [[ -n "${fallback}" ]]; then
+    printf '%s\n' "${fallback}"
+    return
+  fi
+
+  echo "无法把当前目录映射到 ${CONTAINER_ROOT}: ${current_path}" >&2
+  return 1
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --container)
+      shift
+      [[ $# -gt 0 ]] || { echo "--container 需要容器名" >&2; exit 1; }
+      CONTAINER="$1"
+      ;;
+    --host-root)
+      shift
+      [[ $# -gt 0 ]] || { echo "--host-root 需要宿主根目录" >&2; exit 1; }
+      HOST_ROOT="$1"
+      ;;
+    --container-root)
+      shift
+      [[ $# -gt 0 ]] || { echo "--container-root 需要容器根目录" >&2; exit 1; }
+      CONTAINER_ROOT="$1"
+      ;;
+    --install-path)
+      INSTALL_PATH="true"
+      ;;
+    --print-path)
+      PRINT_PATH="true"
+      ;;
+    --dry-run)
+      DRY_RUN="true"
+      ;;
+    --)
+      shift
+      while [[ $# -gt 0 ]]; do
+        CLAUDE_ARGS+=("$1")
+        shift
+      done
+      break
+      ;;
+    *)
+      CLAUDE_ARGS+=("$1")
+      ;;
+  esac
+  shift
+done
+
+if [[ "${INSTALL_PATH}" == "true" ]]; then
+  install_path
+  exit 0
+fi
+
+command -v docker >/dev/null 2>&1 || { echo "未找到 docker 命令" >&2; exit 1; }
+
+if [[ "$(docker inspect -f '{{.State.Running}}' "${CONTAINER}" 2>/dev/null || true)" != "true" ]]; then
+  echo "容器不存在或未运行: ${CONTAINER}" >&2
+  exit 1
+fi
+
+CONTAINER_PATH="$(resolve_container_path)"
+if ! docker exec "${CONTAINER}" sh -lc "[ -d $(shell_quote "${CONTAINER_PATH}") ]"; then
+  echo "容器内目录不存在: ${CONTAINER_PATH}" >&2
+  exit 1
+fi
+
+if [[ "${PRINT_PATH}" == "true" ]]; then
+  printf '%s\n' "${CONTAINER_PATH}"
+  exit 0
+fi
+
+CLAUDE_COMMAND="cd $(shell_quote "${CONTAINER_PATH}") && exec claude --dangerously-skip-permissions"
+for arg in "${CLAUDE_ARGS[@]}"; do
+  CLAUDE_COMMAND+=" $(shell_quote "${arg}")"
+done
+
+if [[ "${DRY_RUN}" == "true" ]]; then
+  echo "docker exec ${CONTAINER} zsh -ic $(shell_quote "${CLAUDE_COMMAND}")"
+  exit 0
+fi
+
+DOCKER_ARGS=(exec)
+if [[ -t 0 ]]; then
+  DOCKER_ARGS+=(-i)
+fi
+if [[ -t 1 ]]; then
+  DOCKER_ARGS+=(-t)
+fi
+DOCKER_ARGS+=("${CONTAINER}" zsh -ic "${CLAUDE_COMMAND}")
+
+exec docker "${DOCKER_ARGS[@]}"

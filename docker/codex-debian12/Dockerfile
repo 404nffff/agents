@@ -11,12 +11,13 @@ ARG GO_SHA256=1153d3d50e0ac764b447adfe05c2bcf08e889d42a02e0fe0259bd47f6733ad7f
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# 最小依赖集：Node 官方 bookworm-slim 已提供 node/npm，避免 Debian apt npm 依赖树膨胀。
+# 最小依赖集：Node 官方 bookworm-slim 已提供 node/npm；Docker CLI 通过宿主机 socket 执行宿主机 Docker。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bubblewrap \
         ca-certificates \
         curl \
+        docker.io \
         git \
         procps \
         python3 \
@@ -49,14 +50,16 @@ RUN curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv-install.sh \
     && uv --version \
     && uvx --version \
     && mcp-proxy --version \
+    && docker --version \
     && git --version \
     && python3 --version
 
-# 安装最新 npm 版 Codex CLI，避免构建期依赖 chatgpt.com 安装脚本连通性。
-RUN npm install -g @openai/codex \
+# 安装最新 npm 版 Codex CLI 与 Claude Code CLI，复用 Node 22 全局工具链。
+RUN npm install -g @openai/codex @anthropic-ai/claude-code \
     && npm cache clean --force \
     && rm -rf /root/.npm /root/.cache \
-    && codex --version
+    && codex --version \
+    && claude --version
 
 # 安装 Oh My Zsh 与插件；.zshrc 由 docker-compose 从项目目录挂载。
 RUN RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh -c "$(curl -fsSL https://install.ohmyz.sh/)" "" --unattended \

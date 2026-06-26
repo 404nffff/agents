@@ -1,7 +1,7 @@
 interface:
   display_name: "software-dev-process"
-  short_description: "指令: sdlc-design-1 sdlc-design-2 sdlc-implement sdlc-test sdlc-debug"
-  default_prompt: "Use $software-dev-process to continue the workflow with sdlc-design-1, sdlc-design-2, sdlc-implement, sdlc-test, or sdlc-debug."
+  short_description: "指令: sdlc-design-1 sdlc-design-2 sdlc-implement sdlc-test sdlc-debug sdlc-script sdlc-history"
+  default_prompt: "Use $software-dev-process to continue the workflow with sdlc-design-1, sdlc-design-2, sdlc-implement, sdlc-test, sdlc-debug, sdlc-script, or sdlc-history, and use the skill script for SDLC session upsert/progress/query."
 
 policy:
   allow_implicit_invocation: true

@@ -12,15 +12,23 @@ services:
       - zsh
       - -lc
       - exec sleep infinity
+    environment:
+      # 容器内 docker 命令通过挂载的宿主机 socket 访问宿主机 Docker。
+      DOCKER_HOST: unix:///var/run/docker.sock
     volumes:
       # 挂载本 Docker 项目内的 Codex 配置，避免依赖宿主用户目录。
-      - ./.codex:/root/.codex
+      - ./ai/.codex:/root/.codex
+      # 挂载本 Docker 项目内的 Claude 配置，避免依赖宿主用户目录。
+      - ./ai/.claude:/root/.claude
       # 挂载项目内 zsh 配置，便于本地直接调整 alias 和插件配置。
-      - ./.codex/.zshrc:/root/.zshrc
+      - ./ai/.zshrc:/root/.zshrc
       # 挂载项目目录，容器内默认在 /workspace 工作。
       - type: bind
         source: 'D:\www'
         target: /workspace
       - type: bind
-        source: ./.codex/.zsh_history
+        source: ./ai/.zsh_history
         target: /root/.zsh_history
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock

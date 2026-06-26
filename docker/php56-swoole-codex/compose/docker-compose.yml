@@ -21,12 +21,21 @@ services:
         build:
             context: ../workspace
             dockerfile: Dockerfile
+        environment:
+            # 容器内 Docker CLI 固定使用宿主机 Docker socket，避免启动容器内 Docker daemon。
+            DOCKER_HOST: unix:///var/run/docker.sock
         volumes:
             - type: bind
-              source: "D:\\www\\agents\\docker\\codex-debian12\\.codex"
+              source: /var/run/docker.sock
+              target: /var/run/docker.sock
+            - type: bind
+              source: "D:\\www\\agents\\docker\\codex-debian12\\ai\\.codex"
               target: /root/.codex
             - type: bind
-              source: "D:\\www\\agents\\docker\\codex-debian12\\.codex\\.zshrc"
+              source: "D:\\www\\agents\\docker\\codex-debian12\\ai\\.claude"
+              target: /root/.claude
+            - type: bind
+              source: "D:\\www\\agents\\docker\\codex-debian12\\ai\\.zshrc"
               target: /root/.zshrc
             - ${APP_CODE_PATH_HOST}:${APP_CODE_PATH_CONTAINER}${APP_CODE_CONTAINER_FLAG}
             - ${DATA_PATH_HOST}/zhiliaoit_static:${UPLOAD_PATH_CONTAINER}${APP_CODE_CONTAINER_FLAG}

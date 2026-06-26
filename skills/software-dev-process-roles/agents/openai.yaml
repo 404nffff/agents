@@ -1,7 +1,7 @@
 interface:
   display_name: "software-dev-process-roles"
-  short_description: "SDLC 阶段推进 + 角色选型 + 子代理派发"
-  default_prompt: "Use $software-dev-process-roles to run sdlc-design-1, sdlc-design-2, sdlc-implement, sdlc-test, sdlc-debug, or sdlc-solo with stage-specific role selection and subagent dispatch."
+  short_description: "SDLC 阶段推进 + 脚本任务 + 角色选型 + 子代理派发 + 会话登记脚本"
+  default_prompt: "Use $software-dev-process-roles to run sdlc-design-1, sdlc-design-2, sdlc-implement, sdlc-test, sdlc-debug, sdlc-solo, sdlc-script, or sdlc-history with stage-specific role selection, subagent dispatch, and the skill script for SDLC session upsert/progress/query."
 
 policy:
   allow_implicit_invocation: true

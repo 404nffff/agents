@@ -10,6 +10,7 @@
 | `codex_hook.ps1` | Windows PowerShell 入口，支持 `create` 和 payload 调试。 |
 | `hook.py` | 通用事件分发入口，负责 payload 读取、事件归一、脱敏日志、标题摘要和插件路由。 |
 | `plugins/agents_guard/hook.py` | AGENTS 轻量守护插件，负责 SessionStart 知识库握手、风险命令记录和收尾提醒。 |
+| `plugins/sdlc_session_register/hook.py` | SDLC 会话登记插件，负责 SessionStart 自动写入 `docs/ai-register.db`。 |
 | `plugins/ai_localbase/hook.py` | ai-localbase 压缩记忆插件，负责 PreCompact 上传记忆、PostCompact 读取记忆并写入本地日志。 |
 | `plugins/sdlc_watch/hook.py` | SDLC 文档索引插件，负责 Stop 时刷新 `docs/*` 文档到本地 SQLite。 |
 | `plugins/timer/hook.py` | 计时器插件，负责 UserPromptSubmit 到 Stop 的本轮耗时统计，只保留最近一次。 |
@@ -45,7 +46,7 @@ Windows：
 
 ```bash
 CODEX_HOOK_EVENTS_ALL=''
-CODEX_HOOK_EVENTS_SESSION_START='agents_guard,feishu'
+CODEX_HOOK_EVENTS_SESSION_START='sdlc_session_register,agents_guard,feishu'
 CODEX_HOOK_EVENTS_SUBAGENTSTART='feishu'
 CODEX_HOOK_EVENTS_PRE_TOOL_USE='agents_guard,feishu'
 CODEX_HOOK_EVENTS_PERMISSION_REQUEST='feishu'
@@ -76,6 +77,55 @@ CODEX_HOOK_EVENTS_STOP='agents_guard,timer,session_title_v2,feishu'
 - `PreCompact`：写入压缩前检查点，记录 `docs/index.md` 是否存在、压缩触发来源和相关工作区状态；可选同步到 `ai-localbase`。
 - `PostCompact`：读取压缩前检查点，写入恢复记录和本地恢复说明文件，提醒后续先复核项目索引与当前任务状态。
 - `Stop`：记录 `docs/index.md` 是否存在和相关工作区摘要，提醒收尾索引与知识库同步。
+
+`sdlc_session_register` 插件用于首次维护仓库级 AI 会话登记库：
+
+```bash
+CODEX_HOOK_EVENTS_SESSION_START='sdlc_session_register,agents_guard'
+```
+
+行为：
+
+- `SessionStart`：自动把当前 `session_id`、模型、项目目录和续接命令写入 `docs/ai-register.db`。
+- 必要时可由 `software-dev-process-roles` Skill 主动调用脚本补写或修正身份：
+
+```bash
+python skills/software-dev-process-roles/scripts/sdlc_session_register.py upsert \
+  --cwd /path/to/project \
+  --session <session_id> \
+  --tool "Codex" \
+  --model <model>
+```
+
+- 阶段推进时由 `software-dev-process-roles` Skill 主动调用脚本回填任务进度：
+
+```bash
+python skills/software-dev-process-roles/scripts/sdlc_session_register.py progress \
+  --cwd /path/to/project \
+  --session <session_id> \
+  --task-dir "docs/[需求目录]/" \
+  --feature "本次完成的功能" \
+  --progress "75%"
+```
+
+- 查询历史会话：
+
+```bash
+python skills/software-dev-process-roles/scripts/sdlc_session_register.py query --cwd /path/to/project
+python skills/software-dev-process-roles/scripts/sdlc_session_register.py query --cwd /path/to/project --task-dir "docs/[需求目录]/"
+python skills/software-dev-process-roles/scripts/sdlc_session_register.py query --cwd /path/to/project --keyword "[关键词]"
+```
+
+可用环境变量：
+
+```bash
+SDLC_SESSION_REGISTER_ENABLE='true'
+SDLC_SESSION_REGISTER_DB_PATH=''
+SDLC_SESSION_REGISTER_LOG_PATH='shell/codex_hook/codex_hook_sdlc_session_register.log'
+SDLC_SESSION_REGISTER_LOG_KEEP_LINES='100'
+```
+
+插件只写本地 SQLite 和脱敏执行日志，不读取凭证文件，不向外部网络发送数据。进度回填与历史查询脚本只读写同一个本地 SQLite 登记库。
 
 不推荐放进 hook 的内容：
 

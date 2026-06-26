@@ -91,13 +91,14 @@ COPY --from=php-runtime /usr/local/include/php /usr/local/include/php
 COPY --from=php-runtime /usr/lib/ /opt/php-legacy/usr/lib/
 COPY --from=php-runtime /lib/ /opt/php-legacy/lib/
 
-# 安装 Codex 辅助工具链：Go、最新版 npm Codex CLI、Oh My Zsh 与常用插件；.zshrc 由 Compose 挂载。
+# 安装 Codex / Claude / Docker 辅助工具链：Docker CLI 通过 Compose 挂载的宿主机 socket 执行宿主机 Docker。
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         bubblewrap \
         ca-certificates \
         curl \
+        docker.io \
         git \
         procps \
         python3 \
@@ -108,6 +109,8 @@ RUN set -eux; \
     ln -snf /usr/share/zoneinfo/${TZ} /etc/localtime; \
     echo "${TZ}" > /etc/timezone; \
     ln -sf /opt/php-legacy/lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1; \
+    # 让 musl 版 php-real 裸执行时也能找到从 Alpine 阶段复制来的旧运行库。 \
+    printf '%s\n' '/opt/php-legacy/lib:/opt/php-legacy/usr/lib:/lib:/usr/local/lib:/usr/lib' > /etc/ld-musl-x86_64.path; \
     { \
         echo '#!/bin/bash'; \
         echo 'export LD_LIBRARY_PATH="/opt/php-legacy/usr/lib:/opt/php-legacy/lib:${LD_LIBRARY_PATH:-}"'; \
@@ -124,7 +127,7 @@ RUN set -eux; \
     ln -sf /usr/local/go/bin/go /usr/local/bin/go; \
     ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt; \
     \
-    npm install -g @openai/codex; \
+    npm install -g @openai/codex @anthropic-ai/claude-code; \
     npm cache clean --force; \
     rm -rf /root/.npm /root/.cache; \
     CODEX_VENDOR_DIR="$(find /usr/local/lib/node_modules/@openai/codex \( -path '*/x86_64-unknown-linux-gnu' -o -path '*/x86_64-unknown-linux-musl' \) -type d | head -n 1)"; \
@@ -145,6 +148,10 @@ RUN set -eux; \
     node --version; \
     npm --version; \
     codex --version; \
+    claude --version; \
+    docker --version; \
+    php-real -v; \
+    php-real -m | grep -E '^(bcmath|gd|igbinary|mcrypt|memcache|memcached|mongodb|pdo_mysql|redis|sockets|swoole)$'; \
     go version; \
     python3 --version; \
     vim --version | head -n 1; \

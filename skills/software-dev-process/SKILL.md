@@ -1,11 +1,11 @@
 ---
 name: software-dev-process
-description: 管理完整的软件开发生命周期（需求理解、概要设计、详细设计、施工实现、测试与排查）。用于通过 sdlc-design-1、sdlc-design-2、sdlc-implement、sdlc-test、sdlc-debug 分阶段驱动任务，或通过 sdlc-solo 全自动执行剩余流程。强制检查前置产物、模板输出和阶段边界。
+description: 管理完整的软件开发生命周期（需求理解、概要设计、详细设计、施工实现、测试与排查）。用于通过 sdlc-design-1、sdlc-design-2、sdlc-implement、sdlc-test、sdlc-debug 分阶段驱动任务，通过 sdlc-solo 全自动执行剩余流程，通过 sdlc-script 处理一次性脚本任务，或通过 sdlc-history 查询会话登记库。强制检查前置产物、模板输出和阶段边界。
 ---
 
 # Software Development Process Skill
 
-当用户明确使用 `sdlc-design-1`、`sdlc-design-2`、`sdlc-implement`、`sdlc-test`、`sdlc-debug`、`sdlc-solo`，或要求按标准 SDLC 阶段推进任务时，使用本 Skill。
+当用户明确使用 `sdlc-design-1`、`sdlc-design-2`、`sdlc-implement`、`sdlc-test`、`sdlc-debug`、`sdlc-solo`、`sdlc-script`、`sdlc-history`，或要求按标准 SDLC 阶段推进任务时，使用本 Skill。
 
 ## 核心约束
 
@@ -16,6 +16,7 @@ description: 管理完整的软件开发生命周期（需求理解、概要设�
 5. **允许回退修正**：若在施工或测试时发现前期设计存在重大缺陷，必须停止当前阶段，回退到 `sdlc-design-2` 更新设计文档。
 6. **控制改动边界**：代码实现时，只清理本次施工直接产生的脏代码；未获许可时，不得顺手大范围重构历史代码，也不得修改未在准入清单中的文件。
 7. **记忆回写必做**：任务完成后必须优先 `update_memory` 对应节点；若无对应节点，则先 `create_memory` 再回写结论，禁止跳过记忆更新直接结束任务。**记忆回写时，必须使用 `status.md` 中记录的系统名称作为知识库路径**（如：`core://systems/用户中心/...`）。
+8. **AI 登记必做**：执行 SDLC 时，必须维护仓库级 `docs/ai-register.db`。若当前项目启用了 `sdlc_session_register` hook，`SessionStart` 会自动登记首次会话身份；必要时可调用本 Skill 的 `scripts/sdlc_session_register.py upsert` 补写身份，在阶段切换、施工任务完成、测试执行等节点调用 `progress` 回填任务目录、完成功能和进度。
 
 ## 目录与资源约定
 
@@ -24,6 +25,8 @@ description: 管理完整的软件开发生命周期（需求理解、概要设�
 - **onlyAI 工作区**：仅供 AI 读取和维护的过程文件统一输出到 `docs/[需求目录]/onlyAI/`，包括 `structured-request.json`、`context-scan.json`、`context-question-N.json`、`operations-log.md`、`testing.md`、`verification.md`、`review-report.md`。
 - **SQL 脚本**：数据库变更脚本统一输出到 `docs/[需求目录]/sql/`。
 - **摘要文档**：如有必要，可自主生成 `docs/[需求目录]/summary.md` 或 `docs/index.md` 汇总阶段结论与交付物索引。
+- **脚本任务文档**：一次性 Shell、PHP、Python、SQL、Node.js 等脚本任务基于 `assets/脚本任务模板.md` 输出 `docs/[需求目录]/script-[序号]-[简述].md`。
+- **SDLC 会话登记库**：仓库级 `docs/ai-register.db` 的首次会话身份由 `shell/codex_hook/plugins/sdlc_session_register/hook.py` 在 `SessionStart` 维护；手动身份登记、阶段推进和历史查询由本 Skill 的 `scripts/sdlc_session_register.py` 维护，使用 `upsert` 写入/更新身份，使用 `progress` 回填任务目录、完成功能和进度，使用 `query` 只读查询历史。
 
 ## 阶段命令
 
@@ -183,6 +186,69 @@ description: 管理完整的软件开发生命周期（需求理解、概要设�
 /software-dev-process sdlc-solo
 ```
 
+### `sdlc-script`
+
+一次性脚本任务：适用于 Shell、PHP、Python、SQL、Node.js 等一次性执行脚本的轻量级流程。
+
+1. 确认脚本类型、执行环境、风险等级、是否可重复执行和任务目录；创建或更新 `status.md`：`当前阶段：script`，`状态：进行中`。
+2. 使用 `assets/脚本任务模板.md` 输出 `docs/[需求目录]/script-[序号]-[简述].md`，并填写任务背景、影响范围、前置条件、核心逻辑、安全措施、回滚方案、执行计划和验证命令。
+3. 如为数据库脚本，同时输出到 `docs/[需求目录]/sql/`；编写 SQL 前必须先按项目规则检查表结构和索引。
+4. 高危脚本必须包含 Dry-run、分批执行、回滚方案和执行前后验证；生产环境脚本必须先在测试或预发环境验证通过。
+5. 所有脚本正文必须包含中文注释，说明核心逻辑、约束条件和使用方式。
+6. 脚本文档中必须明确是否可重复执行（幂等性）；若脚本未执行，仅完成设计，则标记 `状态：待执行` 并写明人工确认条件。
+7. 脚本执行或设计完成后，更新 `status.md`、`onlyAI/operations-log.md`、`onlyAI/testing.md` 和 `onlyAI/verification.md`；若能取得当前 `session_id`，调用 `scripts/sdlc_session_register.py progress` 回填 `task_dir`、`feature="完成脚本任务"` 和实际进度。
+8. 完成后执行记忆回写；如有必要，生成 `summary.md` 汇总脚本任务结论。
+
+### `sdlc-history`
+
+历史会话查询：用于只读查看 `docs/ai-register.db` 中的 SDLC 会话登记，不进入设计、施工或测试阶段。
+
+1. 用户明确输入 `sdlc-history`，或询问"某需求历史会话 / 这个需求谁做过 / 怎么续接某需求 / 看某任务登记"时触发。
+2. 直接调用 `skills/software-dev-process/scripts/sdlc_session_register.py query`，不得创建设计、施工或测试文档。
+3. 无关键词时查询全部历史：
+   ```bash
+   python skills/software-dev-process/scripts/sdlc_session_register.py query
+   ```
+4. 用户给出明确任务目录时优先精确查询：
+   ```bash
+   python skills/software-dev-process/scripts/sdlc_session_register.py query --task-dir "docs/[需求目录]/"
+   ```
+5. 用户给出自然语言关键词时使用模糊查询：
+   ```bash
+   python skills/software-dev-process/scripts/sdlc_session_register.py query --keyword "[关键词]"
+   ```
+6. 输出查询表格后，用 1-3 句话说明可续接的 `resume(shell)`、任务目录和最近进度；若结果为空，说明登记库为空或未匹配到该需求。
+
+## SDLC 会话登记机制
+
+`sdlc_session_register` hook 插件和本 Skill 脚本共同维护 Codex 会话与 SDLC 任务进度的关联：
+
+- `SessionStart`：当 `CODEX_HOOK_EVENTS_SESSION_START='sdlc_session_register'` 时，插件自动写入 `session_id`、模型、项目目录和续接命令。
+- 手动登记：必要时可调用 `scripts/sdlc_session_register.py upsert` 写入或更新当前 `session_id` 的工具、模型、项目目录和续接命令。
+- 阶段推进：本 Skill 在阶段完成或任务完成后调用 `scripts/sdlc_session_register.py progress`，只更新当前 `session_id` 对应行的 `task_dir`、`feature`、`progress`。
+- 历史查询：`sdlc-history` 使用 `scripts/sdlc_session_register.py query` 只读查询，不修改文档和代码。
+
+身份登记命令模板：
+
+```bash
+python skills/software-dev-process/scripts/sdlc_session_register.py upsert \
+  --session <当前 session_id> \
+  --tool "Codex" \
+  --model <当前模型名>
+```
+
+进度回填命令模板：
+
+```bash
+python skills/software-dev-process/scripts/sdlc_session_register.py progress \
+  --session <当前 session_id> \
+  --task-dir "docs/[需求目录]/" \
+  --feature "本次完成的功能" \
+  --progress "75%"
+```
+
+若当前上下文没有可用 `session_id`，不得猜测；只更新 `status.md`、`003-施工文档.md` 和 `onlyAI/operations-log.md`，并在日志中说明"缺少 session_id，未回填 SDLC 会话登记库"。
+
 ## 可用资源
 
 - `software-dev-process/assets/概要设计模板.md`
@@ -194,6 +260,8 @@ description: 管理完整的软件开发生命周期（需求理解、概要设�
 - `software-dev-process/assets/文件改动记录模板.md`
 - `software-dev-process/assets/Debug排查记录模板.md`
 - `software-dev-process/assets/待确认模板.md`
+- `software-dev-process/assets/脚本任务模板.md`
+- `software-dev-process/scripts/sdlc_session_register.py`（身份登记、阶段进度回填与历史查询脚本）
 
 ## 待确认文档机制
 

@@ -1,11 +1,11 @@
   ---
 name: software-dev-process-zl
-description: 用于项目按 SDLC 阶段推进任务，覆盖需求理解、概要设计、详细设计、施工实现、链路脚本验证与调试；通过 sdlc-design-1、sdlc-design-2、sdlc-implement、sdlc-test、sdlc-debug、sdlc-solo 驱动。
+description: 用于项目按 SDLC 阶段推进任务，覆盖需求理解、概要设计、详细设计、施工实现、链路脚本验证、一次性脚本任务与调试；通过 sdlc-design-1、sdlc-design-2、sdlc-implement、sdlc-test、sdlc-debug、sdlc-solo、sdlc-script、sdlc-history 驱动。
 ---
 
 # Software Development Process ZL Skill
 
-当用户明确使用 `sdlc-design-1`、`sdlc-design-2`、`sdlc-implement`、`sdlc-test`、`sdlc-debug`、`sdlc-solo`，或要求在项目中按标准 SDLC 阶段推进任务时，使用本 Skill。
+当用户明确使用 `sdlc-design-1`、`sdlc-design-2`、`sdlc-implement`、`sdlc-test`、`sdlc-debug`、`sdlc-solo`、`sdlc-script`、`sdlc-history`，或要求在项目中按标准 SDLC 阶段推进任务时，使用本 Skill。
 
 本 Skill 参照 `software-dev-process` 的阶段流程；保留项目专用的 PHP 链路探针验证方式。
 
@@ -23,6 +23,7 @@ description: 用于项目按 SDLC 阶段推进任务，覆盖需求理解、概�
 10. **容器执行策略**：链路脚本必须使用 `work-php-exec` skill 进入 Docker 容器 `work` 执行，禁止直接在宿主机裸跑 PHP；执行完成后必须输出并记录结果文件路径、核心 JSON 和错误信息。
 11. **接口文档策略**：链路脚本验证通过后，必须按照 `assets/api_templete.test` 的 showdoc 注释格式生成接口文档，并输出到当前项目根目录 `api/doc/`；一个 `.test` 文件允许连续放置多个 `showdoc` 注释块，每个注释块对应一个接口。
 12. **Debug 豁免**：`sdlc-debug` 默认采用“链路探针复现 -> 修复逻辑 -> 链路探针回归”的复现先行方式。
+13. **AI 登记必做**：执行 SDLC 时，必须维护仓库级 `docs/ai-register.db`。若当前项目启用了 `sdlc_session_register` hook，`SessionStart` 会自动登记首次会话身份；必要时可调用本 Skill 的 `scripts/sdlc_session_register.py upsert` 补写身份，在阶段切换、施工任务完成、链路验证执行等节点调用 `progress` 回填任务目录、完成功能和进度。
 
 ## 目录与资源约定
 
@@ -33,6 +34,8 @@ description: 用于项目按 SDLC 阶段推进任务，覆盖需求理解、概�
 - **接口文档**：测试阶段生成的接口文档统一输出到项目根目录 `api/doc/`，文件内容必须遵循 `assets/api_templete.test` 的 showdoc 注释格式；同一需求涉及多个接口时，优先写入同一个 `.test` 文件，按接口数量追加多个 `showdoc` 注释块并递增 `@number`。
 - **SQL 脚本**：数据库变更脚本统一输出到 `docs/[需求目录]/sql/`；测试阶段只读取真实数据时优先使用 `db-query`，不把只读查询脚本当作数据库变更脚本。
 - **摘要文档**：如有必要，可自主生成 `docs/[需求目录]/summary.md` 或 `docs/index.md` 汇总阶段结论与交付物索引。
+- **脚本任务文档**：一次性 Shell、PHP、Python、SQL、Node.js 等脚本任务基于 `assets/脚本任务模板.md` 输出 `docs/[需求目录]/script-[序号]-[简述].md`。
+- **SDLC 会话登记库**：仓库级 `docs/ai-register.db` 的首次会话身份由 `shell/codex_hook/plugins/sdlc_session_register/hook.py` 在 `SessionStart` 维护；手动身份登记、阶段推进和历史查询由本 Skill 的 `scripts/sdlc_session_register.py` 维护，使用 `upsert` 写入/更新身份，使用 `progress` 回填任务目录、完成功能和进度，使用 `query` 只读查询历史。
 
 ## 阶段命令
 
@@ -113,6 +116,70 @@ description: 用于项目按 SDLC 阶段推进任务，覆盖需求理解、概�
 4. 遇到待确认文档时，Solo 模式下由 AI 自动决策，并将理由写入设计文档和待确认文档。
 5. 全部完成后自动生成 `summary.md`，并同步任务文档与正确项目知识库；如知识库 ID 存疑，暂停写入并向用户确认。
 
+### `sdlc-script`
+
+一次性脚本任务：适用于 Shell、PHP、Python、SQL、Node.js 等一次性执行脚本的轻量级流程；若脚本是 PHP 业务链路验证，应优先走 `sdlc-test` 的 PHP 链路探针规则。
+
+1. 确认脚本类型、执行环境、风险等级、是否可重复执行和任务目录；创建或更新 `status.md`：`当前阶段：script`，`状态：进行中`。
+2. 使用 `assets/脚本任务模板.md` 输出 `docs/[需求目录]/script-[序号]-[简述].md`，并填写任务背景、影响范围、前置条件、核心逻辑、安全措施、回滚方案、执行计划和验证命令。
+3. 如为数据库脚本，同时输出到 `docs/[需求目录]/sql/`；编写 SQL 前必须先按项目规则检查表结构和索引。
+4. 高危脚本必须包含 Dry-run、分批执行、回滚方案和执行前后验证；生产环境脚本必须先在测试或预发环境验证通过。
+5. 所有脚本正文必须包含中文注释，说明核心逻辑、约束条件和使用方式。
+6. PHP 脚本需要真实执行时，必须使用 `work-php-exec` skill 进入 Docker 容器 `work` 执行，禁止直接在宿主机裸跑 PHP。
+7. 脚本文档中必须明确是否可重复执行（幂等性）；若脚本未执行，仅完成设计，则标记 `状态：待执行` 并写明人工确认条件。
+8. 脚本执行或设计完成后，更新 `status.md`、`onlyAI/operations-log.md`、`onlyAI/testing.md` 和 `onlyAI/verification.md`；若能取得当前 `session_id`，调用 `scripts/sdlc_session_register.py progress` 回填 `task_dir`、`feature="完成脚本任务"` 和实际进度。
+9. 完成后同步任务文档与正确项目知识库；如有必要，生成 `summary.md` 汇总脚本任务结论。
+
+### `sdlc-history`
+
+历史会话查询：用于只读查看 `docs/ai-register.db` 中的 SDLC 会话登记，不进入设计、施工或测试阶段。
+
+1. 用户明确输入 `sdlc-history`，或询问"某需求历史会话 / 这个需求谁做过 / 怎么续接某需求 / 看某任务登记"时触发。
+2. 直接调用 `skills/software-dev-process-zl/scripts/sdlc_session_register.py query`，不得创建设计、施工或测试文档。
+3. 无关键词时查询全部历史：
+   ```bash
+   python skills/software-dev-process-zl/scripts/sdlc_session_register.py query
+   ```
+4. 用户给出明确任务目录时优先精确查询：
+   ```bash
+   python skills/software-dev-process-zl/scripts/sdlc_session_register.py query --task-dir "docs/[需求目录]/"
+   ```
+5. 用户给出自然语言关键词时使用模糊查询：
+   ```bash
+   python skills/software-dev-process-zl/scripts/sdlc_session_register.py query --keyword "[关键词]"
+   ```
+6. 输出查询表格后，用 1-3 句话说明可续接的 `resume(shell)`、任务目录和最近进度；若结果为空，说明登记库为空或未匹配到该需求。
+
+## SDLC 会话登记机制
+
+`sdlc_session_register` hook 插件和本 Skill 脚本共同维护 Codex 会话与 SDLC 任务进度的关联：
+
+- `SessionStart`：当 `CODEX_HOOK_EVENTS_SESSION_START='sdlc_session_register'` 时，插件自动写入 `session_id`、模型、项目目录和续接命令。
+- 手动登记：必要时可调用 `scripts/sdlc_session_register.py upsert` 写入或更新当前 `session_id` 的工具、模型、项目目录和续接命令。
+- 阶段推进：本 Skill 在阶段完成、任务完成或链路验证完成后调用 `scripts/sdlc_session_register.py progress`，只更新当前 `session_id` 对应行的 `task_dir`、`feature`、`progress`。
+- 历史查询：`sdlc-history` 使用 `scripts/sdlc_session_register.py query` 只读查询，不修改文档和代码。
+
+身份登记命令模板：
+
+```bash
+python skills/software-dev-process-zl/scripts/sdlc_session_register.py upsert \
+  --session <当前 session_id> \
+  --tool "Codex" \
+  --model <当前模型名>
+```
+
+进度回填命令模板：
+
+```bash
+python skills/software-dev-process-zl/scripts/sdlc_session_register.py progress \
+  --session <当前 session_id> \
+  --task-dir "docs/[需求目录]/" \
+  --feature "本次完成的功能" \
+  --progress "75%"
+```
+
+若当前上下文没有可用 `session_id`，不得猜测；只更新 `status.md`、`003-施工文档.md` 和 `onlyAI/operations-log.md`，并在日志中说明"缺少 session_id，未回填 SDLC 会话登记库"。
+
 ## 可用资源
 
 - `software-dev-process-zl/assets/概要设计模板.md`
@@ -124,9 +191,11 @@ description: 用于项目按 SDLC 阶段推进任务，覆盖需求理解、概�
 - `software-dev-process-zl/assets/文件改动记录模板.md`
 - `software-dev-process-zl/assets/Debug排查记录模板.md`
 - `software-dev-process-zl/assets/待确认模板.md`
+- `software-dev-process-zl/assets/脚本任务模板.md`
 - `software-dev-process-zl/assets/链路探针结果Markdown模板.md`
 - `software-dev-process-zl/assets/api_templete.test`
 - `software-dev-process-zl/assets/zl_templete.php`
+- `software-dev-process-zl/scripts/sdlc_session_register.py`（身份登记、阶段进度回填与历史查询脚本）
 
 ## 落地规则总结
 
