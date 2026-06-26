@@ -1,0 +1,36 @@
+networks:
+    frontend:
+        driver: bridge
+    backend:
+        ipam:
+            driver: default
+            config:
+            - subnet: "172.20.0.0/24"
+            - subnet: "2001:3984:3989::/64"
+
+volumes:
+    mysql:
+        driver: local
+    mongo:
+        driver: local
+
+# services list.
+services:
+    work:
+        image: php56-swoole-codex:runtime
+        build:
+            context: ../workspace
+            dockerfile: Dockerfile
+        volumes:
+            - type: bind
+              source: "D:\\www\\agents\\docker\\codex-debian12\\.codex"
+              target: /root/.codex
+            - type: bind
+              source: "D:\\www\\agents\\docker\\codex-debian12\\.codex\\.zshrc"
+              target: /root/.zshrc
+            - ${APP_CODE_PATH_HOST}:${APP_CODE_PATH_CONTAINER}${APP_CODE_CONTAINER_FLAG}
+            - ${DATA_PATH_HOST}/zhiliaoit_static:${UPLOAD_PATH_CONTAINER}${APP_CODE_CONTAINER_FLAG}
+        tty: true
+        network_mode: host
+        restart: unless-stopped
+        container_name: "work"

@@ -18,7 +18,9 @@ services:
       # 挂载项目内 zsh 配置，便于本地直接调整 alias 和插件配置。
       - ./.codex/.zshrc:/root/.zshrc
       # 挂载项目目录，容器内默认在 /workspace 工作。
-      - ../..:/workspace
       - type: bind
-              source: "./.codex/.zsh_history"
-              target: /root/.zsh_history
+        source: 'D:\www'
+        target: /workspace
+      - type: bind
+        source: ./.codex/.zsh_history
+        target: /root/.zsh_history
